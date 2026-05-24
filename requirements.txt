@@ -1,0 +1,42 @@
+# ============================================================
+#   ALCOSOFT FINANCIAL SERVICES
+#   Python 3.10.11 — Final Clean Version
+#
+#   INSTALL ORDER:
+#   Step 1: pip install "git+https://github.com/Kotak-Neo/Kotak-neo-api-v2.git@v2.0.1#egg=neo_api_client"
+#   Step 2: pip install -r requirements.txt
+# ============================================================
+
+# --- ENVIRONMENT ---
+python-dotenv==1.0.1
+
+# --- SCHEDULING ---
+apscheduler==3.10.4
+
+# --- SECURITY ---
+pyotp==2.9.0
+
+# --- DATA & MATH ---
+pandas==2.2.2
+numpy==1.26.4
+yfinance==0.2.40
+
+# --- TECHNICAL INDICATORS ---
+ta==0.10.2
+
+# --- AI AGENTS ---
+google-generativeai==0.7.2
+openai==1.35.0
+groq==0.9.0
+
+# --- DATABASE ---
+sqlalchemy==2.0.30
+
+# --- WEB DASHBOARD ---
+flask==3.0.3
+flask-socketio==5.3.6
+simple-websocket==1.0.0
+
+# --- UTILITIES ---
+requests==2.31.0
+colorlog==6.8.0
