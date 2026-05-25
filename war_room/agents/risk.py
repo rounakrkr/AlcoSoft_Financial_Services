@@ -47,6 +47,8 @@ def _build_message(symbol: str, risk_data: dict,
 STOCK: {symbol}
 ENTRY PRICE: {risk_data.get('entry_price')}
 STOP LOSS: {risk_data.get('stop_loss')}
+TARGET PRICE: {risk_data.get('target_price')}
+RISK/REWARD RATIO: {risk_data.get('risk_reward')}:1
 QUANTITY: {risk_data.get('quantity')}
 CAPITAL AT RISK: ₹{risk_data.get('capital_at_risk')}
 OPEN POSITIONS: {risk_data.get('open_positions_count')}

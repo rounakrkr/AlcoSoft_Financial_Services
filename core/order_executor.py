@@ -1,8 +1,9 @@
 # ============================================================
 #   ALCOSOFT FINANCIAL SERVICES
 #   core/order_executor.py — Order Placement & Management
-#   PAPER mode = logs only. LIVE mode = real money.
-#   The TRADING_MODE in .env is your safety switch.
+#   Changes: SL-M order on Kotak after BUY, trading_symbol fix,
+#   profit targets, war room flip exit, trailing SL,
+#   max daily loss check, squareoff flag
 # ============================================================
 
 import logging
@@ -12,76 +13,76 @@ from dotenv import load_dotenv
 
 from core.kotak_client import get_client, force_reconnect
 from core.state_manager import (
-    save_open_position,
-    close_position,
-    get_open_positions,
+    save_open_position, close_position, get_open_positions,
+    update_trailing_sl, update_sl_order_id,
+    get_today_gross_pnl, load_briefing,
 )
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────
-TRADING_MODE        = os.getenv("TRADING_MODE", "PAPER")
-CAPITAL             = float(os.getenv("CAPITAL", 10000))
-MAX_RISK_PER_TRADE  = float(os.getenv("MAX_RISK_PER_TRADE", 0.02))
-INTRADAY_SQUAREOFF  = dt_time(15, 15)   # Force-close all MIS at 3:15 PM
-STOP_LOSS_BUFFER    = 0.008             # 0.8% default stop loss
+TRADING_MODE       = os.getenv("TRADING_MODE", "PAPER")
+CAPITAL            = float(os.getenv("CAPITAL", 10000))
+MAX_RISK_PER_TRADE = float(os.getenv("MAX_RISK_PER_TRADE", 0.02))
+TARGET_RR_RATIO    = float(os.getenv("TARGET_RR_RATIO", 2.0))
+TRAILING_SL_PCT    = float(os.getenv("TRAILING_SL_PERCENT", 0.005))
+MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PERCENT", 0.05))
+STOP_LOSS_BUFFER   = 0.008
+INTRADAY_SQUAREOFF = dt_time(15, 15)
+
+# ── Squareoff flag — prevents repeated calls after 3:15 ──────
+_squareoff_done = False
 
 
-# ── Position Sizing ───────────────────────────────────────────
+# ════════════════════════════════════════════════════════════
+#   POSITION SIZING
+# ════════════════════════════════════════════════════════════
+
 def calculate_quantity(price: float, stop_loss: float) -> int:
-    """
-    How many shares to buy based on risk management.
-
-    Formula:
-      max_loss     = capital × risk_percent (e.g. ₹200 on ₹10,000)
-      stop_dist    = entry_price - stop_loss
-      ideal_qty    = max_loss / stop_dist
-      affordable   = (capital × 20%) / price   (max 20% in one trade)
-      final        = min(ideal_qty, affordable), at least 1
-
-    This scales automatically as capital grows.
-    """
-    max_loss   = CAPITAL * MAX_RISK_PER_TRADE
-    stop_dist  = abs(price - stop_loss)
-
+    max_loss       = CAPITAL * MAX_RISK_PER_TRADE
+    stop_dist      = abs(price - stop_loss)
     if stop_dist == 0:
-        stop_dist = price * STOP_LOSS_BUFFER
-
+        stop_dist = price * STOP_LOSS_BUFFER if price > 0 else 1.0   # fallback 1
+        if stop_dist == 0:
+            stop_dist = 1.0
+        logger.warning(f"stop_dist was 0 for {price=}, {stop_loss=}, using {stop_dist}")
     ideal_qty      = max_loss / stop_dist
     affordable_qty = (CAPITAL * 0.20) / price
-    quantity       = int(min(ideal_qty, affordable_qty))
-
-    return max(1, quantity)   # Always at least 1 share
+    return max(1, int(min(ideal_qty, affordable_qty)))
 
 
-def calculate_stop_loss(entry_price: float, direction: str = "BUY") -> float:
-    """Default stop loss: 0.8% below entry for BUY, above for SELL."""
+def calculate_stop_loss(price: float, direction: str = "BUY") -> float:
     if direction == "BUY":
-        return round(entry_price * (1 - STOP_LOSS_BUFFER), 2)
-    return round(entry_price * (1 + STOP_LOSS_BUFFER), 2)
+        return round(price * (1 - STOP_LOSS_BUFFER), 2)
+    return round(price * (1 + STOP_LOSS_BUFFER), 2)
 
 
-# ── Core Order Functions ──────────────────────────────────────
+def calculate_target(entry: float, stop_loss: float) -> float:
+    """Target = entry + (risk × RR ratio). Default 2:1."""
+    risk   = abs(entry - stop_loss)
+    return round(entry + (risk * TARGET_RR_RATIO), 2)
+
+
+# ════════════════════════════════════════════════════════════
+#   BUY ORDER
+# ════════════════════════════════════════════════════════════
+
 def place_buy_order(
     symbol:         str,
-    trading_symbol: str,        # Kotak's exact trading symbol (from scrip master)
+    trading_symbol: str,
     entry_price:    float,
     stop_loss:      float = None,
     strategy:       str   = "",
     confidence:     int   = 0,
-    product:        str   = "MIS",   # MIS=intraday, CNC=swing/delivery
+    product:        str   = "MIS",
 ) -> dict:
-    """
-    Places a BUY order.
-    In PAPER mode: logs the trade, no real order sent.
-    In LIVE mode: sends real order to Kotak.
-    Returns trade dict with order_id.
-    """
+
     if stop_loss is None:
         stop_loss = calculate_stop_loss(entry_price, "BUY")
 
-    quantity = calculate_quantity(entry_price, stop_loss)
+    quantity     = calculate_quantity(entry_price, stop_loss)
+    target_price = calculate_target(entry_price, stop_loss)
 
     trade = {
         "symbol":         symbol,
@@ -89,62 +90,86 @@ def place_buy_order(
         "quantity":       quantity,
         "entry_price":    entry_price,
         "stop_loss":      stop_loss,
+        "target_price":   target_price,
         "strategy":       strategy,
         "confidence":     confidence,
         "product":        product,
         "order_id":       None,
+        "sl_order_id":    None,
     }
 
     if TRADING_MODE == "PAPER":
-        trade["order_id"] = f"PAPER-{symbol}-{datetime.now().strftime('%H%M%S')}"
+        trade["order_id"]    = f"PAPER-{symbol}-{datetime.now().strftime('%H%M%S')}"
+        trade["sl_order_id"] = f"PAPER-SL-{symbol}-{datetime.now().strftime('%H%M%S')}"
         logger.info(
             f"📋 [PAPER] BUY | {symbol} | Qty: {quantity} | "
-            f"@ ₹{entry_price} | SL: ₹{stop_loss} | Strategy: {strategy}"
+            f"@ ₹{entry_price} | SL: ₹{stop_loss} | Target: ₹{target_price}"
         )
 
     elif TRADING_MODE == "LIVE":
+        # Step 1 — Place BUY order
         trade["order_id"] = _send_kotak_order(
             trading_symbol = trading_symbol,
             transaction    = "B",
             quantity       = quantity,
             price          = entry_price,
+            order_type     = "L",
             product        = product,
         )
         if not trade["order_id"]:
             logger.error(f"❌ BUY order FAILED for {symbol}")
             return {}
 
+        # Step 2 — Place SL-M SELL order on Kotak immediately
+        # This protects position even if laptop goes offline
+        trade["sl_order_id"] = _send_kotak_sl_order(
+            trading_symbol = trading_symbol,
+            quantity       = quantity,
+            trigger_price  = stop_loss,
+            product        = product,
+        )
+        if trade["sl_order_id"]:
+            logger.info(
+                f"🛡️ Kotak SL-M placed | {symbol} | "
+                f"Trigger: ₹{stop_loss} | OrderID: {trade['sl_order_id']}"
+            )
+        else:
+            logger.warning(
+                f"⚠️ Kotak SL-M FAILED for {symbol}. "
+                f"Software SL active but no broker-side protection!"
+            )
+
         logger.info(
             f"✅ [LIVE] BUY | {symbol} | Qty: {quantity} | "
-            f"@ ₹{entry_price} | SL: ₹{stop_loss} | OrderID: {trade['order_id']}"
+            f"@ ₹{entry_price} | SL: ₹{stop_loss} | Target: ₹{target_price}"
         )
 
-    # Save to DB + positions.json regardless of mode
     save_open_position(trade)
     return trade
 
 
+# ════════════════════════════════════════════════════════════
+#   SELL ORDER
+# ════════════════════════════════════════════════════════════
+
 def place_sell_order(
-    symbol:         str,
-    trading_symbol: str,
-    exit_price:     float,
-    reason:         str = "SIGNAL",
-    product:        str = "MIS",
+    symbol:   str,
+    exit_price: float,
+    reason:   str = "SIGNAL",
+    product:  str = "MIS",
 ) -> bool:
-    """
-    Places a SELL order to exit an open position.
-    Reason can be: SIGNAL, STOPLOSS, SQUAREOFF, MANUAL
-    """
-    # Find quantity from open positions
+
     open_positions = get_open_positions()
     position = next((p for p in open_positions if p["symbol"] == symbol), None)
 
     if not position:
-        logger.warning(f"No open position found for {symbol} — skipping sell.")
+        logger.warning(f"No open position for {symbol}")
         return False
 
-    quantity = position["quantity"]
-    success  = True
+    quantity       = position["quantity"]
+    # ← FIXED: use stored trading_symbol, not raw ticker
+    trading_symbol = position.get("trading_symbol") or symbol
+    success        = True
 
     if TRADING_MODE == "PAPER":
         logger.info(
@@ -153,167 +178,326 @@ def place_sell_order(
         )
 
     elif TRADING_MODE == "LIVE":
+        # Cancel existing SL-M order first (if it exists)
+        sl_order_id = position.get("kotak_sl_order_id")
+        if sl_order_id and reason != "STOPLOSS":
+            _cancel_kotak_order(sl_order_id)
+
         order_id = _send_kotak_order(
             trading_symbol = trading_symbol,
             transaction    = "S",
             quantity       = quantity,
             price          = exit_price,
+            order_type     = "MKT",   # Market sell for speed
             product        = product,
         )
         if not order_id:
             logger.error(f"❌ SELL order FAILED for {symbol}")
             success = False
 
-    # Update DB + positions.json
     if success:
         close_position(symbol, exit_price, reason)
 
     return success
 
 
-# ── Stop Loss Monitor ─────────────────────────────────────────
+# ════════════════════════════════════════════════════════════
+#   EXIT CHECKS — Called every tick by strategy.py
+# ════════════════════════════════════════════════════════════
+
 def check_stop_losses(live_prices: dict[str, float]):
-    """
-    Called by strategy.py on every tick.
-    live_prices = {"RELIANCE": 2445.0, "TCS": 3890.0, ...}
-    If any position hits its stop loss → sell immediately.
-    """
-    open_positions = get_open_positions()
+    """Checks software SL. Kotak SL-M is the backup."""
+    for position in get_open_positions():
+        symbol      = position["symbol"]
+        trailing_sl = position.get("trailing_sl")
+        stop_loss   = position.get("stop_loss")
+        current     = live_prices.get(symbol)
 
-    for position in open_positions:
-        symbol     = position["symbol"]
-        stop_loss  = position.get("stop_loss")
-        current    = live_prices.get(symbol)
-
-        if not current or not stop_loss:
+        if not current:
             continue
 
-        if current <= stop_loss:
-            logger.warning(
-                f"🔴 STOP LOSS HIT | {symbol} | "
-                f"Price: ₹{current} ≤ SL: ₹{stop_loss}"
-            )
-            place_sell_order(
-                symbol         = symbol,
-                trading_symbol = position.get("symbol"),  # fallback
-                exit_price     = current,
-                reason         = "STOPLOSS",
-                product        = "MIS",
-            )
-
-
-# ── Intraday Square-Off ───────────────────────────────────────
-def squareoff_all_intraday(live_prices: dict[str, float]):
-    """
-    Force-closes all MIS (intraday) positions at 3:15 PM.
-    Called by strategy.py's time check every cycle.
-    Never hold intraday positions overnight — that's a rule.
-    """
-    now = datetime.now().time()
-
-    if now < INTRADAY_SQUAREOFF:
-        return   # Not time yet
-
-    open_positions = get_open_positions()
-    intraday_open  = [p for p in open_positions if p.get("trading_mode") == "MIS"
-                      or p.get("status") == "OPEN"]
-
-    if not intraday_open:
-        return
-
-    logger.warning(f"⏰ 3:15 PM — Force squaring off {len(intraday_open)} position(s).")
-
-    for position in intraday_open:
-        symbol  = position["symbol"]
-        price   = live_prices.get(symbol, position["entry_price"])
-
-        place_sell_order(
-            symbol         = symbol,
-            trading_symbol = symbol,
-            exit_price     = price,
-            reason         = "SQUAREOFF",
-            product        = "MIS",
+        # Use trailing SL if it's higher than original SL
+        active_sl = max(
+            trailing_sl or 0,
+            stop_loss   or 0
         )
 
+        if active_sl and current <= active_sl:
+            sl_type = "TRAILING_SL" if (trailing_sl and trailing_sl > stop_loss) \
+                      else "STOPLOSS"
+            logger.warning(
+                f"🔴 {sl_type} HIT | {symbol} | "
+                f"₹{current} ≤ ₹{active_sl}"
+            )
+            place_sell_order(symbol, current, sl_type)
 
-# ── Kotak API Order Sender (Internal) ────────────────────────
+
+def check_profit_targets(live_prices: dict[str, float]):
+    """Exits when price hits 2:1 target."""
+    for position in get_open_positions():
+        symbol  = position["symbol"]
+        target  = position.get("target_price")
+        current = live_prices.get(symbol)
+
+        if not current or not target:
+            continue
+
+        if current >= target:
+            logger.info(
+                f"🎯 TARGET HIT | {symbol} | "
+                f"₹{current} ≥ Target ₹{target}"
+            )
+            place_sell_order(symbol, current, "TARGET")
+
+
+def check_war_room_flip(live_prices: dict[str, float]):
+    """
+    Exits positions when war room changes its mind.
+    Triggered if:
+      - Stock direction → AVOID in latest briefing
+      - Market bias → BEARISH
+    """
+    briefing = load_briefing()
+    if not briefing:
+        return
+
+    avoid_list  = briefing.get("avoid_list", [])
+    market_bias = briefing.get("market_bias", "NEUTRAL")
+
+    for position in get_open_positions():
+        symbol  = position["symbol"]
+        current = live_prices.get(symbol, position["entry_price"])
+
+        if symbol in avoid_list:
+            logger.warning(f"⚔️ WAR ROOM FLIP | {symbol} → AVOID → Exiting")
+            place_sell_order(symbol, current, "WAR_ROOM_FLIP")
+
+        elif market_bias == "BEARISH":
+            logger.warning(f"🐻 BEARISH BIAS | {symbol} → Exiting")
+            place_sell_order(symbol, current, "BEARISH_BIAS")
+
+
+def update_trailing_stop_losses(live_prices: dict[str, float]):
+    """
+    Moves SL up as price rises. Never moves SL down.
+    In LIVE mode: modifies Kotak SL order too.
+    """
+    for position in get_open_positions():
+        symbol      = position["symbol"]
+        current     = live_prices.get(symbol)
+        current_tsl = position.get("trailing_sl") or position.get("stop_loss", 0)
+
+        if not current:
+            continue
+
+        new_tsl = round(current * (1 - TRAILING_SL_PCT), 2)
+
+        if new_tsl > current_tsl:
+            update_trailing_sl(symbol, new_tsl)
+            logger.info(
+                f"📈 TRAILING SL | {symbol} | "
+                f"₹{current_tsl} → ₹{new_tsl}"
+            )
+
+            # Modify Kotak's SL order in LIVE mode
+            if TRADING_MODE == "LIVE":
+                sl_order_id = position.get("kotak_sl_order_id")
+                if sl_order_id:
+                    _modify_sl_order(
+                        sl_order_id,
+                        new_tsl,
+                        position["quantity"]
+                    )
+
+
+def check_max_daily_loss() -> bool:
+    """
+    Returns True if daily loss limit breached.
+    strategy.py stops new trades when this returns True.
+    """
+    gross_pnl      = get_today_gross_pnl()
+    max_daily_loss = -(CAPITAL * MAX_DAILY_LOSS_PCT)
+
+    if gross_pnl <= max_daily_loss:
+        logger.warning(
+            f"🚨 MAX DAILY LOSS HIT | "
+            f"P&L: ₹{gross_pnl:.2f} | Limit: ₹{max_daily_loss:.2f} | "
+            f"No new trades today."
+        )
+        return True
+    return False
+ 
+
+def squareoff_all_intraday(live_prices: dict[str, float]):
+    """Force-closes all MIS positions at 3:15 PM. Runs only once."""
+    global _squareoff_done
+
+    if _squareoff_done:
+        return
+
+    if datetime.now().time() < INTRADAY_SQUAREOFF:
+        return
+
+    open_positions = get_open_positions()
+    if not open_positions:
+        _squareoff_done = True
+        return
+
+    logger.warning(
+        f"⏰ 3:15 PM — Squaring off {len(open_positions)} position(s)."
+    )
+
+    for position in open_positions:
+        symbol  = position["symbol"]
+        current = live_prices.get(symbol, position["entry_price"])
+        place_sell_order(symbol, current, "SQUAREOFF")
+
+    _squareoff_done = True
+
+
+def get_portfolio_snapshot() -> dict:
+    if TRADING_MODE == "PAPER":
+        return {
+            "mode":           "PAPER",
+            "open_positions": get_open_positions(),
+            "count":          len(get_open_positions()),
+        }
+    try:
+        client   = get_client()
+        limits   = client.limits(segment="ALL", exchange="ALL", product="ALL")
+        holdings = client.holdings()
+        return {"mode": "LIVE", "limits": limits, "holdings": holdings}
+    except Exception as e:
+        logger.error(f"Portfolio snapshot failed: {e}")
+        return {}
+
+
+# ════════════════════════════════════════════════════════════
+#   KOTAK API CALLS (Internal)
+# ════════════════════════════════════════════════════════════
+
 def _send_kotak_order(
     trading_symbol: str,
-    transaction:    str,     # "B" or "S"
+    transaction:    str,
     quantity:       int,
     price:          float,
+    order_type:     str = "L",
     product:        str = "MIS",
 ) -> str | None:
-    """
-    Sends the actual order to Kotak Neo.
-    Returns order_id string on success, None on failure.
-    Retries once with a fresh session on auth errors.
-    """
-    for attempt in range(2):   # Max 2 attempts
+
+    for attempt in range(2):
         try:
             client   = get_client() if attempt == 0 else force_reconnect()
             response = client.place_order(
-                exchange_segment  = "nse_cm",
-                product           = product,
-                price             = str(round(price, 2)),
-                order_type        = "L",          # Limit order
-                quantity          = str(quantity),
-                validity          = "DAY",
-                trading_symbol    = trading_symbol,
-                transaction_type  = transaction,
-                amo               = "NO",
-                disclosed_quantity= "0",
-                market_protection = "0",
-                pf                = "N",
-                trigger_price     = "0",
+                exchange_segment   = "nse_cm",
+                product            = product,
+                price              = str(round(price, 2)),
+                order_type         = order_type,
+                quantity           = str(quantity),
+                validity           = "DAY",
+                trading_symbol     = trading_symbol,
+                transaction_type   = transaction,
+                amo                = "NO",
+                disclosed_quantity = "0",
+                market_protection  = "0",
+                pf                 = "N",
+                trigger_price      = "0",
             )
-
-            # Extract order_id from response
             if response and isinstance(response, dict):
                 order_id = (
-                    response.get("nOrdNo")
-                    or response.get("order_id")
-                    or response.get("id")
+                    response.get("nOrdNo") or
+                    response.get("order_id") or
+                    response.get("id")
                 )
                 if order_id:
                     return str(order_id)
-
             logger.error(f"Unexpected Kotak response: {response}")
             return None
 
         except Exception as e:
             if attempt == 0:
-                logger.warning(f"Order attempt 1 failed ({e}). Retrying with fresh session...")
+                logger.warning(f"Order attempt 1 failed: {e}. Retrying...")
             else:
                 logger.error(f"Order failed after retry: {e}")
                 return None
 
-    return None
 
-
-# ── Portfolio Snapshot ────────────────────────────────────────
-def get_portfolio_snapshot() -> dict:
+def _send_kotak_sl_order(
+    trading_symbol: str,
+    quantity:       int,
+    trigger_price:  float,
+    product:        str = "MIS",
+) -> str | None:
     """
-    Fetches live holdings + limits from Kotak.
-    Used by dashboard and reflection loop.
+    Places a SL-M SELL order on Kotak.
+    This is the broker-side protection —
+    fires even if AlcoSoft is offline.
     """
-    if TRADING_MODE == "PAPER":
-        open_pos = get_open_positions()
-        return {
-            "mode":          "PAPER",
-            "open_positions": open_pos,
-            "count":          len(open_pos),
-        }
+    for attempt in range(2):
+        try:
+            client   = get_client() if attempt == 0 else force_reconnect()
+            response = client.place_order(
+                exchange_segment   = "nse_cm",
+                product            = product,
+                price              = "0",
+                order_type         = "SL-M",
+                quantity           = str(quantity),
+                validity           = "DAY",
+                trading_symbol     = trading_symbol,
+                transaction_type   = "S",
+                amo                = "NO",
+                disclosed_quantity = "0",
+                market_protection  = "0",
+                pf                 = "N",
+                trigger_price      = str(round(trigger_price, 2)),
+            )
+            if response and isinstance(response, dict):
+                order_id = (
+                    response.get("nOrdNo") or
+                    response.get("order_id") or
+                    response.get("id")
+                )
+                if order_id:
+                    return str(order_id)
+            return None
 
+        except Exception as e:
+            if attempt == 0:
+                logger.warning(f"SL-M attempt 1 failed: {e}. Retrying...")
+            else:
+                logger.error(f"SL-M order failed: {e}")
+                return None
+
+
+def _modify_sl_order(
+    order_id:      str,
+    new_trigger:   float,
+    quantity:      int,
+) -> bool:
+    """Modifies existing SL-M order when trailing SL moves up."""
     try:
         client   = get_client()
-        limits   = client.limits(segment="ALL", exchange="ALL", product="ALL")
-        holdings = client.holdings()
-        return {
-            "mode":     "LIVE",
-            "limits":   limits,
-            "holdings": holdings,
-        }
+        response = client.modify_order(
+            order_id          = order_id,
+            price             = "0",
+            quantity          = str(quantity),
+            disclosed_quantity= "0",
+            trigger_price     = str(round(new_trigger, 2)),
+            validity          = "DAY",
+            order_type        = "SL-M",
+        )
+        logger.info(f"SL-M modified | OrderID: {order_id} | New trigger: ₹{new_trigger}")
+        return True
     except Exception as e:
-        logger.error(f"Portfolio snapshot failed: {e}")
-        return {}
+        logger.error(f"SL-M modify failed: {e}")
+        return False
+
+
+def _cancel_kotak_order(order_id: str):
+    """Cancels a pending order on Kotak (e.g., SL-M when exiting via target)."""
+    try:
+        client = get_client()
+        client.cancel_order(order_id=order_id)
+        logger.info(f"Order cancelled: {order_id}")
+    except Exception as e:
+        logger.warning(f"Order cancel failed (may already be filled): {e}")

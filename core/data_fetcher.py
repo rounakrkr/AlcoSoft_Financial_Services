@@ -17,10 +17,18 @@ from core.kotak_client import get_client
 logger = logging.getLogger(__name__)
 
 # ── Config ───────────────────────────────────────────────────
+_active_client          = None
 CANDLE_INTERVAL_SECONDS = 300          # 5-minute candles
 MAX_CANDLE_HISTORY      = 100          # Keep last 100 candles per stock
 BRIEFING_PATH           = "data/session_briefing.json"
 TOKENS_CACHE_PATH       = "data/instrument_tokens.json"
+_subscribed_symbols = []           # currently subscribed stock list
+_reconnect_attempts = 0            # retry counter
+_max_reconnect = 10                # max retries
+_reconnect_delay = 5               # initial delay seconds
+_reconnect_lock = threading.Lock() # avoid simultaneous reconnect
+_reconnect_timer = None
+_keepalive_timer  = None          # proactive ping before Kotak 4-min timeout
 
 
 # ── In-Memory Storage ────────────────────────────────────────
@@ -48,6 +56,9 @@ def _on_message(message):
     Called every time a price tick arrives from Kotak WebSocket.
     Decodes the tick, updates latest price, builds OHLCV candle.
     """
+    global _reconnect_attempts
+    _reconnect_attempts = 0
+    _reset_keepalive()
     try:
         # Kotak sends a list of tick dicts
         if isinstance(message, list):
@@ -92,9 +103,13 @@ def _build_candle(symbol: str, ltp: float, volume: float, now: datetime):
     Aggregates ticks into 5-minute OHLCV candles.
     When a candle period ends, pushes it to history and starts fresh.
     """
-    # Current candle bucket (floor to nearest 5 min)
-    bucket_minute = (now.minute // 5) * 5
-    bucket_key    = now.strftime(f"%Y-%m-%d %H:{bucket_minute:02d}")
+    # # Current candle bucket (floor to nearest 5 min)
+    # bucket_minute = (now.minute // 5) * 5
+    # bucket_key    = now.strftime(f"%Y-%m-%d %H:{bucket_minute:02d}")
+
+    # 1-Minute Candle Version
+    bucket_minute = now.minute               # koi division nahi
+    bucket_key    = now.strftime(f"%Y-%m-%d %H:%M")   # HH:MM format
 
     if symbol not in _current_candle:
         # First tick ever for this symbol
@@ -129,16 +144,114 @@ def _new_candle(bucket_key: str, ltp: float, volume: float) -> dict:
     }
 
 
+
+# ── WebSocket Keepalive — prevents Kotak 4-min idle disconnect ────────────────
+# Kotak closes WebSocket after ~4 minutes of silence.
+# We fire a proactive re-subscribe at 3.5 minutes to reset the timer.
+
+KEEPALIVE_INTERVAL = 210   # 3.5 minutes (< Kotak's 4-min timeout)
+
+def _reset_keepalive():
+    """Cancels existing keepalive timer and starts a fresh one."""
+    global _keepalive_timer
+    if _keepalive_timer:
+        _keepalive_timer.cancel()
+    if not _subscribed_symbols:
+        return
+    _keepalive_timer = threading.Timer(KEEPALIVE_INTERVAL, _send_keepalive)
+    _keepalive_timer.daemon = True
+    _keepalive_timer.start()
+
+
+def _send_keepalive():
+    """Re-subscribes to reset Kotak's idle timer. Called every 3.5 min."""
+    global _active_client
+    if not _active_client or not _subscribed_symbols:
+        return
+    try:
+        instrument_tokens = resolve_instrument_tokens(_subscribed_symbols)
+        if instrument_tokens:
+            _active_client.subscribe(
+                instrument_tokens = instrument_tokens,
+                isIndex           = False,
+                isDepth           = False,
+            )
+            logger.debug("🏓 WebSocket keepalive ping sent.")
+        _reset_keepalive()   # schedule next ping
+    except Exception as e:
+        logger.warning(f"Keepalive failed: {e}. WebSocket may reconnect naturally.")
+
+
 def _on_open(message):
     logger.info("✅ WebSocket connection opened.")
+    _reset_keepalive()
 
 
 def _on_close(message):
+    global _subscribed_symbols, _reconnect_attempts
     logger.warning(f"⚠️ WebSocket closed: {message}")
+
+    if not _subscribed_symbols:
+        logger.info("No symbols to re-subscribe. Skipping reconnect.")
+        return
+
+    # Market open nahi hai? To market open hone tak wait karo
+    if not _is_market_open():
+        now = datetime.now()
+        market_open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
+        if now > market_open_time:
+            delay = 30
+        else:
+            delay = (market_open_time - now).total_seconds() + 5
+        logger.info(f"Market not open. Scheduling reconnect at 9:15 AM (in {delay:.0f}s)")
+        with _reconnect_lock:
+            if _reconnect_timer:                    # ← cancel existing
+                _reconnect_timer.cancel()
+            _reconnect_timer = threading.Timer(delay, _do_reconnect)
+            _reconnect_timer.daemon = True
+            _reconnect_timer.start()
+        return
+
+    # Market open hai → immediate reconnect attempt
+    _schedule_reconnect()
 
 
 def _on_error(error):
     logger.error(f"❌ WebSocket error: {error}")
+
+
+def _is_market_open():
+    """Rough check — market open between 9:15 and 15:30."""
+    now = datetime.now().time()
+    return dt_time(9, 15) <= now <= dt_time(15, 30)
+
+def _schedule_reconnect():
+    global _reconnect_timer, _reconnect_attempts
+    with _reconnect_lock:
+        if _reconnect_timer:
+            _reconnect_timer.cancel()               # ← yeh add karo
+            _reconnect_timer = None
+        if _reconnect_attempts >= _max_reconnect:
+            logger.error("Max reconnect attempts reached. Manual restart needed.")
+            return
+        delay = min(_reconnect_delay * (2 ** _reconnect_attempts), 300)
+        logger.info(f"Scheduling reconnect in {delay}s (attempt {_reconnect_attempts+1}/{_max_reconnect})")
+        _reconnect_timer = threading.Timer(delay, _do_reconnect)
+        _reconnect_timer.daemon = True
+        _reconnect_timer.start()
+
+def _do_reconnect():
+    global _reconnect_attempts, _subscribed_symbols
+    with _reconnect_lock:
+        _reconnect_attempts += 1
+        try:
+            logger.info("Reconnecting WebSocket...")
+            start_live_feed(_subscribed_symbols)  # will re-subscribe
+            _reconnect_attempts = 0  # reset on success
+            logger.info("Reconnection successful.")
+        except Exception as e:
+            logger.error(f"Reconnect failed: {e}")
+            _schedule_reconnect()  # retry
 
 
 # ── Public Interface ─────────────────────────────────────────
@@ -258,45 +371,54 @@ def _find_equity_scrip(results, symbol: str) -> dict | None:
 
 # ── Startup: Subscribe to Live Feed ──────────────────────────
 def start_live_feed(symbols: list[str]):
-    """
-    Main entry point. Call this once at system startup.
-    Resolves tokens, attaches callbacks, subscribes to WebSocket.
-    """
+    global _active_client, _subscribed_symbols, _reconnect_attempts
     logger.info(f"Starting live feed for: {symbols}")
 
     client = get_client()
+    _active_client = client
 
-    # Attach WebSocket callbacks
     client.on_message = _on_message
     client.on_open    = _on_open
     client.on_close   = _on_close
     client.on_error   = _on_error
 
-    # Resolve instrument tokens
-    instrument_tokens = resolve_instrument_tokens(symbols)
+    _subscribed_symbols = symbols.copy()
+    _reconnect_attempts = 0
 
+    instrument_tokens = resolve_instrument_tokens(symbols)
     if not instrument_tokens:
         logger.error("No instrument tokens resolved. Cannot start feed.")
         return
 
-    # Subscribe to live ticks
     client.subscribe(
         instrument_tokens=instrument_tokens,
         isIndex=False,
         isDepth=False,
     )
-
     logger.info(f"✅ Subscribed to live feed: {[t['instrument_token'] for t in instrument_tokens]}")
 
 
 def stop_live_feed(symbols: list[str]):
-    """Unsubscribes from live feed for given symbols."""
-    client = get_client()
+    global _active_client, _subscribed_symbols, _reconnect_timer, _keepalive_timer
+    if _reconnect_timer:
+        _reconnect_timer.cancel()
+        _reconnect_timer = None
+    if _keepalive_timer:
+        _keepalive_timer.cancel()
+        _keepalive_timer = None
+    _subscribed_symbols = []
+
+    if _active_client is None:        
+        logger.warning("No active client to unsubscribe from.")
+        logger.info("Live feed stopped.")
+        return
+
     instrument_tokens = resolve_instrument_tokens(symbols)
     if instrument_tokens:
-        client.un_subscribe(
+        _active_client.un_subscribe(
             instrument_tokens=instrument_tokens,
             isIndex=False,
             isDepth=False,
         )
+    _active_client = None              
     logger.info("Live feed stopped.")

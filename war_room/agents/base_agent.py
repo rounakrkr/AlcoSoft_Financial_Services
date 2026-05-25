@@ -20,16 +20,26 @@ PROMPTS_DIR     = "war_room/prompts"
 
 # Each OpenRouter model has its own dedicated key
 OPENROUTER_KEYS = {
-    "technical":  os.getenv("OPENROUTER_KEY_1"),
-    "mediator":   os.getenv("OPENROUTER_KEY_2"),
-    "reflection": os.getenv("OPENROUTER_KEY_3"),
+    "technical":   os.getenv("OPENROUTER_KEY_4"),
+    "fundamental": os.getenv("OPENROUTER_KEY_3"),  
+    "mediator":    os.getenv("OPENROUTER_KEY_2"),   
+    "reflection":  os.getenv("OPENROUTER_KEY_1"),   
 }
 
+# MODELS = {
+#     "technical":   os.getenv("MODEL_TECHNICAL",  "deepseek/deepseek-v4-flash:free"),
+#     "fundamental": os.getenv("MODEL_FUNDAMENTAL", "nousresearch/hermes-3-llama-3.1-405b:free"),  # ← yeh hai?
+#     "mediator":    os.getenv("MODEL_MEDIATOR",    "google/gemma-4-31b-it:free"),
+#     "reflection":  os.getenv("MODEL_REFLECTION",  "openrouter/owl-alpha"),
+#     "standby":     os.getenv("MODEL_STANDBY",     "openai/gpt-oss-120b:free"),
+# }
+
 MODELS = {
-    "technical":  os.getenv("MODEL_TECHNICAL",  "deepseek/deepseek-v4-flash:free"),
-    "mediator":   os.getenv("MODEL_MEDIATOR",   "nvidia/nemotron-3-super-120b-a12b:free"),
-    "reflection": os.getenv("MODEL_REFLECTION", "openrouter/owl-alpha"),
-    "standby":    os.getenv("MODEL_STANDBY",    "openai/gpt-oss-120b:free"),
+    "technical":   "meta-llama/llama-3.2-3b-instruct:free",   # Meta generous
+    "fundamental": "google/gemma-2-9b-it:free",               # Google AI Studio
+    "mediator":    "qwen/qwen-2.5-7b-instruct:free",          # Qwen chill
+    "reflection":  "microsoft/phi-3-mini-128k-instruct:free", # Phi-3 free
+    "standby":     "openai/gpt-oss-120b:free",                # wahi
 }
 
 
@@ -96,8 +106,8 @@ def call_agent(
         round_number = round_number,
         verdict      = result.get("verdict") or result.get("action", "UNKNOWN"),
         confidence   = result.get("confidence", 0),
-        reasons      = result.get("reasons", []),
-        concern      = result.get("concern", ""),
+        reasons      = result.get("reasons", []),   # ← list
+        concern      = result.get("concern", ""),   # ← string
     )
 
     return result
@@ -123,7 +133,7 @@ def _call_gemini(system: str, user: str) -> str:
     """Native Gemini — Fundamental Analyst + Morning Screener."""
     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
     model = genai.GenerativeModel(
-        model_name         = "gemini-1.5-flash",
+        model_name         = "gemini-flash-latest",
         system_instruction = system,
     )
     return model.generate_content(user).text
@@ -147,14 +157,19 @@ def _call_groq(system: str, user: str) -> str:
 def _parse_json(raw: str) -> dict:
     try:
         cleaned = raw.strip()
+        # Remove markdown code blocks
         cleaned = cleaned.replace("```json", "").replace("```", "").strip()
-        start   = cleaned.find("{")
-        end     = cleaned.rfind("}") + 1
+        # Find the JSON object
+        start = cleaned.find("{")
+        end   = cleaned.rfind("}") + 1
         if start != -1 and end > start:
             cleaned = cleaned[start:end]
+            # Remove trailing commas (common LLM mistake)
+            import re
+            cleaned = re.sub(r',\s*([}\]])', r'\1', cleaned)
         return json.loads(cleaned)
     except Exception as e:
-        logger.error(f"JSON parse failed: {e}")
+        logger.error(f"JSON parse failed: {e}\nRaw: {raw[:200]}")
         return _error_response()
 
 

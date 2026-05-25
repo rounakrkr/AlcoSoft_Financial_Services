@@ -31,3 +31,5 @@ RULES:
 - Any major negative news = automatic AVOID
 - Earnings within 2 days = automatic WAIT
 - Broad market selloff = confidence cannot exceed 40
+- No clear negative catalyst + neutral market = WAIT, not BUY
+- Default should be WAIT unless clear positive signals exist

@@ -1,0 +1,127 @@
+## 🔴 CRITICAL — System kaam nahi karega
+
+**1. `strategy.py` — BUY order kabhi place hi nahi hoga**
+```python
+if signal["action"] == "BUY":
+    # ... place_buy_order ...   ← SIRF COMMENT HAI! Actual call nahi hai!
+    open_count += 1
+```
+Poora system signal detect karega, war room approve karega, lekin order kabhi jayega hi nahi. Yeh sabse bada bug hai.
+
+---
+
+**2. `kotak_client.py` — Async event loop block ho jaayega**
+```python
+# _create_and_login() mein:
+time.sleep(2)   ← BLOCKING call async context mein
+```
+`startup()` async function hai. Pehli baar login hote waqt `time.sleep(2)` poora event loop freeze kar deta hai — strategy loop, scheduler, sab ruk jaate hain. `await asyncio.sleep(2)` nahi hai kyunki yeh sync function hai, but calling context async hai.
+
+---
+
+**3. `base_agent.py` — Gemini model name galat hai**
+```python
+model_name = "gemini-flash-latest"   ← Yeh exist nahi karta
+```
+Sahi naam hai `"gemini-1.5-flash-latest"` ya `"gemini-2.0-flash-latest"`. Har Gemini call — fundamental analyst aur morning screener dono — fail ho jaayenge silently, `_error_response()` return karega, aur tumhe pata bhi nahi chalega kyun.
+
+---
+
+## 🟠 SERIOUS — Kabhi kabhi fail hoga
+
+**4. `order_executor.py` — Duplicate line, logic confusion**
+```python
+stop_dist = abs(price - stop_loss)
+stop_dist = abs(price - stop_loss)   ← exact duplicate, dono ek hi line
+```
+Harmless abhi, lekin uske neeche jo fallback logic hai wo pehle `stop_dist` calculate karne se pehle check karna chahiye tha. Order ka ek bhi yeh hai.
+
+---
+
+**5. `orchestrator.py` — "CONDITIONAL" se Round 2 hamesha trigger hoga**
+
+Risk agent teen cheezein return kar sakta hai: `APPROVE`, `REJECT`, ya `CONDITIONAL`.
+```python
+bullish = {"BUY", "APPROVE"}
+bearish = {"AVOID", "WAIT", "REJECT"}
+# "CONDITIONAL" in kisi mein nahi hai!
+```
+Jab bhi risk `CONDITIONAL` bolta hai, `_is_consensus()` hamesha `False` return karega — matlab Round 2 hamesha chalega. API calls double, time double.
+
+---
+
+**6. `orchestrator.py` — War room time budget ka math**
+
+```
+AGENT_SLEEP = 40 seconds
+Per stock (worst case) = 7 agent calls × 40s sleep = 280s ≈ 5 minutes
+4 stocks × 5 min + inter-stock sleep = ~22 minutes
+WAR_ROOM_INTERVAL = 30 minutes
+```
+Iska matlab: war room khatam hone se pehle hi agli war room schedule hogi. `max_instances=1` hai toh skip ho jaayegi — lekin effectively war room sirf ek baar chalegi practically.
+
+---
+
+**7. `data_fetcher.py` — `CANDLE_INTERVAL_SECONDS = 300` kabhi use nahi hua**
+```python
+CANDLE_INTERVAL_SECONDS = 300   # defined, but...
+# candle building mein:
+bucket_key = now.strftime(f"%Y-%m-%d %H:%M")   # 1-minute hardcoded
+```
+System 1-minute candles bana raha hai lekin baaki jagah sab 5-minute assume kar rahe hain (comments mein bhi). Strategy ka `MIN_STRATEGIES_AGREE` aur MACD/RSI sab 5-min candles ke liye tune kiye hain. 1-min candles pe bahut zyada false signals aayenge.
+
+---
+
+## 🟡 MEDIUM — Edge cases mein todega
+
+**8. `morning_screener.py` — System prompt apne aap se contradict karta hai**
+```
+"Pick exactly 4 stocks" ← prompt kehta hai
+lekin example format mein sirf 3 diye hain
+```
+Gemini confused ho ke 3 ya 4 kuch bhi de sakta hai.
+
+---
+
+**9. `data_fetcher.py` — `start_live_feed` globals ko lock ke bina modify karta hai**
+```python
+_subscribed_symbols = symbols.copy()   # no lock
+_reconnect_attempts = 0                # no lock
+```
+Reconnect thread alag chal raha hota hai tab yeh race condition create karta hai.
+
+---
+
+**10. `reflection_loop.py` — `learnings.json` corrupt hua toh silently fail**
+```python
+with open(learnings_path, "r") as f:
+    existing = json.load(f)   # koi try-except nahi
+```
+Agar file corrupt ho ya incomplete write hua toh poori reflection silently crash kar jaayegi, koi learning save nahi hogi.
+
+---
+
+**11. `order_executor.py` — `check_war_room_flip` BEARISH pe sab positions exit**
+
+Market thoda bhi bearish ho aur briefing update ho — **sabhi** open positions ek saath exit ho jaayenge, chahe wo profitable kyun na hon. No per-position check.
+
+---
+
+## 🔵 MINOR — Polish issues
+
+**12. `strategy.py` — `open_count` wrong increment kar raha hai**
+```python
+if signal["action"] == "BUY":
+    # ... place_buy_order ...  ← order nahi gaya
+    open_count += 1            ← phir bhi count badha diya
+```
+Bug #1 fix hone ke baad bhi yeh ek loop cycle ke andar ek se zyada orders rok dega correctly, lekin agar actual order fail ho jaaye toh count galat rahega.
+
+---
+
+**13. `kotak_client.py` — `is_session_alive` blank response ko alive maanta hai**
+```python
+return response is not None   # {} bhi alive lagega
+```
+
+---

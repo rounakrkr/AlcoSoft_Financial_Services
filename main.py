@@ -144,7 +144,7 @@ async def startup():
     # Step 3 — Kotak Login
     logger.info("[3/5] Connecting to Kotak Neo...")
     try:
-        client = get_client()
+        client = client = await asyncio.to_thread(get_client)
         logger.info("Kotak session established successfully.")
     except Exception as e:
         logger.critical(f"Kotak login failed: {e}")
@@ -260,20 +260,24 @@ def setup_shutdown_handler(scheduler: AsyncIOScheduler):
 
 
 async def _cleanup(scheduler: AsyncIOScheduler):
-    """Runs after strategy loop exits. Safe async context."""
     logger.info("Running cleanup...")
 
     scheduler.shutdown(wait=False)
     logger.info("Scheduler stopped.")
 
-    logout()
-    logger.info("Kotak session closed.")
-
+    # ✅ LIVE FEED PEHLE BAND KARO (session still alive)
     briefing = load_briefing()
     if briefing:
         stocks = [s["ticker"] for s in briefing.get("approved_stocks", [])]
-        stop_live_feed(stocks)
-    logger.info("Live feed stopped.")
+        try:
+            stop_live_feed(stocks)
+            logger.info("Live feed stopped.")
+        except Exception as e:
+            logger.warning(f"Live feed stop error (safe to ignore): {e}")
+
+    # ✅ PHIR LOGOUT KARO
+    logout()
+    logger.info("Kotak session closed.")
 
     logger.info("AlcoSoft shutdown complete. Goodbye.")
 
@@ -295,6 +299,8 @@ async def main():
 
     logger.info("Starting strategy loop. Press Ctrl+C to shutdown safely.")
 
+    await run_war_room()
+
     # Run strategy loop — it receives the shutdown event and
     # exits cleanly when _shutdown_event is set.
     await run_strategy_loop(_shutdown_event)
@@ -305,3 +311,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+client
