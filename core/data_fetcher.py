@@ -6,6 +6,7 @@
 # ============================================================
 
 import json
+import time
 import logging
 import threading
 from datetime import datetime, time as dt_time
@@ -13,15 +14,25 @@ from collections import defaultdict, deque
 import os
 
 from core.kotak_client import get_client
+from core.trading_settings import get as cfg
 
 logger = logging.getLogger(__name__)
 
 # ── Config ───────────────────────────────────────────────────
 _active_client          = None
-CANDLE_INTERVAL_SECONDS = 300          # 5-minute candles
 MAX_CANDLE_HISTORY      = 100          # Keep last 100 candles per stock
+
+
+def _candle_interval_seconds() -> int:
+    return int(cfg("market_data", "candle_interval_seconds", 300))
+
+
+def _candle_bucket_minutes(now: datetime) -> int:
+    mins = max(1, _candle_interval_seconds() // 60)
+    return (now.minute // mins) * mins
 BRIEFING_PATH           = "data/session_briefing.json"
 TOKENS_CACHE_PATH       = "data/instrument_tokens.json"
+KEEPALIVE_INTERVAL = 210           # 3.5 minutes (< Kotak's ~4-min idle disconnect)
 _subscribed_symbols = []           # currently subscribed stock list
 _reconnect_attempts = 0            # retry counter
 _max_reconnect = 10                # max retries
@@ -50,38 +61,116 @@ _token_to_symbol: dict[str, str] = {}
 _lock = threading.Lock()
 
 
+# Tick stats — surfaced in logs / health checks
+_tick_counts: dict[str, int] = defaultdict(int)
+_last_tick_log: float = 0.0
+
+
+def get_feed_stats() -> dict:
+    """Returns live-feed health: symbols, tick counts, candle counts."""
+    with _lock:
+        return {
+            "subscribed": list(_subscribed_symbols),
+            "symbols_with_ticks": list(_latest_tick.keys()),
+            "tick_counts": dict(_tick_counts),
+            "candle_counts": {
+                s: len(_candle_history[s]) + (1 if s in _current_candle else 0)
+                for s in _subscribed_symbols
+            },
+        }
+
+
 # ── WebSocket Callbacks ──────────────────────────────────────
 def _on_message(message):
     """
     Called every time a price tick arrives from Kotak WebSocket.
-    Decodes the tick, updates latest price, builds OHLCV candle.
+    NeoAPI wraps live ticks as {"type": "stock_feed", "data": [ {...}, ... ]}.
     """
-    global _reconnect_attempts
+    global _reconnect_attempts, _last_tick_log
     _reconnect_attempts = 0
     _reset_keepalive()
     try:
-        # Kotak sends a list of tick dicts
-        if isinstance(message, list):
-            for tick in message:
-                _process_tick(tick)
-        elif isinstance(message, dict):
-            _process_tick(message)
+        ticks = _extract_ticks(message)
+        for tick in ticks:
+            _process_tick(tick)
+
+        # Periodic summary so logs show ALL symbols getting data
+        now = time.time()
+        if ticks and now - _last_tick_log >= 120:
+            _last_tick_log = now
+            with _lock:
+                active = {s: _tick_counts[s] for s in _subscribed_symbols if _tick_counts.get(s, 0) > 0}
+                silent = [s for s in _subscribed_symbols if _tick_counts.get(s, 0) == 0]
+            logger.info(
+                f"📡 Live feed | ticks received: {len(active)}/{len(_subscribed_symbols)} symbols | "
+                f"active={list(active.keys())[:8]}{'...' if len(active) > 8 else ''}"
+            )
+            if silent:
+                logger.warning(f"📡 No ticks yet for: {silent[:10]}{'...' if len(silent) > 10 else ''}")
+
     except Exception as e:
-        logger.error(f"Error processing tick: {e}")
+        logger.error(f"Error processing tick: {e}", exc_info=True)
+
+
+def _extract_ticks(message) -> list[dict]:
+    """Normalise NeoAPI callback payloads into a list of tick dicts."""
+    if message is None:
+        return []
+
+    if isinstance(message, str):
+        return []
+
+    if isinstance(message, list):
+        return [t for t in message if isinstance(t, dict)]
+
+    if isinstance(message, dict):
+        msg_type = message.get("type")
+        if msg_type == "stock_feed":
+            data = message.get("data", [])
+            return [t for t in data if isinstance(t, dict)] if isinstance(data, list) else []
+        if msg_type == "quotes":
+            data = message.get("data")
+            if isinstance(data, list):
+                return [t for t in data if isinstance(t, dict)]
+            if isinstance(data, dict):
+                return [data]
+            return []
+        if "tk" in message:
+            return [message]
+
+    return []
+
+
+def _parse_float(value) -> float:
+    try:
+        if value is None or value == "":
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _process_tick(tick: dict):
     """Processes a single price tick into candle data."""
-    token  = str(tick.get("tk", ""))
-    ltp    = float(tick.get("ltp", 0) or tick.get("last_price", 0))
-    volume = float(tick.get("v", 0) or tick.get("volume", 0))
+    token = str(tick.get("tk", "") or tick.get("instrument_token", ""))
+    ltp = _parse_float(
+        tick.get("ltp")
+        or tick.get("last_traded_price")
+        or tick.get("last_price")
+        or tick.get("iv")  # index feed
+    )
+    volume = _parse_float(tick.get("v") or tick.get("volume"))
 
-    if not token or ltp == 0:
+    if not token or ltp <= 0:
         return
 
     symbol = _token_to_symbol.get(token)
     if not symbol:
+        logger.debug(f"Tick for unknown token {token} (not in subscription map)")
         return
+
+    _tick_counts[symbol] += 1
+    logger.debug(f"🔹 Tick: {symbol} LTP={ltp} Vol={volume}")
 
     now = datetime.now()
 
@@ -94,22 +183,29 @@ def _process_tick(tick: dict):
             "timestamp": now.isoformat(),
         }
 
-        # Build OHLCV candle
-        _build_candle(symbol, ltp, volume, now)
+        # Build OHLCV candle (use tick OHLC when Kotak sends them)
+        tick_high = _parse_float(tick.get("h") or tick.get("high"))
+        tick_low  = _parse_float(tick.get("lo") or tick.get("low") or tick.get("l"))
+        tick_open = _parse_float(tick.get("op") or tick.get("open"))
+        _build_candle(symbol, ltp, volume, now, tick_open, tick_high, tick_low)
 
 
-def _build_candle(symbol: str, ltp: float, volume: float, now: datetime):
+def _build_candle(
+    symbol: str,
+    ltp: float,
+    volume: float,
+    now: datetime,
+    tick_open: float = 0,
+    tick_high: float = 0,
+    tick_low: float = 0,
+):
     """
     Aggregates ticks into 5-minute OHLCV candles.
     When a candle period ends, pushes it to history and starts fresh.
     """
-    # # Current candle bucket (floor to nearest 5 min)
-    # bucket_minute = (now.minute // 5) * 5
-    # bucket_key    = now.strftime(f"%Y-%m-%d %H:{bucket_minute:02d}")
+    bucket_minute = _candle_bucket_minutes(now)
+    bucket_key    = now.strftime(f"%Y-%m-%d %H:{bucket_minute:02d}")
 
-    # 1-Minute Candle Version
-    bucket_minute = now.minute               # koi division nahi
-    bucket_key    = now.strftime(f"%Y-%m-%d %H:%M")   # HH:MM format
 
     if symbol not in _current_candle:
         # First tick ever for this symbol
@@ -121,14 +217,21 @@ def _build_candle(symbol: str, ltp: float, volume: float, now: datetime):
     if candle["bucket"] != bucket_key:
         # New 5-min period started — save completed candle to history
         _candle_history[symbol].append(candle)
-        logger.debug(f"Candle closed: {symbol} | {candle}")
+        # ➕ ye line daalo
+        logger.info(f"🕯️ Candle closed: {symbol} | {candle['bucket']} | O:{candle['open']:.2f} H:{candle['high']:.2f} L:{candle['low']:.2f} C:{candle['close']:.2f} V:{candle['volume']}")
 
         # Start fresh candle
         _current_candle[symbol] = _new_candle(bucket_key, ltp, volume)
     else:
         # Update current candle
-        candle["high"]   = max(candle["high"], ltp)
-        candle["low"]    = min(candle["low"], ltp)
+        highs = [candle["high"], ltp]
+        lows  = [candle["low"], ltp]
+        if tick_high > 0:
+            highs.append(tick_high)
+        if tick_low > 0:
+            lows.append(tick_low)
+        candle["high"]   = max(highs)
+        candle["low"]    = min(lows)
         candle["close"]  = ltp
         candle["volume"] += volume
 
@@ -149,7 +252,6 @@ def _new_candle(bucket_key: str, ltp: float, volume: float) -> dict:
 # Kotak closes WebSocket after ~4 minutes of silence.
 # We fire a proactive re-subscribe at 3.5 minutes to reset the timer.
 
-KEEPALIVE_INTERVAL = 210   # 3.5 minutes (< Kotak's 4-min timeout)
 
 def _reset_keepalive():
     """Cancels existing keepalive timer and starts a fresh one."""
@@ -188,7 +290,7 @@ def _on_open(message):
 
 
 def _on_close(message):
-    global _subscribed_symbols, _reconnect_attempts
+    global _subscribed_symbols, _reconnect_attempts, _reconnect_timer
     logger.warning(f"⚠️ WebSocket closed: {message}")
 
     if not _subscribed_symbols:
@@ -291,6 +393,46 @@ def has_enough_history(symbol: str, min_candles: int = 26) -> bool:
 
 
 # ── Instrument Token Resolver ─────────────────────────────────
+def fix_briefing_trading_symbols(briefing: dict):
+    """Set trading_symbol from instrument token cache (e.g. INFY → INFY-EQ)."""
+    if not os.path.exists(TOKENS_CACHE_PATH):
+        symbols = []
+        for key in ("approved_stocks", "watchlist"):
+            symbols.extend(s.get("ticker") for s in briefing.get(key, []) if s.get("ticker"))
+        if symbols:
+            resolve_instrument_tokens(list(dict.fromkeys(symbols)))
+
+    if not os.path.exists(TOKENS_CACHE_PATH):
+        return
+
+    with open(TOKENS_CACHE_PATH) as f:
+        token_cache = json.load(f)
+
+    for stock_list_key in ("approved_stocks", "watchlist"):
+        for stock in briefing.get(stock_list_key, []):
+            sym = stock.get("ticker", "")
+            if sym in token_cache:
+                ts = token_cache[sym].get("trading_symbol")
+                if ts:
+                    stock["trading_symbol"] = ts
+
+
+def purge_invalid_token_cache():
+    """Remove wrong series (BL/NC/etc.) from instrument_tokens.json."""
+    if not os.path.exists(TOKENS_CACHE_PATH):
+        return
+    with open(TOKENS_CACHE_PATH, "r") as f:
+        cached = json.load(f)
+    cleaned = {k: v for k, v in cached.items() if _is_valid_equity_entry(k, v)}
+    if len(cleaned) != len(cached):
+        os.makedirs("data", exist_ok=True)
+        with open(TOKENS_CACHE_PATH, "w") as f:
+            json.dump(cleaned, f, indent=2)
+        logger.info(
+            f"Purged {len(cached) - len(cleaned)} invalid token(s) from cache."
+        )
+
+
 def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
     """
     Converts stock symbols (e.g. 'RELIANCE') to Kotak instrument tokens.
@@ -309,9 +451,15 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
     updated     = False
 
     for symbol in symbols:
-        if symbol in cached:
+        if symbol in cached and _is_valid_equity_entry(symbol, cached[symbol]):
             token_info = cached[symbol]
         else:
+            if symbol in cached:
+                logger.warning(
+                    f"Invalid cached token for {symbol} "
+                    f"({cached[symbol].get('trading_symbol')}). Re-resolving..."
+                )
+                del cached[symbol]
             logger.info(f"Resolving instrument token for {symbol}...")
             try:
                 result = client.search_scrip(
@@ -327,11 +475,23 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
                     logger.warning(f"Could not resolve token for {symbol}")
                     continue
 
+                token_raw = scrip.get("pSymbol") or scrip.get("token") or scrip.get("instrument_token")
+                trading_sym = _safe_str(scrip.get("pTrdSymbol")) or f"{symbol}-EQ"
+                if not trading_sym.upper().endswith("-EQ"):
+                    logger.warning(
+                        f"{symbol}: non-EQ trading symbol {trading_sym} — skipping"
+                    )
+                    continue
+
                 token_info = {
-                    "instrument_token": scrip.get("pSymbol") or scrip.get("token"),
+                    "instrument_token": str(token_raw),
                     "exchange_segment": "nse_cm",
-                    "trading_symbol":   scrip.get("pTrdSymbol") or symbol,
+                    "trading_symbol":   trading_sym,
                 }
+                logger.info(
+                    f"  {symbol} → token={token_info['instrument_token']} "
+                    f"| {trading_sym}"
+                )
                 cached[symbol] = token_info
                 updated = True
             except Exception as e:
@@ -354,29 +514,83 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
     return tokens_list
 
 
+def _safe_str(value) -> str:
+    """Kotak CSV fields are often int/float — never call .upper() on raw values."""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 def _find_equity_scrip(results, symbol: str) -> dict | None:
-    """Picks the plain equity scrip from search results (not F&O)."""
+    """
+    Pick NSE cash-market EQ scrip only.
+    Kotak master CSV: pSymbolName = RELIANCE, pSymbol = token (int), pTrdSymbol = RELIANCE-EQ.
+    """
     if not results:
         return None
-    if isinstance(results, dict) and "data" in results:
-        results = results["data"]
+    if isinstance(results, dict):
+        if "error" in results or "Error" in results:
+            logger.warning(f"Scrip search error for {symbol}: {results}")
+            return None
+        if "data" in results:
+            results = results["data"]
+        elif "message" in results:
+            logger.warning(f"Scrip search: {results.get('message')}")
+            return None
+    if not isinstance(results, list):
+        return None
+
+    sym_upper = symbol.upper()
+    candidates = []
+
     for scrip in results:
-        name = scrip.get("pSymbol", "") or scrip.get("symbol", "")
-        series = scrip.get("pSeries", "") or scrip.get("series", "")
-        if name == symbol and series == "EQ":
+        # pSymbol is numeric token — NOT the company name
+        name = _safe_str(scrip.get("pSymbolName") or scrip.get("symbol")).upper()
+        if name != sym_upper:
+            continue
+
+        trading = _safe_str(scrip.get("pTrdSymbol") or scrip.get("trading_symbol"))
+        series  = _safe_str(scrip.get("pSeries") or scrip.get("series")).upper()
+
+        if trading.upper().endswith("-EQ") or series == "EQ":
             return scrip
-    # Fallback: return first result
-    return results[0] if results else None
+        candidates.append(scrip)
+
+    for scrip in candidates:
+        trading = _safe_str(scrip.get("pTrdSymbol")).upper()
+        if trading and not any(
+            trading.endswith(suffix)
+            for suffix in ("-BL", "-BE", "-NC", "-N1", "-N2", "-IL")
+        ):
+            return scrip
+
+    logger.warning(f"No EQ scrip found for {symbol} in {len(results)} results")
+    return None
+
+
+def _is_valid_equity_entry(symbol: str, entry: dict) -> bool:
+    """Reject cached tokens that point to block/bond series."""
+    trading = _safe_str(entry.get("trading_symbol")).upper()
+    if not trading:
+        return False
+    if trading.endswith("-EQ"):
+        return True
+    bad_suffixes = ("-BL", "-BE", "-NC", "-N1", "-N2", "-IL")
+    return not any(trading.endswith(s) for s in bad_suffixes)
 
 
 # ── Startup: Subscribe to Live Feed ──────────────────────────
 def start_live_feed(symbols: list[str]):
-    global _active_client, _subscribed_symbols, _reconnect_attempts
-    logger.info(f"Starting live feed for: {symbols}")
+    """Starts WebSocket subscription for price ticks."""
+    global _active_client, _subscribed_symbols, _reconnect_attempts, _tick_counts
+    symbols = list(dict.fromkeys(symbols))  # dedupe, preserve order
+    logger.info(f"Starting live feed for {len(symbols)} symbols: {symbols}")
+    _tick_counts.clear()
 
     client = get_client()
     _active_client = client
 
+    # Register WebSocket callbacks
     client.on_message = _on_message
     client.on_open    = _on_open
     client.on_close   = _on_close
@@ -390,12 +604,22 @@ def start_live_feed(symbols: list[str]):
         logger.error("No instrument tokens resolved. Cannot start feed.")
         return
 
-    client.subscribe(
-        instrument_tokens=instrument_tokens,
-        isIndex=False,
-        isDepth=False,
-    )
-    logger.info(f"✅ Subscribed to live feed: {[t['instrument_token'] for t in instrument_tokens]}")
+    logger.info(f"Subscribing to {len(instrument_tokens)} instruments...")
+    try:
+        client.subscribe(
+            instrument_tokens=instrument_tokens,
+            isIndex=False,
+            isDepth=False,
+        )
+        logger.info(f"✅ Subscribed to live feed: {[t['instrument_token'] for t in instrument_tokens]}")
+        logger.debug(f"Token → Symbol mapping: {_token_to_symbol}")
+        
+        # Keep the connection alive with keepalive ping
+        _reset_keepalive()
+        
+    except Exception as e:
+        logger.error(f"❌ Subscription failed: {e}")
+        logger.warning("Will retry connection on next keepalive cycle.")
 
 
 def stop_live_feed(symbols: list[str]):

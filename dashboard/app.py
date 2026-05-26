@@ -1,27 +1,45 @@
 # ============================================================
 #   ALCOSOFT FINANCIAL SERVICES
 #   dashboard/app.py — Flask Control Center
-#   Run separately: python dashboard/app.py
+#   Run: python dashboard/app.py  →  http://localhost:5000
 # ============================================================
 
 import json
 import os
 import sqlite3
+import sys
 from datetime import datetime
-from flask import Flask, render_template, jsonify
+
+from flask import Flask, render_template, jsonify, request
 from dotenv import load_dotenv
 
-load_dotenv()
+# Project root on path (core.trading_settings)
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-app = Flask(__name__)
+load_dotenv(os.path.join(_ROOT, ".env"))
 
-DB_PATH        = "data/alcosoft.db"
-BRIEFING_PATH  = "data/session_briefing.json"
-LEARNINGS_PATH = "data/learnings.json"
-REFLECTIONS_DIR = "data/reflections"
+from core.trading_settings import (
+    load_settings,
+    save_settings,
+    validate_updates,
+    FIELD_SCHEMA,
+    get as cfg,
+)
+
+app = Flask(
+    __name__,
+    template_folder="templates",
+    static_folder="static",
+    static_url_path="/static",
+)
+
+DB_PATH         = os.path.join(_ROOT, "data", "alcosoft.db")
+BRIEFING_PATH   = os.path.join(_ROOT, "data", "session_briefing.json")
+REFLECTIONS_DIR = os.path.join(_ROOT, "data", "reflections")
 
 
-# ── Helper ────────────────────────────────────────────────────
 def _db_query(query: str, params: tuple = ()) -> list:
     if not os.path.exists(DB_PATH):
         return []
@@ -35,26 +53,44 @@ def _db_query(query: str, params: tuple = ()) -> list:
         return []
 
 
-# ── Routes ────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/settings")
+def settings_page():
+    return render_template("settings.html")
+
+
+@app.route("/api/settings", methods=["GET"])
+def api_settings_get():
+    return jsonify({
+        "settings": load_settings(),
+        "schema": FIELD_SCHEMA,
+    })
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_settings_post():
+    body = request.get_json(silent=True) or {}
+    cleaned, errors = validate_updates(body)
+    if errors:
+        return jsonify({"ok": False, "errors": errors}), 400
+    merged = save_settings(cleaned)
+    return jsonify({"ok": True, "settings": merged})
 
 
 @app.route("/api/status")
 def api_status():
     today = datetime.now().strftime("%Y-%m-%d")
 
-    # Today's stats
-    stats_rows = _db_query("""
-        SELECT * FROM daily_stats WHERE date = ?
-    """, (today,))
+    stats_rows = _db_query("SELECT * FROM daily_stats WHERE date = ?", (today,))
     stats = stats_rows[0] if stats_rows else {
         "total_trades": 0, "winning_trades": 0,
-        "losing_trades": 0, "gross_pnl": 0.0
+        "losing_trades": 0, "gross_pnl": 0.0,
     }
 
-    # Open positions
     positions = _db_query("""
         SELECT symbol, entry_price, stop_loss, quantity,
                strategy, entry_time, trading_mode
@@ -62,21 +98,17 @@ def api_status():
         ORDER BY id DESC
     """)
 
-    # Recent trades (last 10)
     trades = _db_query("""
         SELECT symbol, action, entry_price, exit_price,
                pnl, status, strategy, entry_time, exit_time
-        FROM trades
-        ORDER BY id DESC LIMIT 10
+        FROM trades ORDER BY id DESC LIMIT 10
     """)
 
-    # Session briefing
     briefing = {}
     if os.path.exists(BRIEFING_PATH):
-        with open(BRIEFING_PATH) as f:
+        with open(BRIEFING_PATH, encoding="utf-8") as f:
             briefing = json.load(f)
 
-    # War room log (today, last 10)
     war_log = _db_query("""
         SELECT agent, symbol, verdict, confidence,
                reasons, concern, timestamp, round_number
@@ -85,27 +117,34 @@ def api_status():
         ORDER BY id DESC LIMIT 10
     """, (f"{today}%",))
 
-    # Latest reflection
     reflection = {}
     ref_path = os.path.join(REFLECTIONS_DIR, f"{today}.json")
     if os.path.exists(ref_path):
-        with open(ref_path) as f:
+        with open(ref_path, encoding="utf-8") as f:
             reflection = json.load(f)
 
-    # Win rate
-    total   = stats.get("total_trades", 0)
+    total = stats.get("total_trades", 0)
     winners = stats.get("winning_trades", 0)
     win_pct = round((winners / total * 100) if total > 0 else 0)
+
+    cap_path = os.path.join(_ROOT, "data", "live_capital.json")
+    capital_display = float(cfg("risk", "paper_capital", 10000))
+    if os.path.exists(cap_path):
+        try:
+            with open(cap_path, encoding="utf-8") as f:
+                cap_data = json.load(f)
+                capital_display = cap_data.get("capital", capital_display)
+        except Exception:
+            pass
+
+    st = load_settings().get("strategy", {})
 
     return jsonify({
         "timestamp":    datetime.now().strftime("%H:%M:%S"),
         "trading_mode": os.getenv("TRADING_MODE", "PAPER"),
-        "strategy":     os.getenv("STRATEGY_TYPE", "INTRADAY"),
-        "capital":      float(os.getenv("CAPITAL", 10000)),
-        "stats": {
-            **stats,
-            "win_rate": win_pct,
-        },
+        "strategy":     st.get("strategy_type", "INTRADAY"),
+        "capital":      capital_display,
+        "stats": {**stats, "win_rate": win_pct},
         "positions":   positions,
         "trades":      trades,
         "briefing":    briefing,
@@ -115,5 +154,6 @@ def api_status():
 
 
 if __name__ == "__main__":
-    print("🚀 AlcoSoft Dashboard starting at http://localhost:5000")
+    print("AlcoSoft Dashboard → http://localhost:5000")
+    print("Settings editor  → http://localhost:5000/settings")
     app.run(debug=False, port=5000)

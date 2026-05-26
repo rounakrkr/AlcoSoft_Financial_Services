@@ -21,16 +21,59 @@ from core.data_fetcher import get_candle_history, has_enough_history, get_latest
 from core.order_executor import calculate_stop_loss, calculate_quantity, calculate_target
 from core.state_manager import save_briefing, load_briefing, get_open_positions
 from core.strategy import detect_hammer, detect_bullish_engulfing
+from core.trading_settings import get as cfg
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-WAR_ROOM_INTERVAL = int(os.getenv("WAR_ROOM_INTERVAL_MINUTES", 30))
-CAPITAL           = float(os.getenv("CAPITAL", 10000))
-AGENT_SLEEP       = 10
+
+def _war_room_interval():
+    return int(cfg("scheduling", "war_room_interval_minutes", 30))
+
+
+def _paper_capital():
+    return float(cfg("risk", "paper_capital", 10000))
+AGENT_SLEEP       = 13
 
 WAR_ROOM_START = dt_time(9, 0)
 WAR_ROOM_END   = dt_time(15, 0)
+
+
+# ════════════════════════════════════════════════════════════
+#   HELPER FUNCTION
+# ════════════════════════════════════════════════════════════
+
+def _drop_incomplete_candle_if_present(hist):
+    """
+    Yfinance kabhi kabhi current incomplete 5-min candle 
+    last row mein include kar deta hai during market hours.
+    Ye function use drop karta hai agar waise ho.
+    """
+    if hist is None or hist.empty:
+        return hist
+
+    last_time = hist.index[-1]
+    # Timezone remove karo (yfinance timezone-aware timestamps deta hai)
+    if hasattr(last_time, 'tzinfo') and last_time.tzinfo is not None:
+        import pytz
+        last_time = last_time.astimezone(pytz.timezone('Asia/Kolkata')).replace(tzinfo=None)
+
+    now = datetime.now()
+    current_bucket_min   = (now.minute // 5) * 5
+    current_period_start = now.replace(
+        minute      = current_bucket_min,
+        second      = 0,
+        microsecond = 0,
+    )
+
+    if last_time >= current_period_start:
+        logger.debug(
+            f"Dropped incomplete yfinance candle: "
+            f"{last_time.strftime('%H:%M')} (current period)"
+        )
+        return hist.iloc[:-1]
+
+    return hist
 
 
 # ════════════════════════════════════════════════════════════
@@ -79,6 +122,7 @@ async def run_war_room():
         "generated_at":    datetime.now().isoformat(),
         "market_bias":     market_bias,
         "approved_stocks": updated_stocks,
+        "watchlist":       current_briefing.get("watchlist", []),   # ← ADD THIS
         "avoid_list": [
             s["ticker"] for s in updated_stocks
             if s.get("direction") == "AVOID"
@@ -86,6 +130,14 @@ async def run_war_room():
     }
 
     save_briefing(new_briefing)
+
+    try:
+        from core.data_fetcher import fix_briefing_trading_symbols
+        fix_briefing_trading_symbols(new_briefing)
+        save_briefing(new_briefing)
+    except Exception as e:
+        logger.warning(f"Trading symbol fix skipped: {e}")
+
     logger.info("=" * 55)
     logger.info("✅ WAR ROOM COMPLETE — Briefing updated.")
     logger.info("=" * 55)
@@ -249,7 +301,11 @@ def _build_market_data(symbol: str, market_bias: str) -> dict | None:
     if not has_enough_history(symbol, min_candles=26):
         logger.info(f"WebSocket history low for {symbol}. Fetching from yFinance...")
         try:
-            hist = yf.Ticker(f"{symbol}.NS").history(period="1d", interval="1m")   # 1 day, 1-minute candles
+            hist = yf.Ticker(f"{symbol}.NS").history(
+                period="5d",      # ← "1d" se "5d" (enough 5-min candles)
+                interval="5m"     # ← "1m" se "5m" (match WebSocket)
+            )
+            hist = _drop_incomplete_candle_if_present(hist)
             if hist.empty or len(hist) < 26:
                 logger.warning(f"Insufficient data for {symbol}. Skipping.")
                 return None
@@ -314,6 +370,7 @@ def _build_fundamental_data(symbol: str) -> dict:
 
         nifty    = yf.Ticker("^NSEI")
         nifty_df = nifty.history(period="1d", interval="5m")
+        nifty_df = _drop_incomplete_candle_if_present(nifty_df)
         nifty_chg = 0.0
         if not nifty_df.empty:
             nifty_chg = round(
@@ -357,7 +414,7 @@ def _build_risk_data(symbol, price, sl, qty, tech_resp, fund_resp) -> dict:
         "quantity":             qty,
         "capital_at_risk":      capital_at_risk,
         "open_positions_count": len(get_open_positions()),
-        "total_capital":        CAPITAL,
+        "total_capital":        _paper_capital(),
         "tech_verdict":         tech_resp.get("verdict"),
         "tech_reasoning":       tech_resp.get("reasons", []),
         "fund_verdict":         fund_resp.get("verdict"),
@@ -388,13 +445,13 @@ def start_war_room_scheduler():
     scheduler.add_job(
         run_war_room,
         trigger       = "interval",
-        minutes       = WAR_ROOM_INTERVAL,
+        minutes       = _war_room_interval(),
         id            = "war_room",
         name          = "AlcoSoft War Room",
         max_instances = 1,
     )
     scheduler.start()
-    logger.info(f"⏰ War room scheduled every {WAR_ROOM_INTERVAL} minutes.")
+    logger.info(f"⏰ War room scheduled every {_war_room_interval()} minutes.")
     return scheduler
 
 

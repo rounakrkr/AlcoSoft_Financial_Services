@@ -1,366 +1,41 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AlcoSoft 🚀 Trading Desk</title>
+  <title>AlcoSoft Trading Desk</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-  <style>
-    /* ── CSS Variables ── */
-    :root[data-theme="dark"] {
-      --bg:          #0f1117;
-      --bg2:         #1a1d27;
-      --card:        #1e2130;
-      --card2:       #252840;
-      --border:      #2e3250;
-      --text:        #e8eaf0;
-      --text2:       #8b91b0;
-      --accent:      #6c73ff;
-      --accent2:     #4f56e8;
-      --green:       #22c97a;
-      --red:         #ff5a7a;
-      --yellow:      #ffc542;
-      --shadow:      0 4px 24px rgba(0,0,0,0.4);
-    }
-    :root[data-theme="light"] {
-      --bg:          #f0f2fa;
-      --bg2:         #e4e8f5;
-      --card:        #ffffff;
-      --card2:       #f5f7ff;
-      --border:      #dde2f5;
-      --text:        #1a1d2e;
-      --text2:       #6b728e;
-      --accent:      #5b62f0;
-      --accent2:     #4048e0;
-      --green:       #17a865;
-      --red:         #e03660;
-      --yellow:      #e6a800;
-      --shadow:      0 4px 24px rgba(100,110,180,0.12);
-    }
-
-    /* ── Reset & Base ── */
-    * { margin:0; padding:0; box-sizing:border-box; }
-    body {
-      font-family: 'Inter', sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      transition: background 0.3s, color 0.3s;
-    }
-    .mono { font-family: 'JetBrains Mono', monospace; }
-
-    /* ── Header ── */
-    header {
-      background: var(--card);
-      border-bottom: 1px solid var(--border);
-      padding: 0 2rem;
-      height: 64px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      box-shadow: var(--shadow);
-    }
-    .logo {
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
-      font-weight: 700;
-      font-size: 1.2rem;
-      letter-spacing: -0.3px;
-    }
-    .logo span { color: var(--accent); }
-    .header-right {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-    }
-    .badge {
-      padding: 4px 12px;
-      border-radius: 20px;
-      font-size: 0.72rem;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
-    }
-    .badge-paper { background: rgba(255,197,66,0.15); color: var(--yellow); }
-    .badge-live  { background: rgba(255,90,122,0.15); color: var(--red);    }
-    .badge-green { background: rgba(34,201,122,0.15); color: var(--green);  }
-    .clock {
-      font-size: 0.8rem;
-      color: var(--text2);
-      font-family: 'JetBrains Mono', monospace;
-    }
-    .theme-btn {
-      width: 38px; height: 38px;
-      border-radius: 50%;
-      border: 1px solid var(--border);
-      background: var(--card2);
-      cursor: pointer;
-      font-size: 1.1rem;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s;
-    }
-    .theme-btn:hover { background: var(--accent); }
-
-    /* ── Layout ── */
-    main {
-      max-width: 1400px;
-      margin: 0 auto;
-      padding: 1.5rem 2rem 3rem;
-      display: grid;
-      grid-template-columns: repeat(12, 1fr);
-      gap: 1rem;
-    }
-
-    /* ── Cards ── */
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 1.25rem 1.4rem;
-      box-shadow: var(--shadow);
-      transition: background 0.3s, border 0.3s;
-    }
-    .card-title {
-      font-size: 0.72rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      color: var(--text2);
-      margin-bottom: 0.8rem;
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-    }
-    .card-value {
-      font-size: 2rem;
-      font-weight: 700;
-      letter-spacing: -1px;
-      line-height: 1;
-    }
-    .card-sub {
-      font-size: 0.78rem;
-      color: var(--text2);
-      margin-top: 0.4rem;
-    }
-
-    /* ── Stat Cards Row ── */
-    .stat-card { grid-column: span 3; }
-
-    /* ── Positions ── */
-    .positions-card { grid-column: span 7; }
-    .briefing-card  { grid-column: span 5; }
-    .trades-card    { grid-column: span 7; }
-    .war-card       { grid-column: span 5; }
-    .reflection-card{ grid-column: span 12; }
-
-    /* ── Table ── */
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.82rem;
-    }
-    th {
-      text-align: left;
-      color: var(--text2);
-      font-weight: 500;
-      font-size: 0.7rem;
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-      padding: 0 0 0.6rem;
-      border-bottom: 1px solid var(--border);
-    }
-    td {
-      padding: 0.55rem 0;
-      border-bottom: 1px solid var(--border);
-      color: var(--text);
-    }
-    tr:last-child td { border-bottom: none; }
-    .win  { color: var(--green); font-weight: 600; }
-    .loss { color: var(--red);   font-weight: 600; }
-    .neutral { color: var(--text2); }
-
-    /* ── Stock Pills ── */
-    .stock-list {
-      display: flex;
-      flex-direction: column;
-      gap: 0.6rem;
-    }
-    .stock-pill {
-      background: var(--card2);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 0.7rem 1rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .stock-name {
-      font-weight: 600;
-      font-size: 0.9rem;
-    }
-    .stock-conf {
-      font-size: 0.75rem;
-      color: var(--text2);
-    }
-    .direction-buy  {
-      background: rgba(34,201,122,0.15);
-      color: var(--green);
-      padding: 2px 10px;
-      border-radius: 20px;
-      font-size: 0.7rem;
-      font-weight: 600;
-    }
-    .direction-avoid {
-      background: rgba(255,90,122,0.15);
-      color: var(--red);
-      padding: 2px 10px;
-      border-radius: 20px;
-      font-size: 0.7rem;
-      font-weight: 600;
-    }
-
-    /* ── War Room Log ── */
-    .war-entry {
-      background: var(--card2);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 0.65rem 0.9rem;
-      margin-bottom: 0.5rem;
-      font-size: 0.78rem;
-    }
-    .war-header {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 0.25rem;
-    }
-    .agent-name { font-weight: 600; color: var(--accent); }
-    .war-verdict-buy    { color: var(--green); font-weight: 600; }
-    .war-verdict-avoid  { color: var(--red);   font-weight: 600; }
-    .war-verdict-wait   { color: var(--yellow); font-weight: 600; }
-    .war-reasons {
-      color: var(--text2);
-      font-size: 0.73rem;
-      margin-top: 0.15rem;
-    }
-
-    /* ── Reflection ── */
-    .reflection-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 0.8rem;
-      margin-top: 0.5rem;
-    }
-    .ref-item {
-      background: var(--card2);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 0.9rem;
-    }
-    .ref-label {
-      font-size: 0.68rem;
-      color: var(--text2);
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-      margin-bottom: 0.4rem;
-    }
-    .ref-value {
-      font-size: 0.85rem;
-      font-weight: 500;
-      line-height: 1.4;
-    }
-    .grade-a { color: var(--green); font-size: 1.4rem; font-weight: 700; }
-    .grade-b { color: #4fc3f7;      font-size: 1.4rem; font-weight: 700; }
-    .grade-c { color: var(--yellow); font-size: 1.4rem; font-weight: 700; }
-    .grade-d { color: var(--red);   font-size: 1.4rem; font-weight: 700; }
-
-    /* ── Empty State ── */
-    .empty {
-      text-align: center;
-      padding: 2rem;
-      color: var(--text2);
-      font-size: 0.85rem;
-    }
-
-    /* ── Divider ── */
-    .divider {
-      grid-column: span 12;
-      height: 1px;
-      background: var(--border);
-    }
-
-    /* ── Pulse dot ── */
-    .pulse-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: var(--green);
-      display: inline-block;
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50%       { opacity: 0.5; transform: scale(0.8); }
-    }
-
-    /* ── Scrollable ── */
-    .scrollable {
-      max-height: 260px;
-      overflow-y: auto;
-      scrollbar-width: thin;
-      scrollbar-color: var(--border) transparent;
-    }
-
-    @media (max-width: 900px) {
-      main { grid-template-columns: 1fr 1fr; padding: 1rem; }
-      .stat-card, .positions-card, .briefing-card,
-      .trades-card, .war-card, .reflection-card {
-        grid-column: span 2;
-      }
-    }
-  </style>
+  <link rel="stylesheet" href="/static/css/style.css"/>
 </head>
 <body>
 
-<!-- ── Header ── -->
 <header>
-  <div class="logo">
-    🚀 <span>AlcoSoft</span> Trading Desk
-  </div>
+  <div class="logo">🚀 <span>AlcoSoft</span> Trading Desk</div>
   <div class="header-right">
+    <a href="/" class="nav-link active">Dashboard</a>
+    <a href="/settings" class="nav-link">⚙️ Settings</a>
     <span class="clock" id="clock">⏰ --:--:--</span>
     <span class="badge badge-paper" id="mode-badge">📋 PAPER</span>
     <span class="badge badge-green" id="strategy-badge">⚡ INTRADAY</span>
-    <button class="theme-btn" id="theme-toggle" title="Toggle theme">🌙</button>
   </div>
 </header>
 
-<!-- ── Main Grid ── -->
 <main>
-
-  <!-- ── Stat Cards ── -->
   <div class="card stat-card">
     <div class="card-title">🎯 Total Trades</div>
     <div class="card-value" id="stat-total">0</div>
     <div class="card-sub">Today's session</div>
   </div>
-
   <div class="card stat-card">
     <div class="card-title">🏆 Win Rate</div>
     <div class="card-value win" id="stat-winrate">0%</div>
     <div class="card-sub" id="stat-wl">0W / 0L</div>
   </div>
-
   <div class="card stat-card">
     <div class="card-title">💰 Gross P&L</div>
     <div class="card-value" id="stat-pnl">₹0</div>
     <div class="card-sub">Today</div>
   </div>
-
   <div class="card stat-card">
     <div class="card-title">💼 Open Positions</div>
     <div class="card-value" id="stat-open">0</div>
@@ -369,19 +44,17 @@
 
   <div class="divider"></div>
 
-  <!-- ── Open Positions ── -->
   <div class="card positions-card">
     <div class="card-title">💼 Open Positions</div>
-    <div class="scrollable">
-      <table>
+    <div class="scrollable table-wrap">
+      <table class="data-table positions-table">
+        <colgroup>
+          <col class="col-stock"/><col class="col-qty"/><col class="col-num"/>
+          <col class="col-num"/><col class="col-strategy"/><col class="col-time"/>
+        </colgroup>
         <thead>
           <tr>
-            <th>Stock</th>
-            <th>Qty</th>
-            <th>Entry ₹</th>
-            <th>Stop Loss ₹</th>
-            <th>Strategy</th>
-            <th>Time</th>
+            <th>Stock</th><th>Qty</th><th>Entry ₹</th><th>Stop Loss ₹</th><th>Strategy</th><th>Time</th>
           </tr>
         </thead>
         <tbody id="positions-body">
@@ -391,29 +64,24 @@
     </div>
   </div>
 
-  <!-- ── Today's Watchlist ── -->
   <div class="card briefing-card">
-    <div class="card-title">📋 Today's Watchlist
-      <span class="pulse-dot" id="briefing-pulse" style="display:none"></span>
-    </div>
+    <div class="card-title">📋 Today's Stocks <span class="pulse-dot" id="briefing-pulse" style="display:none"></span></div>
     <div class="stock-list scrollable" id="briefing-list">
       <div class="empty">🌅 Waiting for morning screener...</div>
     </div>
   </div>
 
-  <!-- ── Recent Trades ── -->
   <div class="card trades-card">
     <div class="card-title">📊 Recent Trades</div>
-    <div class="scrollable">
-      <table>
+    <div class="scrollable table-wrap">
+      <table class="data-table trades-table">
+        <colgroup>
+          <col class="col-stock"/><col class="col-num"/><col class="col-num"/>
+          <col class="col-pnl"/><col class="col-status"/><col class="col-strategy"/>
+        </colgroup>
         <thead>
           <tr>
-            <th>Stock</th>
-            <th>Entry ₹</th>
-            <th>Exit ₹</th>
-            <th>P&L</th>
-            <th>Status</th>
-            <th>Strategy</th>
+            <th>Stock</th><th>Entry ₹</th><th>Exit ₹</th><th>P&L</th><th>Status</th><th>Strategy</th>
           </tr>
         </thead>
         <tbody id="trades-body">
@@ -423,7 +91,6 @@
     </div>
   </div>
 
-  <!-- ── War Room Log ── -->
   <div class="card war-card">
     <div class="card-title">⚔️ War Room Log</div>
     <div class="scrollable" id="war-log">
@@ -433,252 +100,27 @@
 
   <div class="divider"></div>
 
-  <!-- ── Owl Reflection ── -->
   <div class="card reflection-card">
     <div class="card-title">🦉 Owl Alpha — Daily Reflection</div>
-    <div id="reflection-empty" class="empty">
-      🌙 Owl Alpha reflects at 3:35 PM after market close...
-    </div>
+    <div id="reflection-empty" class="empty">🌙 Owl Alpha reflects at 3:35 PM after market close...</div>
     <div id="reflection-content" style="display:none">
       <div class="reflection-grid">
-        <div class="ref-item">
-          <div class="ref-label">📝 Summary</div>
-          <div class="ref-value" id="ref-summary">—</div>
-        </div>
-        <div class="ref-item">
-          <div class="ref-label">✅ What Worked</div>
-          <div class="ref-value" id="ref-worked">—</div>
-        </div>
-        <div class="ref-item">
-          <div class="ref-label">❌ What Failed</div>
-          <div class="ref-value" id="ref-failed">—</div>
-        </div>
+        <div class="ref-item"><div class="ref-label">📝 Summary</div><div class="ref-value" id="ref-summary">—</div></div>
+        <div class="ref-item"><div class="ref-label">✅ What Worked</div><div class="ref-value" id="ref-worked">—</div></div>
+        <div class="ref-item"><div class="ref-label">❌ What Failed</div><div class="ref-value" id="ref-failed">—</div></div>
         <div class="ref-item" style="text-align:center">
           <div class="ref-label">🏅 Grade</div>
           <div class="grade-a" id="ref-grade">—</div>
         </div>
       </div>
       <div style="margin-top:0.8rem">
-        <div class="card-title" style="margin-bottom:0.5rem">
-          🔧 Tomorrow's Adjustments
-        </div>
-        <div id="ref-adjustments" style="font-size:0.82rem; color:var(--text2); line-height:1.8;"></div>
+        <div class="card-title" style="margin-bottom:0.5rem">🔧 Tomorrow's Adjustments</div>
+        <div id="ref-adjustments" style="font-size:0.82rem;color:var(--text2);line-height:1.8;"></div>
       </div>
     </div>
   </div>
-
 </main>
 
-<script>
-  // ── Theme Toggle ──────────────────────────────────────────
-  const html       = document.documentElement;
-  const themeBtn   = document.getElementById('theme-toggle');
-  const saved      = localStorage.getItem('theme') || 'dark';
-  html.setAttribute('data-theme', saved);
-  themeBtn.textContent = saved === 'dark' ? '☀️' : '🌙';
-
-  themeBtn.addEventListener('click', () => {
-    const current = html.getAttribute('data-theme');
-    const next    = current === 'dark' ? 'light' : 'dark';
-    html.setAttribute('data-theme', next);
-    themeBtn.textContent = next === 'dark' ? '☀️' : '🌙';
-    localStorage.setItem('theme', next);
-  });
-
-  // ── Clock ─────────────────────────────────────────────────
-  function updateClock() {
-    const now = new Date();
-    document.getElementById('clock').textContent =
-      '⏰ ' + now.toLocaleTimeString('en-IN', { hour12: false });
-  }
-  updateClock();
-  setInterval(updateClock, 1000);
-
-  // ── Helpers ───────────────────────────────────────────────
-  const fmt = (v) => v !== null && v !== undefined
-    ? '₹' + parseFloat(v).toFixed(2) : '—';
-
-  function pnlClass(v) {
-    if (!v) return 'neutral';
-    return parseFloat(v) >= 0 ? 'win' : 'loss';
-  }
-
-  function verdictClass(v) {
-    if (!v) return '';
-    v = v.toUpperCase();
-    if (v === 'BUY' || v === 'APPROVE')  return 'war-verdict-buy';
-    if (v === 'AVOID' || v === 'REJECT') return 'war-verdict-avoid';
-    return 'war-verdict-wait';
-  }
-
-  function agentEmoji(name) {
-    const map = {
-      'Technical Analyst':  '📊',
-      'Fundamental Analyst':'📰',
-      'Risk Manager':       '🛡️',
-      'Mediator':           '⚖️',
-    };
-    return map[name] || '🤖';
-  }
-
-  function timeStr(iso) {
-    if (!iso) return '—';
-    return new Date(iso).toLocaleTimeString('en-IN', {
-      hour: '2-digit', minute: '2-digit', hour12: false
-    });
-  }
-
-  // ── Data Fetch & Render ───────────────────────────────────
-  async function fetchAndRender() {
-    try {
-      const res  = await fetch('/api/status');
-      const data = await res.json();
-
-      // Mode badge
-      const modeBadge = document.getElementById('mode-badge');
-      modeBadge.textContent  = data.trading_mode === 'LIVE' ? '🔴 LIVE' : '📋 PAPER';
-      modeBadge.className    = 'badge ' + (data.trading_mode === 'LIVE' ? 'badge-live' : 'badge-paper');
-      document.getElementById('strategy-badge').textContent =
-        '⚡ ' + (data.strategy || 'INTRADAY');
-
-      // Stats
-      const s = data.stats || {};
-      document.getElementById('stat-total').textContent   = s.total_trades || 0;
-      document.getElementById('stat-winrate').textContent = (s.win_rate || 0) + '%';
-      document.getElementById('stat-wl').textContent      =
-        (s.winning_trades || 0) + '🏆 / ' + (s.losing_trades || 0) + '💔';
-      const pnl = parseFloat(s.gross_pnl || 0);
-      const pnlEl = document.getElementById('stat-pnl');
-      pnlEl.textContent  = (pnl >= 0 ? '+' : '') + '₹' + pnl.toFixed(2);
-      pnlEl.className    = 'card-value ' + (pnl >= 0 ? 'win' : 'loss');
-      document.getElementById('stat-open').textContent    = (data.positions || []).length;
-      document.getElementById('stat-capital').textContent =
-        '💵 Capital: ₹' + (data.capital || 10000).toLocaleString('en-IN');
-
-      // Positions
-      const posBody = document.getElementById('positions-body');
-      if ((data.positions || []).length === 0) {
-        posBody.innerHTML = `<tr><td colspan="6" class="empty">😴 No open positions right now</td></tr>`;
-      } else {
-        posBody.innerHTML = data.positions.map(p => `
-          <tr>
-            <td><strong>🏷️ ${p.symbol}</strong></td>
-            <td class="mono">${p.quantity}</td>
-            <td class="mono">${fmt(p.entry_price)}</td>
-            <td class="mono loss">${fmt(p.stop_loss)}</td>
-            <td style="color:var(--text2); font-size:0.75rem">${p.strategy || '—'}</td>
-            <td style="color:var(--text2)">${timeStr(p.entry_time)}</td>
-          </tr>
-        `).join('');
-      }
-
-      // Briefing / Watchlist
-      const briefing = data.briefing || {};
-      const stocks   = briefing.approved_stocks || [];
-      const blist    = document.getElementById('briefing-list');
-      const bpulse   = document.getElementById('briefing-pulse');
-      if (stocks.length === 0) {
-        blist.innerHTML  = `<div class="empty">🌅 Waiting for morning screener...</div>`;
-        bpulse.style.display = 'none';
-      } else {
-        bpulse.style.display = 'inline-block';
-        blist.innerHTML = stocks.map(s => `
-          <div class="stock-pill">
-            <div>
-              <div class="stock-name">📌 ${s.ticker}</div>
-              <div class="stock-conf">${s.reason || ''}</div>
-            </div>
-            <div style="text-align:right">
-              <div class="${s.direction === 'BUY_ONLY' ? 'direction-buy' : 'direction-avoid'}">
-                ${s.direction === 'BUY_ONLY' ? '🟢 BUY' : '🔴 AVOID'}
-              </div>
-              ${s.confidence > 0
-                ? `<div class="stock-conf" style="margin-top:3px">🎯 ${s.confidence}%</div>`
-                : ''}
-            </div>
-          </div>
-        `).join('');
-      }
-
-      // Recent Trades
-      const trBody = document.getElementById('trades-body');
-      if ((data.trades || []).length === 0) {
-        trBody.innerHTML = `<tr><td colspan="6" class="empty">📭 No trades yet</td></tr>`;
-      } else {
-        trBody.innerHTML = data.trades.map(t => {
-          const pnlVal = parseFloat(t.pnl || 0);
-          const emoji  = t.status === 'CLOSED'  ? '✅' :
-                         t.status === 'STOPPED' ? '🛑' : '🟡';
-          return `<tr>
-            <td><strong>${emoji} ${t.symbol}</strong></td>
-            <td class="mono">${fmt(t.entry_price)}</td>
-            <td class="mono">${t.exit_price ? fmt(t.exit_price) : '—'}</td>
-            <td class="mono ${pnlClass(t.pnl)}">
-              ${t.pnl !== null ? (pnlVal >= 0 ? '+' : '') + '₹' + pnlVal.toFixed(2) : '—'}
-            </td>
-            <td class="${pnlClass(t.pnl)}">${t.status || '—'}</td>
-            <td style="color:var(--text2); font-size:0.75rem">${t.strategy || '—'}</td>
-          </tr>`;
-        }).join('');
-      }
-
-      // War Room Log
-      const warLog = document.getElementById('war-log');
-      if ((data.war_log || []).length === 0) {
-        warLog.innerHTML = `<div class="empty">🤫 War room hasn't spoken yet...</div>`;
-      } else {
-        warLog.innerHTML = data.war_log.map(w => {
-          let reasons = [];
-          try { reasons = JSON.parse(w.reasons || '[]'); } catch {}
-          return `
-          <div class="war-entry">
-            <div class="war-header">
-              <span class="agent-name">${agentEmoji(w.agent)} ${w.agent}</span>
-              <span class="${verdictClass(w.verdict)}">${w.verdict}</span>
-            </div>
-            <div style="font-size:0.73rem; color:var(--text2)">
-              🎯 ${w.symbol} &nbsp;|&nbsp; R${w.round_number} &nbsp;|&nbsp;
-              💪 ${w.confidence}% &nbsp;|&nbsp; ⏰ ${timeStr(w.timestamp)}
-            </div>
-            ${reasons.length
-              ? `<div class="war-reasons">💬 ${reasons.join(' · ')}</div>`
-              : ''}
-            ${w.concern
-              ? `<div class="war-reasons">⚠️ ${w.concern}</div>`
-              : ''}
-          </div>`;
-        }).join('');
-      }
-
-      // Reflection
-      const ref = data.reflection || {};
-      if (ref.one_line_summary) {
-        document.getElementById('reflection-empty').style.display  = 'none';
-        document.getElementById('reflection-content').style.display = 'block';
-        document.getElementById('ref-summary').textContent  = ref.one_line_summary || '—';
-        document.getElementById('ref-worked').textContent   = ref.what_worked || '—';
-        document.getElementById('ref-failed').textContent   = ref.what_failed || '—';
-
-        const gradeEl = document.getElementById('ref-grade');
-        gradeEl.textContent = ref.overall_grade || '—';
-        gradeEl.className   =
-          ref.overall_grade === 'A' ? 'grade-a' :
-          ref.overall_grade === 'B' ? 'grade-b' :
-          ref.overall_grade === 'C' ? 'grade-c' : 'grade-d';
-
-        const adj = ref.tomorrow_adjustments || [];
-        document.getElementById('ref-adjustments').innerHTML =
-          adj.map(a => `🔧 ${a}`).join('<br>');
-      }
-
-    } catch (e) {
-      console.error('Dashboard fetch error:', e);
-    }
-  }
-
-  // ── Auto Refresh every 5 seconds ─────────────────────────
-  fetchAndRender();
-  setInterval(fetchAndRender, 5000);
-</script>
+<script src="/static/js/app.js"></script>
 </body>
 </html>

@@ -17,19 +17,20 @@ from core.state_manager import (
     update_trailing_sl, update_sl_order_id,
     get_today_gross_pnl, load_briefing,
 )
+from core.audit_logger import (
+    audit_order_placed, audit_position_closed, audit_system_error,
+)
+from core.trading_settings import get as cfg
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# ── Config ────────────────────────────────────────────────────
-TRADING_MODE       = os.getenv("TRADING_MODE", "PAPER")
-CAPITAL            = float(os.getenv("CAPITAL", 10000))
-MAX_RISK_PER_TRADE = float(os.getenv("MAX_RISK_PER_TRADE", 0.02))
-TARGET_RR_RATIO    = float(os.getenv("TARGET_RR_RATIO", 2.0))
-TRAILING_SL_PCT    = float(os.getenv("TRAILING_SL_PERCENT", 0.005))
-MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PERCENT", 0.05))
-STOP_LOSS_BUFFER   = 0.008
+# ── Secrets / mode stay in .env ───────────────────────────────
+TRADING_MODE = os.getenv("TRADING_MODE", "PAPER")
 INTRADAY_SQUAREOFF = dt_time(15, 15)
+_capital_cache: float = 10000.0
+_capital_last_update: float = 0.0
+CAPITAL_CACHE_TTL = 300
 
 # ── Squareoff flag — prevents repeated calls after 3:15 ──────
 _squareoff_done = False
@@ -39,29 +40,34 @@ _squareoff_done = False
 #   POSITION SIZING
 # ════════════════════════════════════════════════════════════
 
-def calculate_quantity(price: float, stop_loss: float) -> int:
-    max_loss       = CAPITAL * MAX_RISK_PER_TRADE
-    stop_dist      = abs(price - stop_loss)
+def calculate_quantity(price: float, stop_loss: float, risk_pct: float = None) -> int:
+    capital   = _get_available_capital()
+    if risk_pct is None:
+        risk_pct = float(cfg("risk", "max_risk_per_trade", 0.02))
+    max_loss  = capital * risk_pct
+    stop_dist = abs(price - stop_loss)
     if stop_dist == 0:
-        stop_dist = price * STOP_LOSS_BUFFER if price > 0 else 1.0   # fallback 1
+        stop_dist = price * float(cfg("risk", "stop_loss_percent", 0.01)) if price > 0 else 1.0
         if stop_dist == 0:
             stop_dist = 1.0
         logger.warning(f"stop_dist was 0 for {price=}, {stop_loss=}, using {stop_dist}")
     ideal_qty      = max_loss / stop_dist
-    affordable_qty = (CAPITAL * 0.20) / price
+    affordable_qty = (capital * 0.20) / price
     return max(1, int(min(ideal_qty, affordable_qty)))
 
 
 def calculate_stop_loss(price: float, direction: str = "BUY") -> float:
+    pct = float(cfg("risk", "stop_loss_percent", 0.01))
     if direction == "BUY":
-        return round(price * (1 - STOP_LOSS_BUFFER), 2)
-    return round(price * (1 + STOP_LOSS_BUFFER), 2)
+        return round(price * (1 - pct), 2)
+    return round(price * (1 + pct), 2)
 
 
 def calculate_target(entry: float, stop_loss: float) -> float:
     """Target = entry + (risk × RR ratio). Default 2:1."""
     risk   = abs(entry - stop_loss)
-    return round(entry + (risk * TARGET_RR_RATIO), 2)
+    rr     = float(cfg("risk", "target_rr_ratio", 2.0))
+    return round(entry + (risk * rr), 2)
 
 
 # ════════════════════════════════════════════════════════════
@@ -76,12 +82,13 @@ def place_buy_order(
     strategy:       str   = "",
     confidence:     int   = 0,
     product:        str   = "MIS",
+    risk_pct:       float = None,    # <-- add
 ) -> dict:
 
     if stop_loss is None:
         stop_loss = calculate_stop_loss(entry_price, "BUY")
 
-    quantity     = calculate_quantity(entry_price, stop_loss)
+    quantity     = calculate_quantity(entry_price, stop_loss, risk_pct)   # <-- pass risk_pct
     target_price = calculate_target(entry_price, stop_loss)
 
     trade = {
@@ -143,6 +150,18 @@ def place_buy_order(
             f"✅ [LIVE] BUY | {symbol} | Qty: {quantity} | "
             f"@ ₹{entry_price} | SL: ₹{stop_loss} | Target: ₹{target_price}"
         )
+        _get_available_capital(force_refresh=True)
+        
+        # Audit logging
+        audit_order_placed(
+            symbol=symbol,
+            side="BUY",
+            quantity=quantity,
+            price=entry_price,
+            order_id=trade["order_id"],
+            stop_loss=stop_loss,
+            target=target_price,
+        )
 
     save_open_position(trade)
     return trade
@@ -197,6 +216,8 @@ def place_sell_order(
 
     if success:
         close_position(symbol, exit_price, reason)
+        if TRADING_MODE == "LIVE":
+            _get_available_capital(force_refresh=True)
 
     return success
 
@@ -250,6 +271,40 @@ def check_profit_targets(live_prices: dict[str, float]):
             place_sell_order(symbol, current, "TARGET")
 
 
+def _get_available_capital(force_refresh: bool = False) -> float:
+    global _capital_cache, _capital_last_update
+    import time
+
+    if TRADING_MODE == "PAPER":
+        return float(cfg("risk", "paper_capital", 10000))
+
+    now = time.time()
+    if not force_refresh and (now - _capital_last_update) < CAPITAL_CACHE_TTL:
+        return _capital_cache   # cache se do
+
+    try:
+        client = get_client()
+        limits = client.limits(segment="ALL", exchange="ALL", product="ALL")
+
+        if isinstance(limits, dict) and limits.get("stCode") == 300015:
+            return _capital_cache   # market closed — purana cache rakho
+
+        available = (
+            limits.get("Net")
+            or limits.get("availablecash")
+            or limits.get("data", {}).get("Net")
+        )
+        if available and float(available) > 0:
+            _capital_cache = float(available)
+            _capital_last_update = now
+            return _capital_cache
+
+    except Exception as e:
+        logger.warning(f"Capital fetch failed: {e}. Using cache.")
+
+    return _capital_cache
+
+
 def check_war_room_flip(live_prices: dict[str, float]):
     """
     Exits positions when war room changes its mind.
@@ -290,7 +345,8 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
         if not current:
             continue
 
-        new_tsl = round(current * (1 - TRAILING_SL_PCT), 2)
+        tsl_pct = float(cfg("risk", "trailing_sl_percent", 0.008))
+        new_tsl = round(current * (1 - tsl_pct), 2)
 
         if new_tsl > current_tsl:
             update_trailing_sl(symbol, new_tsl)
@@ -311,12 +367,11 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
 
 
 def check_max_daily_loss() -> bool:
-    """
-    Returns True if daily loss limit breached.
-    strategy.py stops new trades when this returns True.
-    """
+    """Daily loss check based on actual available capital."""
     gross_pnl      = get_today_gross_pnl()
-    max_daily_loss = -(CAPITAL * MAX_DAILY_LOSS_PCT)
+    # Use dynamic capital (live balance) for limit calculation
+    live_capital = _get_available_capital()
+    max_daily_loss = -(live_capital * float(cfg("risk", "max_daily_loss_percent", 0.05)))
 
     if gross_pnl <= max_daily_loss:
         logger.warning(

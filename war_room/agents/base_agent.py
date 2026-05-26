@@ -26,21 +26,21 @@ OPENROUTER_KEYS = {
     "reflection":  os.getenv("OPENROUTER_KEY_1"),   
 }
 
-# MODELS = {
-#     "technical":   os.getenv("MODEL_TECHNICAL",  "deepseek/deepseek-v4-flash:free"),
-#     "fundamental": os.getenv("MODEL_FUNDAMENTAL", "nousresearch/hermes-3-llama-3.1-405b:free"),  # ← yeh hai?
-#     "mediator":    os.getenv("MODEL_MEDIATOR",    "google/gemma-4-31b-it:free"),
-#     "reflection":  os.getenv("MODEL_REFLECTION",  "openrouter/owl-alpha"),
-#     "standby":     os.getenv("MODEL_STANDBY",     "openai/gpt-oss-120b:free"),
-# }
-
 MODELS = {
-    "technical":   "meta-llama/llama-3.2-3b-instruct:free",   # Meta generous
-    "fundamental": "google/gemma-2-9b-it:free",               # Google AI Studio
-    "mediator":    "qwen/qwen-2.5-7b-instruct:free",          # Qwen chill
-    "reflection":  "microsoft/phi-3-mini-128k-instruct:free", # Phi-3 free
-    "standby":     "openai/gpt-oss-120b:free",                # wahi
+    "technical":   os.getenv("MODEL_TECHNICAL",  "deepseek/deepseek-v4-flash:free"),
+    "fundamental": os.getenv("MODEL_FUNDAMENTAL", "nousresearch/hermes-3-llama-3.1-405b:free"),  # ← yeh hai?
+    "mediator":    os.getenv("MODEL_MEDIATOR",    "google/gemma-4-31b-it:free"),
+    "reflection":  os.getenv("MODEL_REFLECTION",  "openrouter/owl-alpha"),
+    "standby":     os.getenv("MODEL_STANDBY",     "openai/gpt-oss-120b:free"),
 }
+
+# MODELS = {
+#     "technical":   "meta-llama/llama-3.2-3b-instruct:free",   # Meta generous
+#     "fundamental": "google/gemma-2-9b-it:free",               # Google AI Studio
+#     "mediator":    "qwen/qwen-2.5-7b-instruct:free",          # Qwen chill
+#     "reflection":  "microsoft/phi-3-mini-128k-instruct:free", # Phi-3 free
+#     "standby":     "openai/gpt-oss-120b:free",                # wahi
+# }
 
 
 def load_prompt(agent_name: str) -> str:

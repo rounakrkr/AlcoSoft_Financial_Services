@@ -1,9 +1,16 @@
 # ============================================================
 #   ALCOSOFT FINANCIAL SERVICES
 #   screener/morning_screener.py — 8:45 AM Stock Picker
-#   Scans NIFTY 50, picks top 4 stocks for today's session.
-#   Writes the FIRST session_briefing.json of the day.
-#   War room then updates this every 30 minutes.
+#
+#   UPGRADE: Now picks 25 stocks for math-only watchlist
+#   AND top 4 for AI War Room debate.
+#
+#   BRIEFING STRUCTURE:
+#   {
+#     "market_bias":     "BULLISH/BEARISH/NEUTRAL",
+#     "approved_stocks": [4 stocks → War Room debated, full 2% risk],
+#     "watchlist":       [25 stocks → math only, half 1% risk]
+#   }
 # ============================================================
 
 import json
@@ -17,12 +24,12 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 
 from core.state_manager import save_briefing
+from core.trading_settings import get as cfg
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# ── NIFTY 50 Stock List ───────────────────────────────────────
-# Add/remove based on your preference
+# ── NIFTY 50 Stock Universe ───────────────────────────────────
 NIFTY_50 = [
     "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
     "HINDUNILVR", "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK",
@@ -36,8 +43,10 @@ NIFTY_50 = [
     "LTIM", "BPCL", "UPL", "APOLLOHOSP", "BAJAJ-AUTO",
 ]
 
-# How many stocks to pick for the day
-STOCKS_TO_PICK = 4
+def _screener_counts():
+    total = int(cfg("screener", "screener_total_stocks", 25))
+    picks = int(cfg("screener", "war_room_picks", 4))
+    return total, picks, max(0, total - picks)
 
 
 # ════════════════════════════════════════════════════════════
@@ -46,46 +55,139 @@ STOCKS_TO_PICK = 4
 
 def run_morning_screener():
     """
-    Called at 8:45 AM before market opens.
-    Scans all NIFTY 50 stocks, picks best 3 setups,
-    writes initial session_briefing.json.
+    Called at 8:45 AM.
+
+    Step 1: Fetch indicators for all NIFTY 50 stocks.
+    Step 2: Score every stock mathematically.
+    Step 3: Top N (default 25) scored by math.
+    Step 4: Top 4 → War Room (AI debate). Remaining 21 → math-only watchlist.
+    Step 5: Write briefing JSON.
     """
-    logger.info("🌅 Morning screener starting...")
+    logger.info("Morning screener starting...")
 
-    # Step 1 — Fetch data for all stocks
-    stock_summaries = _fetch_all_summaries()
-
-    if not stock_summaries:
+    summaries = _fetch_all_summaries()
+    if not summaries:
         logger.error("No stock data fetched. Screener failed.")
         return
 
-    logger.info(f"Fetched data for {len(stock_summaries)} stocks.")
+    logger.info(f"Fetched data for {len(summaries)} stocks.")
 
-    # Step 2 — Get market bias
     market_bias = _get_market_bias()
     logger.info(f"Market bias: {market_bias}")
 
-    # Step 3 — Ask Gemini to pick top stocks
-    picks = _gemini_pick_stocks(stock_summaries, market_bias)
+    # ── Math score all stocks ─────────────────────────────────
+    scored = _score_all_stocks(summaries)
 
-    if not picks:
-        logger.error("Gemini failed to pick stocks. Using fallback.")
-        picks = _fallback_picks(stock_summaries)
+    screener_total, war_room_picks, math_watchlist_size = _screener_counts()
 
-    # Step 4 — Write initial briefing
+    # ── Top N scored pool ─────────────────────────────────────
+    top_pool = scored[:screener_total]
+    if len(top_pool) < screener_total:
+        logger.warning(
+            f"Only {len(top_pool)}/{screener_total} stocks scored "
+            f"(yfinance may have failed for some symbols)."
+        )
+
+    war_room_candidates = top_pool[:war_room_picks]
+    math_only           = top_pool[war_room_picks:war_room_picks + math_watchlist_size]
+
+    watchlist = [{
+        "ticker":         s["symbol"],
+        "trading_symbol": s["symbol"],   # fixed to -EQ after token resolve in main.py
+        "direction":      "WATCH",
+        "confidence":     0,
+        "math_score":     s["score"],
+        "entry_price":    0.0,
+        "stop_loss":      0.0,
+        "reason":         f"Math score: {s['score']} | RSI: {s['rsi']} | Vol: {s['vol_ratio']}x",
+    } for s in math_only]
+
+    logger.info(
+        f"Math watchlist ({len(watchlist)} stocks, no overlap with War Room): "
+        f"{[s['ticker'] for s in watchlist]}"
+    )
+
+    # ── Top 4 → War Room (AI debate) ──────────────────────────
+    top4_symbols   = [s["symbol"] for s in war_room_candidates]
+    top4_summaries = [s for s in summaries if s["symbol"] in top4_symbols]
+
+    war_room_picks = _gemini_pick_stocks(top4_summaries, market_bias)
+    if not war_room_picks:
+        logger.warning("Gemini screener failed. Using math fallback for top 4.")
+        war_room_picks = _fallback_picks(war_room_candidates)
+
+    logger.info(f"War Room picks: {[p['ticker'] for p in war_room_picks]}")
+
+    # ── Write briefing ────────────────────────────────────────
     briefing = {
         "generated_at":    datetime.now().isoformat(),
         "session_type":    "MORNING_SCREENER",
         "market_bias":     market_bias,
-        "approved_stocks": picks,
+        "approved_stocks": war_room_picks,   # 4 — War Room + full risk
+        "watchlist":       watchlist,        # 21 — math only (excludes war room 4)
         "avoid_list":      [],
     }
 
     save_briefing(briefing)
     logger.info(
-        f"✅ Morning screener done. "
-        f"Watching: {[p['ticker'] for p in picks]}"
+        f"Morning screener done.\n"
+        f"  War Room  ({len(war_room_picks)}): {[p['ticker'] for p in war_room_picks]}\n"
+        f"  Watchlist ({len(watchlist)}): {[s['ticker'] for s in watchlist]}"
     )
+
+
+# ════════════════════════════════════════════════════════════
+#   MATH SCORER — Pure indicators, no AI
+# ════════════════════════════════════════════════════════════
+
+def _score_all_stocks(summaries: list[dict]) -> list[dict]:
+    """
+    Scores every stock on a 0-10 scale using pure math.
+    Higher = better intraday BUY setup.
+
+    Criteria:
+      RSI 25-50  → +3  (oversold zone, recovering)
+      Vol ≥ 1.2x → +2  (interest building)
+      Above EMA20→ +2  (uptrend)
+      Chg -1%/+3%→ +1  (not already run up)
+      ATR > 0.5% → +1  (enough movement to trade)
+      Positive news → +1 (no negative headwinds)
+    """
+    scored = []
+    for s in summaries:
+        score = 0
+
+        # RSI sweet spot — oversold but recovering
+        if 25 <= s.get("rsi", 50) <= 50:
+            score += 3
+        elif 50 < s.get("rsi", 50) <= 60:
+            score += 1   # Acceptable but less ideal
+
+        # Volume building — institutional interest
+        if s.get("vol_ratio", 1.0) >= 1.5:
+            score += 2
+        elif s.get("vol_ratio", 1.0) >= 1.2:
+            score += 1
+
+        # Trend — above EMA20 means uptrend
+        if s.get("above_ema20", False):
+            score += 2
+
+        # Price change — not already run up too much
+        chg = s.get("pct_change", 0)
+        if -1 < chg < 3:
+            score += 1
+
+        # No negative news (basic check)
+        headline = s.get("headline", "").lower()
+        negative_words = ["fraud", "loss", "crash", "ban", "penalty", "investigation"]
+        if not any(word in headline for word in negative_words):
+            score += 1
+
+        scored.append({**s, "score": score})
+
+    # Sort descending — best setups first
+    return sorted(scored, key=lambda x: x["score"], reverse=True)
 
 
 # ════════════════════════════════════════════════════════════
@@ -93,23 +195,17 @@ def run_morning_screener():
 # ════════════════════════════════════════════════════════════
 
 def _fetch_all_summaries() -> list[dict]:
-    """
-    Fetches previous day OHLCV + quick indicators for all NIFTY 50.
-    Returns compact summary per stock — Gemini reads these.
-    """
+    """Fetches prev day OHLCV + indicators for all NIFTY 50."""
     summaries = []
 
     for symbol in NIFTY_50:
         try:
             ticker = yf.Ticker(f"{symbol}.NS")
-
-            # Last 30 days for indicators
-            hist = ticker.history(period="30d", interval="1d")
+            hist   = ticker.history(period="30d", interval="1d")
 
             if hist.empty or len(hist) < 15:
                 continue
 
-            # Calculate quick indicators
             close  = hist["Close"]
             volume = hist["Volume"]
 
@@ -121,22 +217,20 @@ def _fetch_all_summaries() -> list[dict]:
             latest_close = close.iloc[-1]
             pct_change   = round(((latest_close - prev_close) / prev_close) * 100, 2)
 
-            # EMA trend
             ema20    = ta.trend.EMAIndicator(close, window=20).ema_indicator().iloc[-1]
             above_ema = close.iloc[-1] > ema20
 
-            # One news headline
-            news  = ticker.news
+            news     = ticker.news
             headline = news[0].get("title", "No news") if news else "No news"
 
             summaries.append({
-                "symbol":       symbol,
-                "close":        round(latest_close, 2),
-                "pct_change":   pct_change,
-                "rsi":          round(rsi, 1) if not pd.isna(rsi) else 50.0,
-                "vol_ratio":    vol_ratio,
-                "above_ema20":  above_ema,
-                "headline":     headline[:80],    # Trim long headlines
+                "symbol":      symbol,
+                "close":       round(latest_close, 2),
+                "pct_change":  pct_change,
+                "rsi":         round(rsi, 1) if not pd.isna(rsi) else 50.0,
+                "vol_ratio":   vol_ratio,
+                "above_ema20": above_ema,
+                "headline":    headline[:80],
             })
 
         except Exception as e:
@@ -147,24 +241,19 @@ def _fetch_all_summaries() -> list[dict]:
 
 
 def _get_market_bias() -> str:
-    """
-    Checks Nifty 50 index previous day trend.
-    Returns BULLISH, BEARISH, or NEUTRAL.
-    """
+    """NIFTY 50 index trend → BULLISH / BEARISH / NEUTRAL."""
     try:
-        nifty = yf.Ticker("^NSEI")
-        hist  = nifty.history(period="5d", interval="1d")
-
+        nifty  = yf.Ticker("^NSEI")
+        hist   = nifty.history(period="5d", interval="1d")
         if hist.empty:
             return "NEUTRAL"
 
-        # Last 3 days trend
         closes    = hist["Close"].tail(3).tolist()
         up_days   = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i-1])
         down_days = len(closes) - 1 - up_days
 
-        if up_days >= 2:   return "BULLISH"
-        if down_days >= 2: return "BEARISH"
+        if up_days >= 2:    return "BULLISH"
+        if down_days >= 2:  return "BEARISH"
         return "NEUTRAL"
 
     except Exception as e:
@@ -172,16 +261,8 @@ def _get_market_bias() -> str:
         return "NEUTRAL"
 
 
-# ════════════════════════════════════════════════════════════
-#   GEMINI STOCK PICKER
-# ════════════════════════════════════════════════════════════
-
 def _gemini_pick_stocks(summaries: list[dict], market_bias: str) -> list[dict]:
-    """
-    Sends all stock summaries to Gemini.
-    Asks it to pick top 4 intraday BUY candidates.
-    Returns list of stock dicts for session_briefing.json.
-    """
+    """Gemini picks the top 4 stocks for War Room from math-filtered list."""
     try:
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
         model = genai.GenerativeModel(
@@ -197,24 +278,23 @@ def _gemini_pick_stocks(summaries: list[dict], market_bias: str) -> list[dict]:
         raw = raw.replace("```json", "").replace("```", "").strip()
         start = raw.find("{")
         end   = raw.rfind("}") + 1
-        if start != -1 and end > start:
-            raw = raw[start:end]
+        if start == -1 or end <= start:
+            raise ValueError("No JSON found in response")
 
-        data   = json.loads(raw)
-        picks  = data.get("picks", [])
+        data  = json.loads(raw[start:end])
+        picks = data.get("picks", [])
 
-        # Format for briefing
         formatted = []
-        for pick in picks[:STOCKS_TO_PICK]:
+        for pick in picks[:war_room_picks]:
             formatted.append({
                 "ticker":             pick.get("symbol"),
                 "trading_symbol":     pick.get("symbol"),
                 "direction":          "BUY_ONLY",
-                "confidence":         0,      # War room fills this
-                "entry_price":        0.0,    # War room fills this
-                "stop_loss":          0.0,    # War room fills this
-                "execution_strategy": "TBD",  # War room fills this
-                "reason":             pick.get("reason", ""),
+                "confidence":         0,
+                "entry_price":        0.0,
+                "stop_loss":          0.0,
+                "execution_strategy": "TBD",
+                "reason":             pick.get("reason", "Gemini screener pick"),
             })
 
         return formatted
@@ -228,7 +308,7 @@ def _screener_system_prompt() -> str:
     return """
 You are a pre-market stock screener for an Indian intraday trading desk.
 
-Your job: From the NIFTY 50 data provided, pick exactly 3 stocks
+Your job: From the stocks provided (already math-filtered), pick exactly 4
 that have the best BUY setup for today's intraday session.
 
 Look for:
@@ -241,18 +321,10 @@ Look for:
 OUTPUT FORMAT (strict JSON, nothing else):
 {
   "picks": [
-    {
-      "symbol": "RELIANCE",
-      "reason": "one line max explaining why"
-    },
-    {
-      "symbol": "TCS",
-      "reason": "one line max explaining why"
-    },
-    {
-      "symbol": "INFY",
-      "reason": "one line max explaining why"
-    }
+    {"symbol": "RELIANCE", "reason": "one line max explaining why"},
+    {"symbol": "TCS",      "reason": "one line max explaining why"},
+    {"symbol": "INFY",     "reason": "one line max explaining why"},
+    {"symbol": "SBIN",     "reason": "one line max explaining why"}
   ]
 }
 
@@ -265,11 +337,7 @@ RULES:
 
 
 def _build_screener_message(summaries: list[dict], market_bias: str) -> str:
-    """Builds compact stock data string for Gemini."""
-
-    lines = [f"MARKET BIAS TODAY: {market_bias}\n"]
-    lines.append("NIFTY 50 SNAPSHOT:\n")
-
+    lines = [f"MARKET BIAS TODAY: {market_bias}\n", "TOP MATH-SCORED STOCKS:\n"]
     for s in summaries:
         lines.append(
             f"{s['symbol']}: Close={s['close']} | "
@@ -277,56 +345,48 @@ def _build_screener_message(summaries: list[dict], market_bias: str) -> str:
             f"Vol={s['vol_ratio']}x | AboveEMA={s['above_ema20']} | "
             f"News: {s['headline']}"
         )
-
     lines.append("\nPick the top 4 intraday BUY candidates from above.")
     return "\n".join(lines)
 
 
 # ════════════════════════════════════════════════════════════
-#   FALLBACK — If Gemini fails
+#   FALLBACK — Pure math, no AI
 # ════════════════════════════════════════════════════════════
 
-def _fallback_picks(summaries: list[dict]) -> list[dict]:
-    """
-    Pure math fallback if Gemini API fails.
-    Scores each stock, picks top 4.
-    """
-    scored = []
-
-    for s in summaries:
-        score = 0
-        if 25 <= s["rsi"] <= 50:    score += 3   # RSI in sweet spot
-        if s["vol_ratio"] >= 1.2:   score += 2   # Volume building
-        if s["above_ema20"]:        score += 2   # In uptrend
-        if -1 < s["pct_change"] < 2: score += 1  # Not already run up
-
-        scored.append((score, s["symbol"]))
-
-    scored.sort(reverse=True)
-    top4 = scored[:STOCKS_TO_PICK]
-
+def _fallback_picks(top_scored: list[dict]) -> list[dict]:
+    """Used when Gemini screener fails."""
     return [{
-        "ticker":             sym,
-        "trading_symbol":     sym,
+        "ticker":             s["symbol"],
+        "trading_symbol":     s["symbol"],
         "direction":          "BUY_ONLY",
         "confidence":         0,
         "entry_price":        0.0,
         "stop_loss":          0.0,
         "execution_strategy": "TBD",
-        "reason":             "Math fallback pick",
-    } for _, sym in top4]
+        "reason":             f"Math fallback | Score: {s['score']}",
+    } for s in top_scored[: int(cfg("screener", "war_room_picks", 4))]]
 
+
+# ════════════════════════════════════════════════════════════
+#   STANDALONE TEST
+# ════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
     print("Running morning screener standalone...")
     run_morning_screener()
-    
-    # Check what it picked
-    import json
+
     with open("data/session_briefing.json") as f:
         briefing = json.load(f)
-    
-    print("\nPicked stocks:")
+
+    print(f"\nMarket bias: {briefing.get('market_bias')}")
+    print(f"\nWar Room picks ({len(briefing.get('approved_stocks', []))}):")
     for s in briefing.get("approved_stocks", []):
         print(f"  {s['ticker']} — {s['reason']}")
-    print(f"\nMarket bias: {briefing.get('market_bias')}")
+
+    print(f"\nWatchlist ({len(briefing.get('watchlist', []))}):")
+    for s in briefing.get("watchlist", [])[:5]:
+        print(f"  {s['ticker']} — Score: {s['math_score']} — {s['reason']}")
+    print("  ... (showing top 5 only)")

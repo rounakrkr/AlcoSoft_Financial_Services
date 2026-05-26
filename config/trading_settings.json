@@ -1,0 +1,39 @@
+{
+  "_meta": {
+    "version": 1,
+    "description": "AlcoSoft trading parameters — edit here or from the dashboard (/settings). Secrets stay in .env only."
+  },
+  "risk": {
+    "stop_loss_percent": 0.01,
+    "trailing_sl_percent": 0.008,
+    "target_rr_ratio": 2.0,
+    "max_risk_per_trade": 0.02,
+    "math_risk_per_trade": 0.05,
+    "max_daily_loss_percent": 0.05,
+    "paper_capital": 10000
+  },
+  "strategy": {
+    "strategy_type": "INTRADAY",
+    "max_open_positions": 2,
+    "min_confidence": 70,
+    "min_strategies_agree": 2,
+    "math_strategies_agree": 2,
+    "min_sell_signals": 1,
+    "signal_lookback_candles": 4,
+    "min_ws_candles_for_patterns": 2,
+    "war_room_gating": true,
+    "loop_interval_sec": 5
+  },
+  "screener": {
+    "screener_total_stocks": 25,
+    "war_room_picks": 4
+  },
+  "market_data": {
+    "candle_interval_seconds": 300,
+    "health_min_ws_candles": 4,
+    "scan_log_interval_sec": 90
+  },
+  "scheduling": {
+    "war_room_interval_minutes": 40
+  }
+}

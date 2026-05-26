@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AlcoSoft — Trading Settings</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body>
+
+<header>
+  <div class="logo">🚀 <span>AlcoSoft</span> Settings</div>
+  <div class="header-right">
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/settings" class="nav-link active">⚙️ Settings</a>
+    <span class="clock" id="clock">⏰ --:--:--</span>
+  </div>
+</header>
+
+<main class="settings-main">
+  <div class="card" style="margin-bottom:1rem">
+    <div class="card-title">⚙️ Trading parameters</div>
+    <p style="font-size:0.85rem;color:var(--text2);line-height:1.5">
+      Stored in <code>config/trading_settings.json</code> (not .env).
+      API keys &amp; <strong>PAPER/LIVE</strong> mode stay in <code>.env</code>.
+      Changes apply to <code>main.py</code> within a few seconds — no restart needed.
+    </p>
+    <p id="settings-meta" style="font-size:0.75rem;color:var(--text2);margin-top:0.5rem"></p>
+  </div>
+
+  <form id="settings-form"></form>
+
+  <div style="margin-top:1rem">
+    <button type="button" class="btn btn-primary" id="save-btn">💾 Save settings</button>
+    <div class="toast" id="toast"></div>
+  </div>
+</main>
+
+<script src="/static/js/app.js"></script>
+<script src="/static/js/settings.js"></script>
+</body>
+</html>
