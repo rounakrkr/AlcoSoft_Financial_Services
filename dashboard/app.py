@@ -139,6 +139,49 @@ def api_status():
 
     st = load_settings().get("strategy", {})
 
+    chart_trades = _db_query("""
+        SELECT symbol, pnl, status, exit_time, entry_time
+        FROM trades
+        WHERE date = ? AND pnl IS NOT NULL
+          AND status IN ('CLOSED', 'STOPPED')
+        ORDER BY COALESCE(exit_time, entry_time) ASC
+        LIMIT 50
+    """, (today,))
+
+    labels, pnls, cumulative = [], [], []
+    running = 0.0
+    for i, t in enumerate(chart_trades):
+        pnl = float(t.get("pnl") or 0)
+        labels.append(t.get("symbol", f"T{i+1}"))
+        pnls.append(round(pnl, 2))
+        running += pnl
+        cumulative.append(round(running, 2))
+
+    circuit_breakers = {}
+    market_msg = ""
+    order_verify = {}
+    feed_stats = {}
+    try:
+        from core.circuit_breaker import get_status as cb_status
+        circuit_breakers = cb_status()
+    except Exception:
+        pass
+    try:
+        from core.market_calendar import market_status_message
+        _, market_msg = market_status_message()
+    except Exception:
+        market_msg = "—"
+    try:
+        from core.order_verifier import get_verification_report
+        order_verify = get_verification_report()
+    except Exception:
+        pass
+    try:
+        from core.data_fetcher import get_feed_stats
+        feed_stats = get_feed_stats()
+    except Exception:
+        pass
+
     return jsonify({
         "timestamp":    datetime.now().strftime("%H:%M:%S"),
         "trading_mode": os.getenv("TRADING_MODE", "PAPER"),
@@ -150,10 +193,22 @@ def api_status():
         "briefing":    briefing,
         "war_log":     war_log,
         "reflection":  reflection,
+        "charts": {
+            "trade_labels":    labels,
+            "trade_pnl":       pnls,
+            "cumulative_pnl":  cumulative,
+            "wins":            stats.get("winning_trades", 0),
+            "losses":          stats.get("losing_trades", 0),
+            "circuit_breakers": circuit_breakers,
+            "market_status":   market_msg,
+            "order_verify":    order_verify,
+            "feed": {
+                "subscribed": len(feed_stats.get("subscribed", [])),
+                "tick_total": sum(feed_stats.get("tick_counts", {}).values()),
+            },
+        },
     })
 
 
 if __name__ == "__main__":
-    print("AlcoSoft Dashboard → http://localhost:5000")
-    print("Settings editor  → http://localhost:5000/settings")
     app.run(debug=False, port=5000)

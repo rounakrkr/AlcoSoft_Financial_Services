@@ -97,7 +97,6 @@ def retry_with_backoff(
     
     for attempt in range(1, max_attempts + 1):
         try:
-            logger.debug(f"Attempt {attempt}/{max_attempts}: {func.__name__}")
             return func()
         
         except retryable_exceptions as e:
@@ -129,7 +128,6 @@ def with_rate_limit(service: str, tokens: int = 1):
             limiter = get_limiter(service)
             wait = limiter.acquire(tokens)
             if wait > 0:
-                logger.debug(f"⏳ Rate limit: waiting {wait:.2f}s for {service}")
                 time.sleep(wait)
             return func(*args, **kwargs)
         return wrapper
@@ -243,13 +241,3 @@ if __name__ == "__main__":
         if attempt[0] < 2:
             raise ValueError("Simulated failure")
         return "Success!"
-    
-    result = retry_with_backoff(flaky_function, max_attempts=3, base_delay=0.5)
-    print(f"Result: {result}")
-    
-    # Test rate limiter
-    limiter = RateLimiter(calls_per_minute=60)
-    print(f"\nRate limiter test:")
-    for i in range(3):
-        wait = limiter.acquire(1)
-        print(f"  Call {i+1}: wait {wait:.3f}s")

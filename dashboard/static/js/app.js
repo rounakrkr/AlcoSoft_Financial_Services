@@ -183,6 +183,10 @@ async function fetchAndRender() {
       const adj = ref.tomorrow_adjustments || [];
       document.getElementById('ref-adjustments').innerHTML = adj.map((a) => `🔧 ${a}`).join('<br>');
     }
+
+    if (typeof renderCharts === 'function' && data.charts) {
+      renderCharts(data.charts);
+    }
   } catch (e) {
     console.error('Dashboard fetch error:', e);
   }

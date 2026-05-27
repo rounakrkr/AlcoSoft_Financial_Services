@@ -164,29 +164,27 @@ def check_api_credentials() -> Tuple[bool, str]:
     }
     
     missing = [k for k, v in required.items() if not os.getenv(k)]
-    
+
+    placeholders = []
+    for key in required:
+        val = (os.getenv(key) or "").strip().lower()
+        if not val:
+            continue
+        if "your_" in val or val.endswith("_here") or val == "changeme":
+            placeholders.append(key)
+
     if missing:
         return False, f"Missing: {', '.join(missing)}"
-    
+    if placeholders:
+        return False, f"Placeholder values (set real keys): {', '.join(placeholders)}"
+
     return True, "All API keys configured"
 
 
 def check_market_hours() -> Tuple[bool, str]:
-    """Verify we're in or near trading hours."""
-    now = datetime.now().time()
-    market_open = dt_time(9, 15)
-    market_close = dt_time(15, 30)
-    
-    if market_open <= now <= market_close:
-        return True, "Market is OPEN"
-    
-    # Pre-market (within 1 hour before open)
-    from datetime import timedelta
-    pre_market_start = dt_time(8, 15)
-    if pre_market_start <= now < market_open:
-        return True, "Pre-market (screener will run soon)"
-    
-    return False, f"Market closed (open 9:15-15:30, now {now.strftime('%H:%M')})"
+    """Trading day + session window (weekends & NSE holidays excluded)."""
+    from core.market_calendar import market_status_message
+    return market_status_message()
 
 
 def check_capital() -> Tuple[bool, str]:
@@ -195,7 +193,7 @@ def check_capital() -> Tuple[bool, str]:
         from core.order_executor import _get_available_capital
         
         capital = _get_available_capital()
-        min_capital = 5000
+        min_capital = 500
         
         if capital < min_capital:
             return False, f"Capital ₹{capital:.0f} below minimum ₹{min_capital}"
@@ -253,6 +251,20 @@ def run_preflight_checks() -> HealthCheck:
 def continuous_monitoring() -> HealthCheck:
     """Lightweight health check during trading."""
     health = HealthCheck()
+
+    # Reconcile any LIVE orders still awaiting broker confirmation
+    try:
+        import os
+        if os.getenv("TRADING_MODE", "PAPER") == "LIVE":
+            from core.order_verifier import reconcile_pending_orders
+            recon = reconcile_pending_orders()
+            pending = recon.get("still_pending", 0)
+            if pending:
+                health.warnings.append(
+                    f"{pending} order(s) still pending broker verification"
+                )
+    except Exception as e:
+        logger.warning(f"Order reconciliation skipped: {e}")
     
     checks = [
         ("Broker Connection", check_broker_connection),

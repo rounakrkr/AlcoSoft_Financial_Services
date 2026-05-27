@@ -6,6 +6,7 @@
   <title>AlcoSoft Trading Desk</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="/static/css/style.css"/>
+  <link rel="stylesheet" href="/static/css/charts.css"/>
 </head>
 <body>
 
@@ -40,6 +41,34 @@
     <div class="card-title">💼 Open Positions</div>
     <div class="card-value" id="stat-open">0</div>
     <div class="card-sub" id="stat-capital">Capital: ₹10,000</div>
+  </div>
+
+  <div class="charts-row">
+    <div class="card chart-card">
+      <canvas id="chart-pnl-bars"></canvas>
+    </div>
+    <div class="card chart-card">
+      <canvas id="chart-winloss"></canvas>
+    </div>
+    <div class="card chart-card">
+      <div class="card-title">🩺 System status</div>
+      <div class="system-status-card" id="system-status">
+        <div class="empty" style="padding:0.5rem">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="charts-row">
+    <div class="card chart-card chart-card-wide">
+      <canvas id="chart-cumulative"></canvas>
+    </div>
+    <div class="card chart-card">
+      <div class="card-title" style="margin-bottom:0.5rem">📈 Session snapshot</div>
+      <p style="font-size:0.78rem;color:var(--text2);line-height:1.5">
+        Charts update every 5s from today&apos;s closed trades in SQLite.
+        Green bars = profit, red = loss. Cumulative line = running day P&amp;L.
+      </p>
+    </div>
   </div>
 
   <div class="divider"></div>
@@ -121,6 +150,8 @@
   </div>
 </main>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="/static/js/charts.js"></script>
 <script src="/static/js/app.js"></script>
 </body>
 </html>

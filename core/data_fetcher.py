@@ -108,8 +108,18 @@ def _on_message(message):
             if silent:
                 logger.warning(f"📡 No ticks yet for: {silent[:10]}{'...' if len(silent) > 10 else ''}")
 
+    except (TypeError, KeyError, ValueError) as e:
+        logger.error(
+            "Tick parse error (%s): %s",
+            type(e).__name__, e,
+            exc_info=True,
+        )
     except Exception as e:
-        logger.error(f"Error processing tick: {e}", exc_info=True)
+        logger.critical(
+            "Unexpected tick handler error (%s): %s",
+            type(e).__name__, e,
+            exc_info=True,
+        )
 
 
 def _extract_ticks(message) -> list[dict]:
@@ -166,11 +176,9 @@ def _process_tick(tick: dict):
 
     symbol = _token_to_symbol.get(token)
     if not symbol:
-        logger.debug(f"Tick for unknown token {token} (not in subscription map)")
         return
 
     _tick_counts[symbol] += 1
-    logger.debug(f"🔹 Tick: {symbol} LTP={ltp} Vol={volume}")
 
     now = datetime.now()
 
@@ -278,7 +286,6 @@ def _send_keepalive():
                 isIndex           = False,
                 isDepth           = False,
             )
-            logger.debug("🏓 WebSocket keepalive ping sent.")
         _reset_keepalive()   # schedule next ping
     except Exception as e:
         logger.warning(f"Keepalive failed: {e}. WebSocket may reconnect naturally.")
@@ -319,13 +326,22 @@ def _on_close(message):
 
 
 def _on_error(error):
-    logger.error(f"❌ WebSocket error: {error}")
+    logger.error(
+        "❌ WebSocket error | type=%s | msg=%s | symbols=%s | attempt=%s",
+        type(error).__name__,
+        error,
+        len(_subscribed_symbols),
+        _reconnect_attempts + 1,
+        exc_info=not isinstance(error, str),
+    )
+    if _subscribed_symbols:
+        _schedule_reconnect()
 
 
 def _is_market_open():
-    """Rough check — market open between 9:15 and 15:30."""
-    now = datetime.now().time()
-    return dt_time(9, 15) <= now <= dt_time(15, 30)
+    """Trading day + regular session (9:15–15:30)."""
+    from core.market_calendar import is_market_session_open
+    return is_market_session_open()
 
 def _schedule_reconnect():
     global _reconnect_timer, _reconnect_attempts
@@ -351,9 +367,12 @@ def _do_reconnect():
             start_live_feed(_subscribed_symbols)  # will re-subscribe
             _reconnect_attempts = 0  # reset on success
             logger.info("Reconnection successful.")
+        except (ConnectionError, OSError, TimeoutError) as e:
+            logger.error("WebSocket reconnect network error: %s", e)
+            _schedule_reconnect()
         except Exception as e:
-            logger.error(f"Reconnect failed: {e}")
-            _schedule_reconnect()  # retry
+            logger.critical("WebSocket reconnect failed: %s", e, exc_info=True)
+            _schedule_reconnect()
 
 
 # ── Public Interface ─────────────────────────────────────────
@@ -612,14 +631,23 @@ def start_live_feed(symbols: list[str]):
             isDepth=False,
         )
         logger.info(f"✅ Subscribed to live feed: {[t['instrument_token'] for t in instrument_tokens]}")
-        logger.debug(f"Token → Symbol mapping: {_token_to_symbol}")
         
         # Keep the connection alive with keepalive ping
         _reset_keepalive()
         
+    except (ConnectionError, OSError, TimeoutError) as e:
+        logger.error(
+            "❌ WebSocket subscribe failed (network) | symbols=%s | %s",
+            len(instrument_tokens), e,
+        )
+        _schedule_reconnect()
     except Exception as e:
-        logger.error(f"❌ Subscription failed: {e}")
-        logger.warning("Will retry connection on next keepalive cycle.")
+        logger.error(
+            "❌ WebSocket subscribe failed | symbols=%s | %s",
+            len(instrument_tokens), e,
+            exc_info=True,
+        )
+        _schedule_reconnect()
 
 
 def stop_live_feed(symbols: list[str]):

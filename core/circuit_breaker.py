@@ -153,6 +153,3 @@ def halt_all_trading(reason: str):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print("Circuit Breaker Status:")
-    import json
-    print(json.dumps(get_status(), indent=2))

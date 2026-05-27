@@ -2,9 +2,15 @@
 #   ALCOSOFT FINANCIAL SERVICES
 #   core/strategy.py — The Fast Math Loop
 #
-#   BUY STRATEGIES (6):
-#     RSI+MACD, Hammer, Bullish Engulfing,
-#     EMA Crossover, Bollinger Bounce, Volume Breakout
+#   BUY STRATEGIES:
+#     Indicators: RSI+MACD, EMA Crossover, Bollinger Bounce
+#     Candle patterns: Hammer, Engulfing, Inverted Hammer, Morning Star,
+#     Piercing Line, Bullish Harami, Three White Soldiers, Dragonfly Doji,
+#     Bullish Marubozu, Volume Breakout
+#
+#   BUY GATE: At least one candle pattern (pattern_hit) is ALWAYS required.
+#     min=1 → candle pattern only (indicators alone cannot buy)
+#     min=2 → candle pattern + total fired >= 2 (2nd can be candle or indicator)
 #
 #   SELL STRATEGIES (4):
 #     RSI Overbought, MACD Bearish, Bearish Engulfing,
@@ -270,6 +276,134 @@ def detect_shooting_star(df: pd.DataFrame) -> bool:
     return upper_wick >= (2 * body) and lower_wick <= (0.5 * body)
 
 
+def detect_inverted_hammer(df: pd.DataFrame) -> bool:
+    """Long upper shadow, small lower shadow — bullish reversal signal."""
+    if len(df) < 1:
+        return False
+    r = df.iloc[-1]
+    body       = abs(r["close"] - r["open"])
+    upper_wick = r["high"] - max(r["open"], r["close"])
+    lower_wick = min(r["open"], r["close"]) - r["low"]
+    if body == 0:
+        return False
+    return upper_wick >= (2 * body) and lower_wick <= (0.5 * body)
+
+
+def detect_dragonfly_doji(df: pd.DataFrame) -> bool:
+    if len(df) < 1:
+        return False
+    r = df.iloc[-1]
+    rng = r["high"] - r["low"]
+    if rng == 0:
+        return False
+    body = abs(r["close"] - r["open"])
+    lower_wick = min(r["open"], r["close"]) - r["low"]
+    upper_wick = r["high"] - max(r["open"], r["close"])
+    return body <= 0.1 * rng and lower_wick >= 0.6 * rng and upper_wick <= 0.1 * rng
+
+
+def detect_bullish_marubozu(df: pd.DataFrame) -> bool:
+    if len(df) < 1:
+        return False
+    r = df.iloc[-1]
+    if r["close"] <= r["open"]:
+        return False
+    rng = r["high"] - r["low"]
+    if rng == 0:
+        return False
+    body = r["close"] - r["open"]
+    upper_wick = r["high"] - r["close"]
+    lower_wick = r["open"] - r["low"]
+    return body >= 0.85 * rng and upper_wick <= 0.1 * rng and lower_wick <= 0.1 * rng
+
+
+def detect_piercing_line(df: pd.DataFrame) -> bool:
+    if len(df) < 2:
+        return False
+    prev, curr = df.iloc[-2], df.iloc[-1]
+    if prev["close"] >= prev["open"]:
+        return False
+    if curr["close"] <= curr["open"]:
+        return False
+    midpoint = (prev["open"] + prev["close"]) / 2
+    return curr["open"] < prev["low"] and curr["close"] > midpoint
+
+
+def detect_bullish_harami(df: pd.DataFrame) -> bool:
+    if len(df) < 2:
+        return False
+    prev, curr = df.iloc[-2], df.iloc[-1]
+    if prev["close"] >= prev["open"]:
+        return False
+    if curr["close"] <= curr["open"]:
+        return False
+    return (
+        curr["open"] > prev["close"]
+        and curr["close"] < prev["open"]
+        and abs(curr["close"] - curr["open"]) < abs(prev["close"] - prev["open"]) * 0.6
+    )
+
+
+def detect_morning_star(df: pd.DataFrame) -> bool:
+    if len(df) < 3:
+        return False
+    c1, c2, c3 = df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    if c1["close"] >= c1["open"]:
+        return False
+    if c3["close"] <= c3["open"]:
+        return False
+    star_body = abs(c2["close"] - c2["open"])
+    c1_body = abs(c1["close"] - c1["open"])
+    if c1_body == 0:
+        return False
+    gap_down = c2["high"] < c1["close"]
+    closes_into = c3["close"] > (c1["open"] + c1["close"]) / 2
+    return gap_down and star_body < c1_body * 0.4 and closes_into
+
+
+def detect_three_white_soldiers(df: pd.DataFrame) -> bool:
+    if len(df) < 3:
+        return False
+    c1, c2, c3 = df.iloc[-3], df.iloc[-2], df.iloc[-1]
+    greens = all(c["close"] > c["open"] for c in (c1, c2, c3))
+    rising = c2["close"] > c1["close"] and c3["close"] > c2["close"]
+    return greens and rising
+
+
+def _scan_pattern_in_lookback(
+    pattern_df: pd.DataFrame,
+    detect_fn,
+    lookback: int | None = None,
+) -> bool:
+    """True if detect_fn matches any candle in the lookback window."""
+    n = lookback if lookback is not None else LOOKBACK
+    for i in _lookback_range(pattern_df, n):
+        slice_df = pattern_df.iloc[: len(pattern_df) + i + 1]
+        if detect_fn(slice_df):
+            return True
+    return False
+
+
+def _candle_strategy_result(
+    name: str,
+    pattern_hit: bool,
+    fired: bool | None = None,
+    reason: str = "",
+) -> dict:
+    """Standard candle-strategy payload for BUY gating."""
+    return {
+        "kind":        "candle",
+        "pattern_hit": pattern_hit,
+        "fired":       pattern_hit if fired is None else fired,
+        "name":        name,
+        "reason":      reason or f"pattern={pattern_hit}",
+    }
+
+
+def _indicator_strategy_result(name: str, fired: bool, reason: str) -> dict:
+    return {"kind": "indicator", "pattern_hit": False, "fired": fired, "name": name, "reason": reason}
+
+
 # ════════════════════════════════════════════════════════════
 #   SHARED INDICATOR BUILDER
 # ════════════════════════════════════════════════════════════
@@ -317,11 +451,11 @@ def strategy_rsi_macd(df: pd.DataFrame) -> dict:
             break
 
     latest_rsi = round(df["rsi"].iloc[-1], 1)
-    return {
-        "fired":  rsi_ok and macd_cross,
-        "name":   "RSI + MACD Momentum",
-        "reason": f"RSI_recent={latest_rsi}, MACD_cross={macd_cross}",
-    }
+    return _indicator_strategy_result(
+        "RSI + MACD Momentum",
+        rsi_ok and macd_cross,
+        f"RSI_recent={latest_rsi}, MACD_cross={macd_cross}",
+    )
 
 
 def strategy_hammer(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
@@ -347,11 +481,13 @@ def strategy_hammer(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None)
     else:
         vol_ok = True
 
-    return {
-        "fired":  hammer_found and rsi_zone and vol_ok,
-        "name":   "Hammer Reversal",
-        "reason": f"Hammer={hammer_found}, RSI={latest_rsi}, Vol={vol_ok}",
-    }
+    fired = hammer_found and rsi_zone and vol_ok
+    return _candle_strategy_result(
+        "Hammer Reversal",
+        pattern_hit=hammer_found,
+        fired=fired,
+        reason=f"Hammer={hammer_found}, RSI={latest_rsi}, Vol={vol_ok}",
+    )
 
 
 def strategy_bullish_engulfing(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
@@ -365,16 +501,17 @@ def strategy_bullish_engulfing(pattern_df: pd.DataFrame, indicator_df: pd.DataFr
 
     rsi_ok = ind["rsi"].iloc[-1] < 60 if "rsi" in ind.columns else True
     latest_rsi = round(ind["rsi"].iloc[-1], 1) if "rsi" in ind.columns else 0
-    return {
-        "fired":  engulf_found and rsi_ok,
-        "name":   "Bullish Engulfing",
-        "reason": f"Engulfing={engulf_found}, RSI={latest_rsi}",
-    }
+    return _candle_strategy_result(
+        "Bullish Engulfing",
+        pattern_hit=engulf_found,
+        fired=engulf_found and rsi_ok,
+        reason=f"Engulfing={engulf_found}, RSI={latest_rsi}",
+    )
 
 
 def strategy_ema_crossover(df: pd.DataFrame) -> dict:
     if pd.isna(df["ema50"].iloc[-1]):
-        return {"fired": False, "name": "EMA 9/21 Crossover", "reason": "EMA50 not ready"}
+        return _indicator_strategy_result("EMA 9/21 Crossover", False, "EMA50 not ready")
 
     cross_up = False
     for i in _lookback_range(df, LOOKBACK):
@@ -384,11 +521,11 @@ def strategy_ema_crossover(df: pd.DataFrame) -> dict:
             break
 
     above_ema50 = df["close"].iloc[-1] > df["ema50"].iloc[-1]
-    return {
-        "fired":  cross_up and above_ema50,
-        "name":   "EMA 9/21 Crossover",
-        "reason": f"Cross={cross_up}, Above_EMA50={above_ema50}",
-    }
+    return _indicator_strategy_result(
+        "EMA 9/21 Crossover",
+        cross_up and above_ema50,
+        f"Cross={cross_up}, Above_EMA50={above_ema50}",
+    )
 
 
 def strategy_bollinger_bounce(df: pd.DataFrame) -> dict:
@@ -398,11 +535,11 @@ def strategy_bollinger_bounce(df: pd.DataFrame) -> dict:
     bounced    = df["close"].iloc[-1] > df["bb_lower"].iloc[-1]
     rsi_ok     = df["rsi"].iloc[-1] < 45
     latest_rsi = round(df["rsi"].iloc[-1], 1)
-    return {
-        "fired":  touched and bounced and rsi_ok,
-        "name":   "Bollinger Band Bounce",
-        "reason": f"Touched={touched}, Bounced={bounced}, RSI={latest_rsi}",
-    }
+    return _indicator_strategy_result(
+        "Bollinger Band Bounce",
+        touched and bounced and rsi_ok,
+        f"Touched={touched}, Bounced={bounced}, RSI={latest_rsi}",
+    )
 
 
 def strategy_volume_breakout(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
@@ -424,11 +561,114 @@ def strategy_volume_breakout(pattern_df: pd.DataFrame, indicator_df: pd.DataFram
         ind["close"].iloc[-1] > ind["sma20"].iloc[-1]
         if "sma20" in ind.columns else True
     )
-    return {
-        "fired":  vol_spike and price_brk and above_sma,
-        "name":   "Volume Breakout",
-        "reason": f"VolSpike={vol_spike}, PriceBreak={price_brk}, SMA={above_sma}",
-    }
+    return _candle_strategy_result(
+        "Volume Breakout",
+        pattern_hit=price_brk,
+        fired=vol_spike and price_brk and above_sma,
+        reason=f"VolSpike={vol_spike}, PriceBreak={price_brk}, SMA={above_sma}",
+    )
+
+
+def strategy_inverted_hammer(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_inverted_hammer)
+    return _candle_strategy_result("Inverted Hammer", pattern_hit=hit)
+
+
+def strategy_dragonfly_doji(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_dragonfly_doji)
+    return _candle_strategy_result("Dragonfly Doji", pattern_hit=hit)
+
+
+def strategy_bullish_marubozu(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_bullish_marubozu)
+    return _candle_strategy_result("Bullish Marubozu", pattern_hit=hit)
+
+
+def strategy_piercing_line(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_piercing_line)
+    return _candle_strategy_result("Piercing Line", pattern_hit=hit)
+
+
+def strategy_bullish_harami(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_bullish_harami)
+    return _candle_strategy_result("Bullish Harami", pattern_hit=hit)
+
+
+def strategy_morning_star(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_morning_star)
+    return _candle_strategy_result("Morning Star", pattern_hit=hit)
+
+
+def strategy_three_white_soldiers(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_three_white_soldiers)
+    return _candle_strategy_result("Three White Soldiers", pattern_hit=hit)
+
+
+def _waiting_candle_strategy(name: str, ws_count: int) -> dict:
+    r = _waiting_pattern_result(name, ws_count)
+    r["kind"] = "candle"
+    r["pattern_hit"] = False
+    return r
+
+
+def _build_buy_strategies(
+    df: pd.DataFrame,
+    pattern_df: pd.DataFrame | None,
+    ws_count: int,
+) -> list[dict]:
+    """All BUY strategies — indicators + candle patterns (WS candles)."""
+    candle_fns = [
+        ("Hammer Reversal",       strategy_hammer),
+        ("Bullish Engulfing",   strategy_bullish_engulfing),
+        ("Inverted Hammer",       strategy_inverted_hammer),
+        ("Dragonfly Doji",        strategy_dragonfly_doji),
+        ("Bullish Marubozu",      strategy_bullish_marubozu),
+        ("Piercing Line",         strategy_piercing_line),
+        ("Bullish Harami",        strategy_bullish_harami),
+        ("Morning Star",          strategy_morning_star),
+        ("Three White Soldiers",  strategy_three_white_soldiers),
+        ("Volume Breakout",       strategy_volume_breakout),
+    ]
+
+    strategies = [
+        strategy_rsi_macd(df),
+        strategy_ema_crossover(df),
+        strategy_bollinger_bounce(df),
+    ]
+
+    for name, fn in candle_fns:
+        if pattern_df is not None:
+            strategies.append(fn(pattern_df, df))
+        else:
+            strategies.append(_waiting_candle_strategy(name, ws_count))
+
+    return strategies
+
+
+def _apply_buy_gate(all_strategies: list[dict], min_required: int) -> tuple[bool, str]:
+    """
+    BUY rules:
+      - Always: at least one candle pattern_hit in lookback
+      - min_required == 1: candle pattern only (no indicator-only buys)
+      - min_required >= 2: pattern_hit + total fired >= min_required
+    """
+    candle = [s for s in all_strategies if s.get("kind") == "candle"]
+    fired  = [s for s in all_strategies if s["fired"]]
+    patterns = [s for s in candle if s.get("pattern_hit")]
+
+    if not patterns:
+        names = [s["name"] for s in candle]
+        return False, f"No candle pattern (need 1+ of: {', '.join(names[:4])}...)"
+
+    if min_required <= 1:
+        return True, f"Candle pattern: {', '.join(s['name'] for s in patterns)}"
+
+    if len(fired) < min_required:
+        return False, (
+            f"Only {len(fired)}/{min_required} strategies fired "
+            f"(candle OK: {', '.join(s['name'] for s in patterns)})"
+        )
+    return True, ""
 
 
 # ════════════════════════════════════════════════════════════
@@ -511,14 +751,14 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
         if stock.get("confidence", 0) < MIN_CONFIDENCE:
             return {"action": "WAIT", "reason": f"War room confidence too low ({stock.get('confidence')}%)"}
 
-        if briefing.get("market_bias") == "BEARISH":
-            return {"action": "WAIT", "reason": "Market bias not BULLISH/NEUTRAL"}
+        if stock.get("market_bias") == "BEARISH":
+            return {"action": "WAIT", "reason": "Stock market bias: BEARISH"}
     else:
         if stock.get("direction") == "AVOID":
             return {"action": "WAIT", "reason": "Stock explicitly marked AVOID"}
 
-        if briefing.get("market_bias") == "BEARISH":
-            return {"action": "WAIT", "reason": "Market bias BEARISH — skipping even in test mode"}
+        if stock.get("market_bias") == "BEARISH":
+            return {"action": "WAIT", "reason": "Stock market bias: BEARISH"}
 
     df = _get_indicator_df(symbol)
     if df is None:
@@ -526,59 +766,46 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
 
     ws_count   = len(get_candle_history(symbol))
     pattern_df = _get_pattern_df(symbol)
-
-    all_strategies = [
-        strategy_rsi_macd(df),
-        strategy_ema_crossover(df),
-        strategy_bollinger_bounce(df),
-        strategy_hammer(pattern_df, df) if pattern_df is not None
-            else _waiting_pattern_result("Hammer Reversal", ws_count),
-        strategy_bullish_engulfing(pattern_df, df) if pattern_df is not None
-            else _waiting_pattern_result("Bullish Engulfing", ws_count),
-        strategy_volume_breakout(pattern_df, df) if pattern_df is not None
-            else _waiting_pattern_result("Volume Breakout", ws_count),
-    ]
+    all_strategies = _build_buy_strategies(df, pattern_df, ws_count)
+    total      = len(all_strategies)
 
     fired       = [s for s in all_strategies if s["fired"]]
     fired_count = len(fired)
     fired_names = [s["name"] for s in fired]
+    pattern_hits = [s["name"] for s in all_strategies if s.get("pattern_hit")]
 
-    logger.info(
-        f"📊 {symbol} | Buy signals: {fired_count}/6 | "
-        f"{fired_names if fired_names else 'None'}"
-    )
+    ok, gate_msg = _apply_buy_gate(all_strategies, MIN_STRATEGIES_AGREE)
+    if not ok:
+        return {"action": "WAIT", "reason": gate_msg}
 
-    if fired_count >= MIN_STRATEGIES_AGREE:
-        price, price_src = _get_entry_price(symbol)
-        if not price:
-            return {"action": "WAIT", "reason": f"No live price for {symbol} (WS tick missing)"}
+    price, price_src = _get_entry_price(symbol)
+    if not price:
+        return {"action": "WAIT", "reason": f"No live price for {symbol} (WS tick missing)"}
 
-        stop_loss = calculate_stop_loss(price, "BUY")
-        return {
-            "action":    "BUY",
-            "symbol":    symbol,
-            "price":     round(price, 2),
-            "stop_loss": stop_loss,
-            "reason":    f"{fired_count}/6: {', '.join(fired_names)} | price={price_src}",
-            "signals":   fired_count,
-        }
-    
+    stop_loss = calculate_stop_loss(price, "BUY")
     return {
-        "action": "WAIT",
-        "reason": f"Only {fired_count}/6 strategies fired. Need {MIN_STRATEGIES_AGREE}.",
+        "action":    "BUY",
+        "symbol":    symbol,
+        "price":     round(price, 2),
+        "stop_loss": stop_loss,
+        "reason":    (
+            f"{fired_count}/{total}: {', '.join(fired_names)} | "
+            f"candle: {', '.join(pattern_hits)} | price={price_src}"
+        ),
+        "signals":   fired_count,
     }
 
 
 def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
     """
     Math-only evaluation for watchlist stocks.
-    No AI gating, higher bar: 4/6 strategies must fire.
+    Math watchlist — same BUY gate (candle pattern required).
     Only in BULLISH market.
     """
     symbol = stock["ticker"]
 
-    if briefing.get("market_bias") not in ("BULLISH", "NEUTRAL"):
-        return {"action": "WAIT", "reason": "Math trades: need BULLISH/NEUTRAL market"}
+    if stock.get("market_bias") not in ("BULLISH", "NEUTRAL"):
+        return {"action": "WAIT", "reason": f"Stock market bias: {stock.get('market_bias', 'UNKNOWN')}"}
 
     if stock.get("direction") == "AVOID":
         return {"action": "WAIT", "reason": "Marked AVOID"}
@@ -589,48 +816,40 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
 
     ws_count   = len(get_candle_history(symbol))
     pattern_df = _get_pattern_df(symbol)
-
-    all_strategies = [
-        strategy_rsi_macd(df),
-        strategy_ema_crossover(df),
-        strategy_bollinger_bounce(df),
-        strategy_hammer(pattern_df, df) if pattern_df is not None
-            else _waiting_pattern_result("Hammer Reversal", ws_count),
-        strategy_bullish_engulfing(pattern_df, df) if pattern_df is not None
-            else _waiting_pattern_result("Bullish Engulfing", ws_count),
-        strategy_volume_breakout(pattern_df, df) if pattern_df is not None
-            else _waiting_pattern_result("Volume Breakout", ws_count),
-    ]
+    all_strategies = _build_buy_strategies(df, pattern_df, ws_count)
+    total      = len(all_strategies)
 
     fired       = [s for s in all_strategies if s["fired"]]
     fired_count = len(fired)
     fired_names = [s["name"] for s in fired]
+    pattern_hits = [s["name"] for s in all_strategies if s.get("pattern_hit")]
 
     logger.debug(
-        f"[MATH] {symbol} | signals {fired_count}/6 | "
-        f"live_candles={ws_count} | {fired_names or 'none'}"
+        f"[MATH] {symbol} | {fired_count}/{total} | candles={ws_count} | "
+        f"patterns={pattern_hits or 'none'} | {fired_names or 'none'}"
     )
 
-    if fired_count >= MATH_STRATEGIES_AGREE:
-        price, price_src = _get_entry_price(symbol)
-        if not price:
-            return {"action": "WAIT", "reason": f"No live price for {symbol}"}
-        stop_loss = calculate_stop_loss(price, "BUY")
-        return {
-            "action":       "BUY",
-            "trade_type":   "MATH",
-            "symbol":       symbol,
-            "price":        round(price, 2),
-            "stop_loss":    stop_loss,
-            "reason":       (
-                f"MATH {fired_count}/{MATH_STRATEGIES_AGREE}: "
-                f"{', '.join(fired_names)} | price={price_src}"
-            ),
-            "signals":      fired_count,
-            "risk_pct":     MATH_RISK_PER_TRADE,
-        }
+    ok, gate_msg = _apply_buy_gate(all_strategies, MATH_STRATEGIES_AGREE)
+    if not ok:
+        return {"action": "WAIT", "reason": f"Math: {gate_msg}"}
 
-    return {"action": "WAIT", "reason": f"Math: {fired_count}/6. Need {MATH_STRATEGIES_AGREE}."}
+    price, price_src = _get_entry_price(symbol)
+    if not price:
+        return {"action": "WAIT", "reason": f"No live price for {symbol}"}
+    stop_loss = calculate_stop_loss(price, "BUY")
+    return {
+        "action":       "BUY",
+        "trade_type":   "MATH",
+        "symbol":       symbol,
+        "price":        round(price, 2),
+        "stop_loss":    stop_loss,
+        "reason":       (
+            f"MATH {fired_count}/{total}: {', '.join(fired_names)} | "
+            f"candle: {', '.join(pattern_hits)} | price={price_src}"
+        ),
+        "signals":      fired_count,
+        "risk_pct":     MATH_RISK_PER_TRADE,
+    }
 
 
 # ════════════════════════════════════════════════════════════
@@ -700,6 +919,9 @@ def _check_all_exits(live_prices: dict[str, float]):
 # ════════════════════════════════════════════════════════════
 
 def _is_market_open(now: dt_time) -> bool:
+    from core.market_calendar import is_trading_day
+    if not is_trading_day(datetime.now().date()):
+        return False
     return MARKET_OPEN <= now <= MARKET_CLOSE
 
 
@@ -780,8 +1002,8 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
         f"⚡ Strategy loop started | "
         f"Mode: {STRATEGY_TYPE} | "
         f"Lookback: {LOOKBACK} candles | "
-        f"War Room buy: {MIN_STRATEGIES_AGREE}/6 | "
-        f"Math buy: {MATH_STRATEGIES_AGREE}/6 | "
+        f"War Room buy: {MIN_STRATEGIES_AGREE} (+ candle required) | "
+        f"Math buy: {MATH_STRATEGIES_AGREE} (+ candle required) | "
         f"Pattern candles: {MIN_WS_CANDLES_FOR_PATTERNS}+ live WS | "
         f"Sell: {MIN_SELL_SIGNALS}/4"
     )
@@ -898,13 +1120,4 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
 # ════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    print("AlcoSoft Strategy Module — Config Check")
-    print(f"  Lookback window:     {LOOKBACK} candles")
-    print(f"  Buy threshold:       {MIN_STRATEGIES_AGREE}/6 strategies")
-    print(f"  Sell threshold:      {MIN_SELL_SIGNALS}/4 strategies")
-    print(f"  Max positions:       {MAX_POSITIONS}")
-    print(f"  Min war room conf:   {MIN_CONFIDENCE}%")
-    print(f"  Strategy type:       {STRATEGY_TYPE}")
-    print(f"  War room gating:     {WAR_ROOM_GATING}")
-    print()
-    print("✅ Strategy module loaded successfully.")
+    pass

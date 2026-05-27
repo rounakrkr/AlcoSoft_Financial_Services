@@ -1,4 +1,4 @@
-/* AlcoSoft Dashboard — light theme only */
+/* AlcoSoft Dashboard — light theme (perfect final) */
 :root {
   --bg:          #f4f6fc;
   --bg2:         #e8ecf8;
@@ -149,86 +149,90 @@ main {
 
 .data-table {
   width: 100%;
-  min-width: 520px;
+  min-width: 680px;
   border-collapse: separate;
   border-spacing: 0;
-  table-layout: fixed;
   font-size: 0.82rem;
 }
 
-.data-table th,
-.data-table td {
-  padding: 0.55rem 0.5rem;
-  vertical-align: middle;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.data-table th:first-child,
-.data-table td:first-child { padding-left: 0; }
-
-.data-table th:last-child,
-.data-table td:last-child { padding-right: 0; }
-
+/* headings center aligned, minimal gap */
 .data-table th {
-  text-align: left;
+  padding: 0.4rem 0.5rem 0.3rem 0.5rem;
+  text-align: center;
   color: var(--text2);
-  font-weight: 500;
+  font-weight: 600;
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  padding-bottom: 0.6rem;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
 .data-table td {
+  padding: 0.3rem 0.5rem;
+  vertical-align: middle;
   border-bottom: 1px solid var(--border);
 }
 
+.data-table th:first-child,
+.data-table td:first-child { padding-left: 0; text-align: left; }
+.data-table th:last-child,
+.data-table td:last-child { padding-right: 0; }
+
 .data-table tr:last-child td { border-bottom: none; }
 
-/* Column widths — positions */
-.positions-table .col-stock    { width: 17%; }
-.positions-table .col-qty      { width: 9%; }
-.positions-table .col-num      { width: 14%; }
-.positions-table .col-strategy { width: 32%; }
-.positions-table .col-time     { width: 14%; }
+/* open positions */
+.positions-table {
+  min-width: 740px;
+}
+.positions-table .col-stock    { width: 15%; white-space: nowrap; }
+.positions-table .col-qty      { width: 8%;  text-align: right; }
+.positions-table .col-entry    { width: 11%; text-align: right; }
+.positions-table .col-stop     { width: 11%; text-align: right; }
+.positions-table .col-strategy { width: 36%; }
+.positions-table .col-time     { width: 14%; text-align: right; white-space: nowrap; }
 
-/* Column widths — trades */
-.trades-table .col-stock    { width: 15%; }
-.trades-table .col-num      { width: 13%; }
-.trades-table .col-pnl      { width: 14%; }
-.trades-table .col-status   { width: 14%; }
-.trades-table .col-strategy { width: 31%; }
+/* recent trades */
+.trades-table {
+  min-width: 760px;
+}
+.trades-table .col-stock    { width: 15%; white-space: nowrap; }
+.trades-table .col-entry    { width: 11%; text-align: right; }
+.trades-table .col-exit     { width: 11%; text-align: right; }
+.trades-table .col-pnl      { width: 10%; text-align: right; }
+.trades-table .col-status   { width: 11%; text-align: center; }
+.trades-table .col-strategy { width: 36%; }
 
-.positions-table th:nth-child(2),
-.positions-table th:nth-child(3),
-.positions-table th:nth-child(4),
-.positions-table td.col-qty,
-.positions-table td.col-num,
-.trades-table th:nth-child(2),
-.trades-table th:nth-child(3),
-.trades-table th:nth-child(4),
-.trades-table td.col-num,
-.trades-table td.col-pnl {
-  white-space: nowrap;
+/* numeric right alignment */
+.positions-table td:nth-child(2),
+.positions-table td:nth-child(3),
+.positions-table td:nth-child(4),
+.positions-table td:nth-child(6),
+.trades-table td:nth-child(2),
+.trades-table td:nth-child(3),
+.trades-table td:nth-child(4) {
   text-align: right;
 }
 
-.trades-table th:nth-child(5),
-.trades-table td.col-status {
-  text-align: center;
+/* stock name column – never wrap */
+.positions-table td:first-child,
+.trades-table td:first-child {
+  white-space: nowrap;
+  font-weight: 500;
+  text-align: left;
 }
 
+/* strategy cell – wrap long text */
 .data-table .cell-strategy {
   color: var(--text2);
   font-size: 0.75rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.35;
+  text-align: left;
 }
 
+/* status badges */
 .status-badge {
   display: inline-block;
   padding: 2px 8px;
@@ -238,7 +242,6 @@ main {
   letter-spacing: 0.3px;
   white-space: nowrap;
 }
-
 .status-closed  { background: rgba(23, 168, 101, 0.12); color: var(--green); }
 .status-stopped { background: rgba(224, 54, 96, 0.12); color: var(--red); }
 .status-open    { background: rgba(91, 98, 240, 0.12); color: var(--accent); }
@@ -247,8 +250,8 @@ main {
 .loss { color: var(--red);   font-weight: 600; }
 .neutral { color: var(--text2); }
 
+/* briefing / war room */
 .stock-list { display: flex; flex-direction: column; gap: 0.6rem; }
-
 .stock-pill {
   background: var(--card2);
   border: 1px solid var(--border);
@@ -258,10 +261,8 @@ main {
   justify-content: space-between;
   align-items: center;
 }
-
 .stock-name { font-weight: 600; font-size: 0.9rem; }
 .stock-conf { font-size: 0.75rem; color: var(--text2); }
-
 .direction-buy {
   background: rgba(23, 168, 101, 0.12);
   color: var(--green);
@@ -270,7 +271,6 @@ main {
   font-size: 0.7rem;
   font-weight: 600;
 }
-
 .direction-avoid {
   background: rgba(224, 54, 96, 0.12);
   color: var(--red);
@@ -279,7 +279,6 @@ main {
   font-size: 0.7rem;
   font-weight: 600;
 }
-
 .war-entry {
   background: var(--card2);
   border: 1px solid var(--border);
@@ -288,47 +287,66 @@ main {
   margin-bottom: 0.5rem;
   font-size: 0.78rem;
 }
-
 .war-header {
   display: flex;
   justify-content: space-between;
   margin-bottom: 0.25rem;
 }
-
 .agent-name { font-weight: 600; color: var(--accent); }
 .war-verdict-buy   { color: var(--green); font-weight: 600; }
 .war-verdict-avoid { color: var(--red);   font-weight: 600; }
 .war-verdict-wait  { color: var(--yellow); font-weight: 600; }
 .war-reasons { color: var(--text2); font-size: 0.73rem; margin-top: 0.15rem; }
 
+/* ---------- REFLECTION SECTION (unbold, grade slightly smaller) ---------- */
 .reflection-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 0.8rem;
   margin-top: 0.5rem;
 }
-
 .ref-item {
   background: var(--card2);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 0.9rem;
 }
-
 .ref-label {
   font-size: 0.68rem;
   color: var(--text2);
   text-transform: uppercase;
   letter-spacing: 0.8px;
   margin-bottom: 0.4rem;
+  font-weight: 400;   /* unbold */
+}
+.ref-value {
+  font-size: 0.85rem;
+  font-weight: 400;   /* unbold text */
+  line-height: 1.4;
+  color: var(--text);
+}
+/* grade styling - smaller size and normal weight */
+.grade-a, .grade-b, .grade-c, .grade-d {
+  font-size: 2.5rem;      /* bada kiya */
+  font-weight: 600;       /* semi-bold, thoda strong */
+  letter-spacing: normal;
+}
+.grade-a { color: var(--green); }
+.grade-b { color: #4fc3f7; }
+.grade-c { color: var(--yellow); }
+.grade-d { color: var(--red); }
+
+/* summary / what worked / what failed - unbold */
+.reflection-card .card-content p,
+.reflection-card .card-content div:not(.ref-item) {
+  font-weight: 400;
+  line-height: 1.5;
 }
 
-.ref-value { font-size: 0.85rem; font-weight: 500; line-height: 1.4; }
-
-.grade-a { color: var(--green); font-size: 1.4rem; font-weight: 700; }
-.grade-b { color: #4fc3f7; font-size: 1.4rem; font-weight: 700; }
-.grade-c { color: var(--yellow); font-size: 1.4rem; font-weight: 700; }
-.grade-d { color: var(--red); font-size: 1.4rem; font-weight: 700; }
+/* optional: make the summary section inside reflection card cleaner */
+.reflection-card .card-title {
+  margin-bottom: 0.5rem;
+}
 
 .empty {
   text-align: center;
@@ -336,13 +354,11 @@ main {
   color: var(--text2);
   font-size: 0.85rem;
 }
-
 .divider {
   grid-column: span 12;
   height: 1px;
   background: var(--border);
 }
-
 .pulse-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
@@ -350,12 +366,10 @@ main {
   display: inline-block;
   animation: pulse 2s infinite;
 }
-
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%       { opacity: 0.5; transform: scale(0.8); }
 }
-
 .scrollable {
   max-height: 260px;
   overflow-y: auto;
@@ -363,35 +377,30 @@ main {
   scrollbar-color: var(--border) transparent;
 }
 
-/* Settings page */
+/* settings page */
 .settings-main {
   max-width: 900px;
   display: block;
 }
-
 .settings-group {
   margin-bottom: 1.5rem;
 }
-
 .settings-group h2 {
   font-size: 1rem;
   margin-bottom: 0.75rem;
   color: var(--accent);
 }
-
 .field-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.75rem 1rem;
 }
-
 .field label {
   display: block;
   font-size: 0.78rem;
   font-weight: 600;
   margin-bottom: 0.25rem;
 }
-
 .field input[type="number"],
 .field input[type="text"] {
   width: 100%;
@@ -401,20 +410,17 @@ main {
   font-size: 0.85rem;
   background: var(--card2);
 }
-
 .field .hint {
   font-size: 0.68rem;
   color: var(--text2);
   margin-top: 0.2rem;
 }
-
 .field-check {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding-top: 1.4rem;
 }
-
 .btn {
   padding: 10px 22px;
   border: none;
@@ -423,14 +429,11 @@ main {
   cursor: pointer;
   font-size: 0.9rem;
 }
-
 .btn-primary {
   background: var(--accent);
   color: #fff;
 }
-
 .btn-primary:hover { background: var(--accent2); }
-
 .toast {
   margin-top: 1rem;
   padding: 10px 14px;
@@ -438,13 +441,16 @@ main {
   font-size: 0.85rem;
   display: none;
 }
-
 .toast.ok  { display: block; background: rgba(23,168,101,0.12); color: var(--green); }
 .toast.err { display: block; background: rgba(224,54,96,0.12); color: var(--red); }
 
+/* responsive */
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr 1fr; padding: 1rem; }
   .stat-card, .positions-card, .briefing-card,
   .trades-card, .war-card, .reflection-card { grid-column: span 2; }
   .field-grid { grid-template-columns: 1fr; }
+  .positions-table, .trades-table { min-width: 560px; }
+  .positions-table td:first-child,
+  .trades-table td:first-child { white-space: normal; }
 }

@@ -164,6 +164,14 @@ async def startup():
         logger.critical("Cannot proceed without broker connection. Exiting.")
         sys.exit(1)
 
+    # Step 3b — Broker ↔ DB reconciliation (LIVE)
+    logger.info("[3b/6] Reconciling broker vs local positions...")
+    try:
+        from core.broker_reconciliation import reconcile_broker_vs_local
+        await asyncio.to_thread(reconcile_broker_vs_local)
+    except Exception as e:
+        logger.error(f"Broker reconciliation error: {e}")
+
     # Step 4 — Morning Screener (if pre-market)
     now = datetime.now().time()
     if now < MARKET_OPEN:

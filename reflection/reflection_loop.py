@@ -118,36 +118,11 @@ def _call_owl(context: str) -> dict | None:
 
 def _system_prompt() -> str:
     return """
-You are Owl Alpha, the reflection and learning agent for AlcoSoft Financial Services.
+Owl Alpha — EOD reflection for AlcoSoft.
+Use ONLY trade stats and war room log in the user message. Do not invent trades.
 
-You receive end-of-day trading performance data. Your job is to find
-patterns in what worked, what failed, and give clear actionable adjustments
-for tomorrow.
-
-Be honest. If the system performed badly, say so clearly.
-Do not sugarcoat losses.
-
-OUTPUT FORMAT (strict JSON, nothing else):
-{
-  "win_rate_pct": 0,
-  "patterns_observed": [
-    "max 8 words each, max 3 items"
-  ],
-  "what_worked": "one sentence",
-  "what_failed": "one sentence",
-  "tomorrow_adjustments": [
-    "specific actionable change, max 10 words each, max 3 items"
-  ],
-  "confidence_calibration": "was war room confidence accurate? one line",
-  "overall_grade": "A/B/C/D/F",
-  "one_line_summary": "the single most important thing learned today"
-}
-
-RULES:
-- Never output anything outside the JSON block
-- Be specific, not generic
-- If no trades happened, grade is N/A
-- tomorrow_adjustments must be concrete, not vague
+JSON only:
+{"win_rate_pct":0,"patterns_observed":["max 8 words","max 3"],"what_worked":"one sentence","what_failed":"one sentence","tomorrow_adjustments":["max 10 words","max 3"],"confidence_calibration":"one line","overall_grade":"A-F or N/A","one_line_summary":"one line"}
 """.strip()
 
 
@@ -301,20 +276,4 @@ def _fallback_reflection(date: str, stats: dict) -> dict:
 
 
 if __name__ == "__main__":
-    print("Running reflection loop standalone...")
-    print("Note: Best run after market hours with some trade data.\n")
-    
     run_reflection_loop()
-    
-    import json
-    from datetime import datetime
-    today = datetime.now().strftime("%Y-%m-%d")
-    ref_path = f"data/reflections/{today}.json"
-    
-    try:
-        with open(ref_path) as f:
-            ref = json.load(f)
-        print(f"\nGrade: {ref.get('overall_grade')}")
-        print(f"Summary: {ref.get('one_line_summary')}")
-    except FileNotFoundError:
-        print("No reflection file found yet.")

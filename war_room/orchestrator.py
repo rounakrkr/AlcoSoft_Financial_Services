@@ -96,7 +96,7 @@ async def run_war_room():
         return
 
     stocks_to_debate = current_briefing.get("approved_stocks", [])
-    market_bias      = current_briefing.get("market_bias", "NEUTRAL")
+    global_market_bias = current_briefing.get("market_bias", "NEUTRAL")
 
     if not stocks_to_debate:
         logger.warning("No stocks in briefing to debate.")
@@ -106,10 +106,12 @@ async def run_war_room():
 
     for stock in stocks_to_debate:
         symbol = stock["ticker"]
-        logger.info(f"\n🔍 Debating: {symbol}")
+        # Use per-stock market bias if available, fall back to global
+        stock_market_bias = stock.get("market_bias", global_market_bias)
+        logger.info(f"\n🔍 Debating: {symbol} (bias: {stock_market_bias})")
 
         try:
-            result = await _run_debate(symbol, stock, market_bias)
+            result = await _run_debate(symbol, stock, stock_market_bias)
             updated_stocks.append(result if result else stock)
         except Exception as e:
             logger.error(f"Debate failed for {symbol}: {e}", exc_info=True)
@@ -120,7 +122,7 @@ async def run_war_room():
 
     new_briefing = {
         "generated_at":    datetime.now().isoformat(),
-        "market_bias":     market_bias,
+        "market_bias":     global_market_bias,
         "approved_stocks": updated_stocks,
         "watchlist":       current_briefing.get("watchlist", []),   # ← ADD THIS
         "avoid_list": [
@@ -457,5 +459,4 @@ def start_war_room_scheduler():
 
 if __name__ == "__main__":
     import asyncio
-    print("Running one war room debate cycle...")
     asyncio.run(run_war_room()) 

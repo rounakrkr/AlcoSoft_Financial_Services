@@ -302,6 +302,3 @@ if __name__ == "__main__":
     logger.log_trade_signal("RELIANCE", "RSI_MACD", "BUY", 85, ["RSI oversold", "MACD crossover"])
     logger.log_order_placed("RELIANCE", "BUY", 1, 2500.0, "ORD123", stop_loss=2400.0, target=2600.0)
     logger.log_position_closed("RELIANCE", 2500.0, 2550.0, 1, 50.0, "PROFIT_TARGET")
-    
-    print("\nCompliance Report:")
-    print(logger.export_compliance_report())
