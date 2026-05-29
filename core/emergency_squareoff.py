@@ -4,14 +4,14 @@ EMERGENCY SQUARE OFF ALL — Close every position immediately.
 Called when system is shutting down or user presses emergency button.
 """
 import logging
-import asyncio
+import os
 from datetime import datetime
-from core.state_manager import get_open_positions, close_position
-from core.data_fetcher import get_latest_tick
-from core.order_executor import execute_sell
-from core.audit_logger import audit_system_error
+from dotenv import load_dotenv
 
+load_dotenv()
 logger = logging.getLogger(__name__)
+
+TRADING_MODE = os.getenv("TRADING_MODE", "PAPER")
 
 
 async def emergency_square_off_all() -> dict:
@@ -27,6 +27,11 @@ async def emergency_square_off_all() -> dict:
     }
     """
     logger.critical("🚨 EMERGENCY SQUARE OFF ALL INITIATED")
+
+    from core.state_manager import get_open_positions, close_position
+    from core.data_fetcher import get_latest_tick
+    from core.order_executor import place_sell_order
+    from core.audit_logger import audit_system_error
 
     positions = get_open_positions()
     if not positions:
@@ -59,9 +64,8 @@ async def emergency_square_off_all() -> dict:
                 logger.warning(f"  No tick for {symbol}, using entry price Rs{exit_price}")
 
             # Execute SELL at market
-            result = await execute_sell(
+            result = place_sell_order(
                 symbol=symbol,
-                quantity=qty,
                 exit_price=exit_price,
                 reason="EMERGENCY_SQUAREOFF",
             )

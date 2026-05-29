@@ -13,7 +13,6 @@ from datetime import datetime, time as dt_time
 from collections import defaultdict, deque
 import os
 
-from core.kotak_client import get_client
 from core.trading_settings import get as cfg
 
 logger = logging.getLogger(__name__)
@@ -458,6 +457,7 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
     Caches results to avoid repeated API calls.
     Returns list of {"instrument_token": "...", "exchange_segment": "nse_cm"}
     """
+    from core.kotak_client import get_client
     client = get_client()
 
     # Load cache if exists
@@ -606,6 +606,7 @@ def start_live_feed(symbols: list[str]):
     logger.info(f"Starting live feed for {len(symbols)} symbols: {symbols}")
     _tick_counts.clear()
 
+    from core.kotak_client import get_client
     client = get_client()
     _active_client = client
 

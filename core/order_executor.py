@@ -11,7 +11,6 @@ import os
 from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
 
-from core.kotak_client import get_client, force_reconnect
 from core.token_validator import (
     validate_and_fix_session_before_order,
     ensure_trade_token_on_client,
@@ -676,6 +675,7 @@ def _get_available_capital(force_refresh: bool = False) -> float:
         return _capital_cache   # cache se do
 
     try:
+        from core.kotak_client import get_client
         client = get_client()
         limits = client.limits(segment="ALL", exchange="ALL", product="ALL")
 
@@ -962,6 +962,7 @@ def get_portfolio_snapshot() -> dict:
             "count":          len(get_open_positions()),
         }
     try:
+        from core.kotak_client import get_client
         client   = get_client()
         limits   = client.limits(segment="ALL", exchange="ALL", product="ALL")
         holdings = client.holdings()
@@ -1379,6 +1380,7 @@ def _modify_sl_order(
 def _cancel_kotak_order(order_id: str):
     """Cancels a pending order on Kotak (e.g., SL-M when exiting via target)."""
     try:
+        from core.kotak_client import get_client
         client = get_client()
         response = call_broker_api(client.cancel_order, order_id=order_id)
         if response is None:

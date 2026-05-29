@@ -281,10 +281,26 @@ def api_emergency_squareoff():
     Requires POST to prevent accidental clicks.
     """
     import asyncio
-    try:
-        from core.emergency_squareoff import emergency_square_off_all
+    trading_mode = os.getenv("TRADING_MODE", "PAPER")
 
+    try:
+        from core.state_manager import get_open_positions
+
+        positions = get_open_positions()
+        if not positions:
+            return jsonify({
+                "ok": True,
+                "status": "SUCCESS",
+                "closed_count": 0,
+                "failed_count": 0,
+                "message": "No open positions to close",
+                "timestamp": datetime.now().isoformat(),
+                "details": [],
+            })
+
+        from core.emergency_squareoff import emergency_square_off_all
         result = asyncio.run(emergency_square_off_all())
+
         return jsonify({
             "ok": True,
             "status": result["status"],
@@ -293,12 +309,19 @@ def api_emergency_squareoff():
             "timestamp": result["timestamp"],
             "details": result["details"],
         })
+    except ImportError as e:
+        import logging
+        logging.error(f"Import error in emergency squareoff: {e}", exc_info=True)
+        return jsonify({
+            "ok": False,
+            "error": "System error: Could not load required modules",
+        }), 503
     except Exception as e:
         import logging
         logging.error(f"Emergency squareoff failed: {e}", exc_info=True)
         return jsonify({
             "ok": False,
-            "error": str(e),
+            "error": "Failed to close positions. Please check the system log.",
         }), 500
 
 
