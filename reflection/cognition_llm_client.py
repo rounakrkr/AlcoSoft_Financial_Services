@@ -37,7 +37,7 @@ PREFERRED_PROVIDER = os.getenv("COGNITION_LLM_PROVIDER", "openrouter").lower()
 
 # Retry Configuration
 MAX_RETRIES = 2
-TIMEOUT_SECONDS = 30
+TIMEOUT_SECONDS = 120  # Ollama can take 60+ seconds for large prompts
 
 # ════════════════════════════════════════════════════════════
 #   PROVIDER HEALTH CHECK
