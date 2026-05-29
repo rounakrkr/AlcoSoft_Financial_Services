@@ -4,8 +4,9 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>AlcoSoft — Trading Settings</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="/static/css/style.css"/>
+  <link rel="stylesheet" href="/static/css/settings.css"/>
 </head>
 <body>
 
@@ -13,28 +14,96 @@
   <div class="logo">🚀 <span>AlcoSoft</span> Settings</div>
   <div class="header-right">
     <a href="/" class="nav-link">Dashboard</a>
+    <a href="/cognition" class="nav-link">🧠 Cognition Lab</a>
     <a href="/settings" class="nav-link active">⚙️ Settings</a>
     <span class="clock" id="clock">⏰ --:--:--</span>
   </div>
 </header>
 
 <main class="settings-main">
-  <div class="card" style="margin-bottom:1rem">
-    <div class="card-title">⚙️ Trading parameters</div>
-    <p style="font-size:0.85rem;color:var(--text2);line-height:1.5">
-      Stored in <code>config/trading_settings.json</code> (not .env).
-      API keys &amp; <strong>PAPER/LIVE</strong> mode stay in <code>.env</code>.
-      Changes apply to <code>main.py</code> within a few seconds — no restart needed.
-    </p>
-    <p id="settings-meta" style="font-size:0.75rem;color:var(--text2);margin-top:0.5rem"></p>
+
+  <!-- Hero Section -->
+  <div class="settings-hero">
+    <div class="hero-content">
+      <h1 class="hero-title">Trading Parameters</h1>
+      <p class="hero-desc">Fine-tune your strategy with precision control. All changes apply instantly.</p>
+      <div class="hero-meta">
+        <span class="meta-badge">📁 Stored in config/trading_settings.json</span>
+        <span class="meta-badge">⏱️ Live updates without restart</span>
+      </div>
+    </div>
+    <button type="button" class="save-btn" id="save-btn">
+      <span class="save-icon">💾</span>
+      <span class="save-text">Save settings</span>
+    </button>
   </div>
 
-  <form id="settings-form"></form>
-
-  <div style="margin-top:1rem">
-    <button type="button" class="btn btn-primary" id="save-btn">💾 Save settings</button>
-    <div class="toast" id="toast"></div>
+  <!-- Guidance Section -->
+  <div class="settings-guidance">
+    <div class="guidance-item">
+      <span class="guidance-icon">🔑</span>
+      <div>
+        <strong>API Keys & Mode</strong>
+        <p>Manage in <code>.env</code> file (PAPER/LIVE mode)</p>
+      </div>
+    </div>
+    <div class="guidance-item">
+      <span class="guidance-icon">📊</span>
+      <div>
+        <strong>Margin Controls</strong>
+        <p>Find in <em>Risk & exits</em> → Enable "Allow margin" first</p>
+      </div>
+    </div>
+    <div class="guidance-item">
+      <span class="guidance-icon">⚡</span>
+      <div>
+        <strong>Instant Apply</strong>
+        <p>Changes take effect within ~5 seconds</p>
+      </div>
+    </div>
+    <div id="settings-meta" class="guidance-item"></div>
   </div>
+
+  <!-- Tab Navigation -->
+  <div class="settings-tabs-wrapper">
+    <div class="settings-tabs" id="settings-tabs">
+      <button class="settings-tab active" data-tab="risk">
+        <span class="tab-icon">💰</span>
+        <span class="tab-label">Risk & Exits</span>
+      </button>
+      <button class="settings-tab" data-tab="strategy">
+        <span class="tab-icon">⚡</span>
+        <span class="tab-label">Strategy</span>
+      </button>
+      <button class="settings-tab" data-tab="screener">
+        <span class="tab-icon">🌅</span>
+        <span class="tab-label">Screener</span>
+      </button>
+      <button class="settings-tab" data-tab="market_data">
+        <span class="tab-icon">📡</span>
+        <span class="tab-label">Market Data</span>
+      </button>
+      <button class="settings-tab" data-tab="scheduling">
+        <span class="tab-icon">⏰</span>
+        <span class="tab-label">Scheduling</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Settings Panels -->
+  <form id="settings-form" class="settings-form">
+    <div class="settings-panels" id="settings-panels">
+      <div class="settings-panel active" data-panel="risk"></div>
+      <div class="settings-panel" data-panel="strategy"></div>
+      <div class="settings-panel" data-panel="screener"></div>
+      <div class="settings-panel" data-panel="market_data"></div>
+      <div class="settings-panel" data-panel="scheduling"></div>
+    </div>
+  </form>
+
+  <!-- Toast Notification -->
+  <div class="toast" id="toast"></div>
+
 </main>
 
 <script src="/static/js/app.js"></script>

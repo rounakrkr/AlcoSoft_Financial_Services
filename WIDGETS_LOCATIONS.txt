@@ -1,0 +1,374 @@
+================================================================================
+ALCOSOFT DASHBOARD WIDGETS - COMPLETE LOCATION MAP
+================================================================================
+
+MAIN DASHBOARD (http://localhost:5000/)
+════════════════════════════════════════════════════════════════════════════════
+
+HEADER SECTION
+──────────────────────────────────────────────────────────────────────────────
+Location: dashboard/templates/index.html:13-24
+
+Components:
+  ├─ Logo: "🚀 AlcoSoft Trading Desk"
+  └─ Navigation Links:
+     ├─ Dashboard (active) 🏠
+     ├─ 🧠 Cognition Lab → /cognition
+     ├─ ⚙️ Settings → /settings
+     ├─ 🚨 SQUARE OFF ALL (red pulsing emergency button)
+     ├─ Clock (live update)
+     ├─ Mode Badge (📋 PAPER / 🟢 LIVE)
+     └─ Strategy Badge (⚡ INTRADAY / 📊 SWING)
+
+
+STAT CARDS ROW (4-5 Cards)
+──────────────────────────────────────────────────────────────────────────────
+Location: dashboard/templates/index.html:27-53
+
+Card 1: 🎯 Total Trades
+  ├─ ID: stat-total
+  ├─ Updates from: /api/status → stats.total_trades
+  └─ Currently: 0 (fresh system)
+
+Card 2: 🏆 Win Rate
+  ├─ ID: stat-winrate
+  ├─ Updates from: /api/status → stats.win_rate
+  ├─ Shows: % and W/L count
+  └─ Currently: 0% (0W / 0L)
+
+Card 3: 💰 Gross P&L
+  ├─ ID: stat-pnl
+  ├─ Updates from: /api/status → stats.gross_pnl
+  └─ Currently: ₹0
+
+Card 4: 💼 Open Positions
+  ├─ ID: stat-open
+  ├─ Updates from: /api/status → positions.length
+  ├─ Shows: Count and available capital
+  └─ Currently: 0
+
+Card 5 (Conditional): 🔥 Margin Status
+  ├─ ID: margin-card
+  ├─ Shows when: allow_margin = true
+  ├─ Updates from: /api/margin-status
+  ├─ Shows: Margin %, deployed capital, over-leverage warning
+  └─ Currently: Hidden (margin disabled)
+
+
+CHARTS SECTION
+──────────────────────────────────────────────────────────────────────────────
+Location: dashboard/templates/index.html:55-81
+
+Row 1 - Three Charts:
+  Chart 1: 📊 P&L Bar Chart
+    ├─ Canvas ID: chart-pnl-bars
+    ├─ Type: Bar chart (green wins, red losses)
+    ├─ Data from: /api/status → charts.trade_pnl[]
+    ├─ Y-Axis: P&L value (₹)
+    ├─ X-Axis: Trade labels (stock symbols)
+    └─ Currently: Empty (no trades)
+
+  Chart 2: 📈 Win/Loss Pie Chart
+    ├─ Canvas ID: chart-winloss
+    ├─ Type: Pie chart (green=wins, red=losses)
+    ├─ Data from: /api/status → charts.wins, charts.losses
+    └─ Currently: Empty (no trades)
+
+  Card 3: 🩺 System Status
+    ├─ Static card with text
+    ├─ Shows: Circuit breaker status, data feed health, order verification
+    ├─ ID: system-status
+    └─ Updates from: /api/status → charts.circuit_breakers, order_verify
+
+Row 2 - Cumulative Chart:
+  Chart 1: 📈 Cumulative P&L Line
+    ├─ Canvas ID: chart-cumulative
+    ├─ Type: Line chart (running day P&L total)
+    ├─ Data from: /api/status → charts.cumulative_pnl[]
+    ├─ Y-Axis: Running P&L (₹)
+    ├─ X-Axis: Trade execution order
+    └─ Currently: Empty (no trades)
+
+  Card 2: 📈 Session Snapshot
+    ├─ Static info: Explains the charts
+    ├─ Refresh rate: Every 5 seconds
+    └─ Data source: SQLite alcosoft.db
+
+
+OPEN POSITIONS TABLE
+──────────────────────────────────────────────────────────────────────────────
+Location: dashboard/templates/index.html:88-106
+
+Table Structure:
+  ├─ Columns:
+  │  ├─ Stock
+  │  ├─ Qty
+  │  ├─ Entry ₹
+  │  ├─ Stop Loss ₹
+  │  ├─ Strategy
+  │  └─ Time
+  ├─ Body ID: positions-body
+  ├─ Updates from: /api/status → positions[]
+  └─ Empty message: "😴 No open positions"
+  └─ Currently: Empty row shown (fresh system)
+
+
+TODAY'S STOCKS BRIEFING
+──────────────────────────────────────────────────────────────────────────────
+Location: dashboard/templates/index.html:108-113
+
+Card Details:
+  ├─ Title: 📋 Today's Stocks
+  ├─ ID: briefing-list
+  ├─ Updates from: /api/status → briefing.approved_stocks[]
+  ├─ Empty message: "🌅 Waiting for morning screener..."
+  ├─ Shows: Stock name, confidence, reason, direction
+  └─ Currently: Empty (awaiting screener run)
+
+
+RECENT TRADES TABLE
+──────────────────────────────────────────────────────────────────────────────
+Location: dashboard/templates/index.html:115-133
+
+Table Structure:
+  ├─ Columns:
+  │  ├─ Stock
+  │  ├─ Entry ₹
+  │  ├─ Exit ₹
+  │  ├─ P&L
+  │  ├─ Status
+  │  └─ Strategy
+  ├─ Body ID: trades-body
+  ├─ Updates from: /api/status → trades[]
+  ├─ Sorts by: Most recent first
+  ├─ Empty message: "📭 No trades yet today"
+  └─ Currently: Empty row shown (fresh system)
+
+
+🤖 AI AGENT DECISIONS (formerly War Room Log)
+──────────────────────────────────────────────────────────────────────────────
+Location: dashboard/templates/index.html:135-140
+
+Card Details:
+  ├─ ID: war-card
+  ├─ Updates from: /api/status → war_log[]
+  ├─ Shows: Agent name, symbol, verdict, confidence, reasons
+  ├─ Scrollable: Yes
+  ├─ Empty message: "Waiting for agent decisions..."
+  └─ Currently: Empty (no decisions yet)
+
+
+🦉 OWL ALPHA - DAILY REFLECTION
+──────────────────────────────────────────────────────────────────────────────
+Location: dashboard/templates/index.html:144-162
+
+Card Details:
+  ├─ ID: reflection-card
+  ├─ Shows: Market reflection generated at 3:35 PM (after market close)
+  ├─ Updates from: /api/status → reflection{}
+  │
+  ├─ Content when populated:
+  │  ├─ Summary: Market overview
+  │  ├─ ✅ What Worked: Successful strategies
+  │  ├─ ❌ What Failed: Failed strategies
+  │  ├─ Grade: Letter grade (A-F)
+  │  └─ 🔧 Tomorrow's Adjustments: Config changes
+  │
+  ├─ IDs:
+  │  ├─ ref-summary
+  │  ├─ ref-worked
+  │  ├─ ref-failed
+  │  ├─ ref-grade
+  │  └─ ref-adjustments
+  │
+  └─ Currently: Empty message "🌙 Owl Alpha reflects at 3:35 PM..."
+
+
+════════════════════════════════════════════════════════════════════════════════
+COGNITION LAB DASHBOARD (http://localhost:5000/cognition/)
+════════════════════════════════════════════════════════════════════════════════
+
+HEADER
+──────────────────────────────────────────────────────────────────────────────
+  ├─ Title: "🧠 AlcoSoft Cognition Lab"
+  ├─ Subtitle: "Market Research & Pattern Analysis Dashboard"
+  └─ Status indicator: Green dot (active)
+
+
+SYSTEM STATUS CARD
+──────────────────────────────────────────────────────────────────────────────
+Updates from: /cognition/status
+
+Metrics:
+  ├─ Cognition Cycles: 0 (fresh system)
+  ├─ Active Hypotheses: 0
+  ├─ Prediction Reviews: 0
+  └─ LLM Provider: openrouter
+
+
+PREDICTION ACCURACY CARD
+──────────────────────────────────────────────────────────────────────────────
+Updates from: /cognition/predictions/accuracy
+
+Metrics:
+  ├─ Total Predictions: 0
+  ├─ Successful: 0
+  ├─ Failed: 0
+  └─ Accuracy: N/A
+
+
+ACTIVE HYPOTHESES CARD
+──────────────────────────────────────────────────────────────────────────────
+Updates from: /cognition/hypotheses
+
+Shows: Top 3 active hypotheses with confidence %
+Currently: No active hypotheses
+
+
+TODAY'S REFLECTION CARD
+──────────────────────────────────────────────────────────────────────────────
+Updates from: /cognition/reflection/today
+
+Shows:
+  ├─ Summary: Market overview
+  ├─ Regime: Market behavior (BULLISH/BEARISH/NEUTRAL)
+  ├─ Confidence: 0-100%
+  └─ Watch Themes: Next-day focus areas
+
+Currently: Empty (first day)
+
+
+Auto-refresh: Every 30 seconds
+
+
+════════════════════════════════════════════════════════════════════════════════
+SETTINGS PAGE (http://localhost:5000/settings/)
+════════════════════════════════════════════════════════════════════════════════
+
+HEADER
+──────────────────────────────────────────────────────────────────────────────
+  ├─ Logo: "🚀 AlcoSoft Settings"
+  └─ Navigation:
+     ├─ Dashboard → /
+     ├─ 🧠 Cognition Lab → /cognition
+     ├─ ⚙️ Settings (active)
+     └─ Clock
+
+
+GUIDANCE SECTION
+──────────────────────────────────────────────────────────────────────────────
+Shows:
+  ├─ API Keys & Mode info
+  ├─ Margin Controls info
+  ├─ Instant Apply info
+  └─ Metadata (version, last update)
+
+
+TAB NAVIGATION
+──────────────────────────────────────────────────────────────────────────────
+5 tabs with icons:
+
+Tab 1: 💰 Risk & Exits
+  Settings:
+    ├─ Stop loss %
+    ├─ Trailing SL %
+    ├─ Target R:R ratio
+    ├─ AI agent risk / trade %
+    ├─ Math strategy risk / trade %
+    ├─ Max daily loss %
+    ├─ Paper capital (₹)
+    ├─ Allow margin (toggle)
+    ├─ Force buy with margin (toggle)
+    ├─ Margin leverage
+    └─ Margin position size %
+
+Tab 2: ⚡ Strategy
+  Settings:
+    ├─ Strategy type (INTRADAY/SWING)
+    ├─ Max open positions
+    ├─ Min AI confidence
+    ├─ AI: min strategies for BUY
+    ├─ Math: min strategies for BUY
+    ├─ Min sell signals
+    ├─ Signal lookback (candles)
+    ├─ Min live WS candles
+    └─ Strategy loop interval
+
+Tab 3: 🌅 Screener
+  Settings:
+    ├─ Screener: total stocks
+    └─ Screener: cognition picks
+
+Tab 4: 📡 Market Data
+  Settings:
+    ├─ Candle size (seconds)
+    ├─ Health check: min WS candles
+    └─ Full scan log interval
+
+Tab 5: ⏰ Scheduling
+  Settings:
+    └─ Cognition cycle interval (minutes)
+
+
+SAVE BUTTON
+──────────────────────────────────────────────────────────────────────────────
+  ├─ Location: Top right
+  ├─ Text: "💾 Save settings"
+  ├─ Updates: All changes apply to config/trading_settings.json
+  └─ Auto-refresh: System reloads within 5 seconds
+
+
+TOAST NOTIFICATION
+──────────────────────────────────────────────────────────────────────────────
+  ├─ Appears on: Success/Error after saving
+  ├─ Location: Bottom right
+  └─ Auto-disappear: After 3 seconds
+
+
+════════════════════════════════════════════════════════════════════════════════
+DYNAMIC REFRESH INTERVALS
+════════════════════════════════════════════════════════════════════════════════
+
+Main Dashboard (/)
+  ├─ Stat cards: Every 5 seconds
+  ├─ Charts: Every 5 seconds
+  ├─ Positions table: Every 5 seconds
+  ├─ Recent trades: Every 5 seconds
+  ├─ War log: Every 5 seconds
+  ├─ Clock: Every 1 second
+  └─ Reflection: Every 5 seconds
+
+Cognition Lab (/cognition)
+  ├─ Status: Every 30 seconds
+  ├─ Accuracy: Every 30 seconds
+  ├─ Hypotheses: Every 30 seconds
+  └─ Reflection: Every 30 seconds
+
+Settings (/settings)
+  ├─ Load: On page load
+  ├─ Save: On button click
+  └─ Auto-apply: Within 5 seconds
+
+
+════════════════════════════════════════════════════════════════════════════════
+CURRENT LIVE SYSTEM STATUS (Fresh Start)
+════════════════════════════════════════════════════════════════════════════════
+
+Dashboard API (/api/status):
+  ✅ Status: 200 OK
+  ✅ Trades: 0
+  ✅ Positions: 0
+  ✅ Capital: ₹100,000
+  ✅ P&L: ₹0
+  ✅ Margin: Disabled
+
+Cognition Lab API (/cognition/status):
+  ✅ Status: Active
+  ✅ Cycles: 0
+  ✅ Hypotheses: 0
+  ✅ LLM: OpenRouter
+  ✅ Ready for production data
+
+All endpoints responding correctly and ready for live trading.
+
+================================================================================

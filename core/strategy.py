@@ -48,7 +48,7 @@ from core.order_executor import (
     place_sell_order,
     check_stop_losses,
     check_profit_targets,
-    check_war_room_flip,
+    # check_war_room_flip,  # DEPRECATED: Function removed with War Room phase-out
     update_trailing_stop_losses,
     squareoff_all_intraday,
     check_max_daily_loss,
@@ -72,7 +72,7 @@ MIN_SELL_SIGNALS      = 1
 LOOKBACK              = 3
 MIN_WS_CANDLES_FOR_PATTERNS = 2
 SCAN_LOG_INTERVAL     = 90
-WAR_ROOM_GATING       = True
+WAR_ROOM_GATING       = False  # DEPRECATED: War Room phased out. Set to False to skip gate checks.
 
 _failed_order_cooldown: dict[str, float] = {}
 _last_scan_log: float = 0.0
@@ -107,10 +107,75 @@ def _apply_trading_settings():
 
 _apply_trading_settings()
 
+# ── Adaptive Config (loaded from trading_settings.json adaptive section) ──
+_adaptive_config: dict = {}
+_adaptive_signal_multipliers: dict[str, float] = {}
+_adaptive_time_multipliers: dict[str, float] = {}
+_adaptive_sl_values: dict[str, float] = {}
+_adaptive_market_multiplier: float = 1.0
+
+
+def _load_adaptive_config():
+    """Load adaptive configuration from trading_settings.json."""
+    global _adaptive_config, _adaptive_signal_multipliers, _adaptive_time_multipliers
+    global _adaptive_sl_values, _adaptive_market_multiplier
+    
+    try:
+        s = get_section("adaptive")
+        if not s:
+            return
+        
+        # Strategy adaptive values
+        strategy_adaptive = s.get("strategy", {})
+        _adaptive_signal_multipliers = strategy_adaptive.get("signal_confidence_multipliers", {})
+        _adaptive_market_multiplier = strategy_adaptive.get("market_regime_multiplier", 1.0)
+        
+        # Time window adaptive values
+        _adaptive_time_multipliers = s.get("time_windows", {})
+        
+        # Symbol-specific SL values
+        _adaptive_sl_values = s.get("symbol_stops", {})
+        
+        _adaptive_config = s
+        logger.debug(f"📊 Adaptive config loaded | Signals: {len(_adaptive_signal_multipliers)} | Times: {len(_adaptive_time_multipliers)} | SLs: {len(_adaptive_sl_values)}")
+    except Exception as e:
+        logger.debug(f"Adaptive config load: {e}")
+
+
+_load_adaptive_config()
+
 # ── Market Hours ──────────────────────────────────────────────
 MARKET_OPEN   = dt_time(9, 15)
 MARKET_CLOSE  = dt_time(15, 30)
 NO_NEW_TRADES = dt_time(15, 00)  #########
+
+
+# ════════════════════════════════════════════════════════════
+#   HELPER: GET TIME WINDOW FOR CURRENT TIME
+# ════════════════════════════════════════════════════════════
+
+def _get_time_window(now: dt_time) -> str:
+    """
+    Get current time window for adaptive multiplier lookup.
+    Examples: "9:15-10:00", "11:30-1:00", "2:00-3:15"
+    """
+    hour = now.hour
+    minute = now.minute
+    total_min = hour * 60 + minute
+    
+    # Define time windows (adjust as needed)
+    if total_min >= 9*60+15 and total_min < 10*60:
+        return "9:15-10:00"
+    elif total_min >= 10*60 and total_min < 11*60+30:
+        return "10:00-11:30"
+    elif total_min >= 11*60+30 and total_min < 13*60:
+        return "11:30-1:00"
+    elif total_min >= 13*60 and total_min < 14*60:
+        return "1:00-2:00"
+    elif total_min >= 14*60 and total_min < 15*60+30:
+        return "2:00-3:30"
+    else:
+        return "other"
 
 
 # ════════════════════════════════════════════════════════════
@@ -783,14 +848,41 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
         return {"action": "WAIT", "reason": f"No live price for {symbol} (WS tick missing)"}
 
     stop_loss = calculate_stop_loss(price, "BUY")
+    
+    # ── Apply Adaptive Confidence Multipliers ────────────
+    base_confidence = stock.get("confidence", MIN_CONFIDENCE)
+    adaptive_confidence = base_confidence
+    
+    # Apply signal confidence multipliers
+    for signal in fired:
+        signal_key = signal["name"].lower().replace(" ", "_")
+        if signal_key in _adaptive_signal_multipliers:
+            mult = _adaptive_signal_multipliers[signal_key]
+            adaptive_confidence *= mult
+    
+    # Apply time window multiplier
+    now = datetime.now().time()
+    time_window = _get_time_window(now)
+    if time_window in _adaptive_time_multipliers:
+        time_mult = _adaptive_time_multipliers[time_window]
+        adaptive_confidence *= time_mult
+    
+    # Apply market regime multiplier
+    adaptive_confidence *= _adaptive_market_multiplier
+    
+    # Cap confidence between 0-100
+    adaptive_confidence = max(0, min(100, adaptive_confidence))
+    
     return {
         "action":    "BUY",
         "symbol":    symbol,
         "price":     round(price, 2),
         "stop_loss": stop_loss,
+        "confidence": round(adaptive_confidence, 1),
         "reason":    (
             f"{fired_count}/{total}: {', '.join(fired_names)} | "
-            f"candle: {', '.join(pattern_hits)} | price={price_src}"
+            f"candle: {', '.join(pattern_hits)} | price={price_src} | "
+            f"adapted_conf={round(adaptive_confidence, 1)}"
         ),
         "signals":   fired_count,
     }
@@ -837,15 +929,42 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
     if not price:
         return {"action": "WAIT", "reason": f"No live price for {symbol}"}
     stop_loss = calculate_stop_loss(price, "BUY")
+    
+    # ── Apply Adaptive Confidence Multipliers (MATH) ────────────
+    base_confidence = stock.get("math_score", 50)
+    adaptive_confidence = base_confidence
+    
+    # Apply signal confidence multipliers
+    for signal in fired:
+        signal_key = signal["name"].lower().replace(" ", "_")
+        if signal_key in _adaptive_signal_multipliers:
+            mult = _adaptive_signal_multipliers[signal_key]
+            adaptive_confidence *= mult
+    
+    # Apply time window multiplier
+    now = datetime.now().time()
+    time_window = _get_time_window(now)
+    if time_window in _adaptive_time_multipliers:
+        time_mult = _adaptive_time_multipliers[time_window]
+        adaptive_confidence *= time_mult
+    
+    # Apply market regime multiplier
+    adaptive_confidence *= _adaptive_market_multiplier
+    
+    # Cap confidence between 0-100
+    adaptive_confidence = max(0, min(100, adaptive_confidence))
+    
     return {
         "action":       "BUY",
         "trade_type":   "MATH",
         "symbol":       symbol,
         "price":        round(price, 2),
         "stop_loss":    stop_loss,
+        "confidence":   round(adaptive_confidence, 1),
         "reason":       (
             f"MATH {fired_count}/{total}: {', '.join(fired_names)} | "
-            f"candle: {', '.join(pattern_hits)} | price={price_src}"
+            f"candle: {', '.join(pattern_hits)} | price={price_src} | "
+            f"adapted_conf={round(adaptive_confidence, 1)}"
         ),
         "signals":      fired_count,
         "risk_pct":     MATH_RISK_PER_TRADE,
@@ -909,7 +1028,7 @@ def _check_all_exits(live_prices: dict[str, float]):
     update_trailing_stop_losses(live_prices)
     check_profit_targets(live_prices)
     _check_sell_signals(live_prices)
-    check_war_room_flip(live_prices)
+    # check_war_room_flip(live_prices)  # DEPRECATED: War Room phased out
     if STRATEGY_TYPE == "INTRADAY":
         squareoff_all_intraday(live_prices)
 
@@ -1068,7 +1187,7 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
                         entry_price    = signal["price"],
                         stop_loss      = signal["stop_loss"],
                         strategy       = signal["reason"],
-                        confidence     = stock.get("confidence", 0),
+                        confidence     = signal.get("confidence", 0),
                     )
                     if trade:
                         open_count += 1
@@ -1099,7 +1218,7 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
                         entry_price    = signal["price"],
                         stop_loss      = signal["stop_loss"],
                         strategy       = signal["reason"],
-                        confidence     = stock.get("math_score", 0),
+                        confidence     = signal.get("confidence", 0),
                         risk_pct = signal.get("risk_pct", MATH_RISK_PER_TRADE),   # or directly MATH_RISK_PER_TRADE
                     )
                     if trade:

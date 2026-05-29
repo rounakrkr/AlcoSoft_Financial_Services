@@ -238,16 +238,29 @@ def _update_daily_stats():
         losers  = total - winners
         gross   = sum(r["pnl"] for r in rows if r["pnl"])
 
+        # Track capital at start (when stats first created)
+        existing = conn.execute("SELECT capital_start FROM daily_stats WHERE date = ?", (today,)).fetchone()
+        capital_start = existing["capital_start"] if existing else None
+        if not capital_start:
+            # First update today — capture starting capital
+            from core.order_executor import _get_available_capital
+            capital_start = _get_available_capital() + gross  # Remove today's P&L to get starting capital
+
+        # Capital at end = current available capital
+        from core.order_executor import _get_available_capital
+        capital_end = _get_available_capital()
+
         conn.execute("""
             INSERT INTO daily_stats
-            (date, total_trades, winning_trades, losing_trades, gross_pnl)
-            VALUES (?, ?, ?, ?, ?)
+            (date, total_trades, winning_trades, losing_trades, gross_pnl, capital_start, capital_end)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(date) DO UPDATE SET
                 total_trades   = excluded.total_trades,
                 winning_trades = excluded.winning_trades,
                 losing_trades  = excluded.losing_trades,
-                gross_pnl      = excluded.gross_pnl
-        """, (today, total, winners, losers, gross))
+                gross_pnl      = excluded.gross_pnl,
+                capital_end    = excluded.capital_end
+        """, (today, total, winners, losers, gross, capital_start, capital_end))
 
 
 def get_today_stats() -> dict:
@@ -314,7 +327,7 @@ def save_briefing(briefing: dict):
 def load_briefing() -> dict | None:
     if not os.path.exists(BRIEFING_PATH):
         return None
-    with open(BRIEFING_PATH, "r") as f:
+    with open(BRIEFING_PATH, "r", encoding="utf-8-sig") as f:
         return json.load(f)
 
 

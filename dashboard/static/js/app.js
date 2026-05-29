@@ -192,7 +192,234 @@ async function fetchAndRender() {
   }
 }
 
+// 🔥 NEW: Fetch and display margin status
+async function updateMarginStatus() {
+  try {
+    const res = await fetch('/api/margin-status');
+    const data = await res.json();
+    
+    const marginCard = document.getElementById('margin-card');
+    if (!marginCard) return;
+    
+    // Show card only if margin is enabled
+    if (!data.margin_enabled) {
+      marginCard.style.display = 'none';
+      return;
+    }
+    
+    marginCard.style.display = 'block';
+    
+    const marginPct = document.getElementById('margin-pct');
+    const marginDetails = document.getElementById('margin-details');
+    
+    if (marginPct) {
+      marginPct.textContent = data.margin_pct.toFixed(1) + '%';
+      // Color based on usage
+      if (data.margin_pct > 80) {
+        marginPct.style.color = '#ff4444'; // Red - dangerous
+      } else if (data.margin_pct > 50) {
+        marginPct.style.color = '#ffaa00'; // Orange - caution
+      } else {
+        marginPct.style.color = '#00dd88'; // Green - safe
+      }
+    }
+    
+    if (marginDetails) {
+      const leverage = data.margin_leverage.toFixed(1);
+      const deployed = data.deployed.toLocaleString('en-IN');
+      const remaining = data.remaining_margin.toLocaleString('en-IN');
+      const status = data.is_over_leveraged ? '⚠️ OVER-LEVERAGED' : '✅ Safe';
+      
+      let txt = `${leverage}x Leverage | Deployed: ₹${deployed} | Remaining: ₹${remaining} | ${status}`;
+      if (data.forced_buy_enabled) {
+        txt = '🔥 FORCED BUY ON | ' + txt;
+      }
+      marginDetails.textContent = txt;
+      
+      // Color the card border based on status
+      if (data.is_over_leveraged) {
+        marginCard.style.borderTop = '3px solid #ff4444';
+      } else if (data.margin_pct > 50) {
+        marginCard.style.borderTop = '3px solid #ffaa00';
+      } else {
+        marginCard.style.borderTop = '3px solid #00dd88';
+      }
+    }
+  } catch (e) {
+    console.error('Margin status fetch error:', e);
+  }
+}
+
+function fmtPct(value) {
+  return value !== null && value !== undefined ? `${parseFloat(value).toFixed(1)}%` : '—';
+}
+
+function renderAdaptiveAlert(item) {
+  return `<div class="alert-item ${item.level}">
+    ${item.message}
+  </div>`;
+}
+
+function renderAdaptiveTableRow(cells) {
+  return `<tr>${cells.map((cell) => `<td>${cell}</td>`).join('')}</tr>`;
+}
+
+async function fetchAdaptiveData() {
+  try {
+    const res = await fetch('/api/adaptive');
+    const data = await res.json();
+    if (!data.ok) return;
+
+    const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    set('adaptive-winrate', fmtPct(data.overall_win_rate));
+    set('adaptive-market', `${data.config_summary.market_regime_multiplier || 1.0}x`);
+    set('adaptive-changes', data.config_history.length || 0);
+    set('adaptive-confidence', (data.average_confidence || 0).toFixed(2));
+
+    // Determine if we have adaptive data
+    const hasSignals = data.signals && data.signals.length > 0;
+    const hasWindows = data.time_windows && data.time_windows.length > 0;
+    const hasSymbols = data.symbols && data.symbols.length > 0;
+
+    const signalsBody = document.getElementById('signals-body');
+    if (signalsBody) {
+      signalsBody.innerHTML = hasSignals
+        ? data.signals.map((signal) => {
+            const current = data.multiplier_history.find((row) => row.multiplier_type === 'signal' && row.multiplier_key === signal.signal_name.toLowerCase().replace(/\s+/g, '_')) || {};
+            return renderAdaptiveTableRow([
+              `<strong>${signal.signal_name}</strong>`,
+              signal.total_trades || 0,
+              fmtPct(signal.win_rate),
+              signal.avg_rr?.toFixed(2) || '—',
+              `${signal.avg_drawdown?.toFixed(1) || '—'}%`,
+              current.multiplier_value?.toFixed(2) || '1.00',
+              current.confidence_strength?.toFixed(2) || '0.00',
+            ]);
+          }).join('')
+        : '<tr><td colspan="7" class="empty">⏳ Waiting for real trades... Adaptive multipliers will appear after signals accumulate enough data (min 10 trades)</td></tr>';
+    }
+
+    const windowsBody = document.getElementById('windows-body');
+    if (windowsBody) {
+      windowsBody.innerHTML = hasWindows
+        ? data.time_windows.map((window) => {
+            const strength = window.win_rate >= 55 ? 'Strong' : window.win_rate < 50 ? 'Weak' : 'Neutral';
+            return renderAdaptiveTableRow([
+              window.time_window,
+              window.trade_count || 0,
+              fmtPct(window.win_rate),
+              `₹${(window.avg_pnl || 0).toFixed(2)}`,
+              fmtPct(window.failure_rate),
+              strength,
+            ]);
+          }).join('')
+        : '<tr><td colspan="6" class="empty">⏳ Adaptive system learning time windows... Execute trades in different time periods to build window analysis (min 20 trades per window)</td></tr>';
+    }
+
+    const symbolsBody = document.getElementById('symbols-body');
+    if (symbolsBody) {
+      symbolsBody.innerHTML = hasSymbols
+        ? data.symbols.map((symbol) => {
+            const current = data.multiplier_history.find((row) => row.multiplier_type === 'symbol_sl' && row.multiplier_key === symbol.symbol);
+            return renderAdaptiveTableRow([
+              symbol.symbol,
+              symbol.volatility_profile || '—',
+              fmtPct(symbol.sl_hit_freq),
+              fmtPct(symbol.recovery_prob),
+              `${symbol.avg_drawdown?.toFixed(1) || '—'}%`,
+              current?.multiplier_value?.toFixed(2) || '1.00',
+            ]);
+          }).join('')
+        : '<tr><td colspan="6" class="empty">⏳ Adaptive system learning symbol behavior... Trade multiple symbols to build behavior profiles (min 10 trades per symbol)</td></tr>';
+    }
+
+    const historyBody = document.getElementById('history-body');
+    if (historyBody) {
+      historyBody.innerHTML = data.change_history.length
+        ? data.change_history.map((row) => renderAdaptiveTableRow([
+            row.multiplier_type,
+            row.multiplier_key,
+            row.previous_value !== null ? row.previous_value.toFixed(2) : '—',
+            row.new_value.toFixed(2),
+            row.reason_source || 'adaptive_update',
+            new Date(row.timestamp).toLocaleString('en-IN', { hour12: false }),
+          ])).join('')
+        : '<tr><td colspan="6" class="empty">📊 Multiplier history will appear here as the adaptive system updates multipliers based on trade outcomes</td></tr>';
+    }
+
+    const alertsList = document.getElementById('alerts-list');
+    if (alertsList) {
+      alertsList.innerHTML = data.alerts.length
+        ? data.alerts.map((alert) => renderAdaptiveAlert(alert)).join('')
+        : '<div class="empty">✅ No adaptive alerts — system is functioning normally</div>';
+    }
+
+    const reflection = data.reflection || {};
+    if (reflection.one_line_summary) {
+      const refEmpty = document.getElementById('reflection-empty');
+      const refContent = document.getElementById('reflection-content');
+      if (refEmpty && refContent) {
+        refEmpty.style.display = 'none';
+        refContent.style.display = 'block';
+      }
+      const refSummary = document.getElementById('ref-summary');
+      if (refSummary) refSummary.textContent = reflection.one_line_summary || '—';
+      const refWorked = document.getElementById('ref-worked');
+      if (refWorked) refWorked.textContent = reflection.what_worked || '—';
+      const refFailed = document.getElementById('ref-failed');
+      if (refFailed) refFailed.textContent = reflection.what_failed || '—';
+      const gradeEl = document.getElementById('ref-grade');
+      if (gradeEl) {
+        gradeEl.textContent = reflection.overall_grade || '—';
+        gradeEl.className = reflection.overall_grade === 'A' ? 'grade-a' : reflection.overall_grade === 'B' ? 'grade-b' : reflection.overall_grade === 'C' ? 'grade-c' : 'grade-d';
+      }
+      const adjEl = document.getElementById('ref-adjustments');
+      if (adjEl) {
+        const adjustments = reflection.tomorrow_adjustments || [];
+        adjEl.innerHTML = adjustments.length ? adjustments.map((a) => `🔧 ${a}`).join('<br>') : '—';
+      }
+    }
+  } catch (e) {
+    console.error('Adaptive dashboard fetch error:', e);
+  }
+}
+
+// Emergency Square Off All
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('squareoff-btn');
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      if (!confirm('EMERGENCY SQUARE OFF ALL POSITIONS?\n\nThis will immediately close every open position at market price.\n\nContinue?')) {
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = '⏳ Closing...';
+
+      try {
+        const res = await fetch('/api/emergency-squareoff', { method: 'POST' });
+        const data = await res.json();
+
+        if (data.ok) {
+          alert(`Emergency squareoff complete!\n\nClosed: ${data.closed_count}\nFailed: ${data.failed_count}`);
+        } else {
+          alert(`Error: ${data.error}`);
+        }
+      } catch (e) {
+        alert(`Network error: ${e.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🚨 SQUARE OFF ALL';
+      }
+    });
+  }
+});
+
 updateClock();
 setInterval(updateClock, 1000);
 fetchAndRender();
 setInterval(fetchAndRender, 5000);
+updateMarginStatus();
+setInterval(updateMarginStatus, 5000);
+fetchAdaptiveData();
+setInterval(fetchAdaptiveData, 10000);

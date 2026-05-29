@@ -1,0 +1,239 @@
+================================================================================
+ALCOSOFT TRADING SYSTEM - COMPLETE RESET SUMMARY
+Date: 2026-05-29
+Status: FRESH START - ALL TEST DATA CLEARED
+================================================================================
+
+CURRENT SYSTEM STATE (Fresh Start)
+==================
+Main Dashboard: http://localhost:5000/
+  - Total Trades: 0
+  - Winning Trades: 0
+  - Losing Trades: 0
+  - Gross P&L: ₹0.0
+  - Win Rate: 0%
+  - Open Positions: 0
+  - Capital: ₹100,000
+
+Cognition Lab: http://localhost:5000/cognition/
+  - Cognition Cycles: 0
+  - Active Hypotheses: 0
+  - Prediction Reviews: 0
+  - LLM Provider: OpenRouter
+  - Status: Active & Ready
+
+Navigation:
+  ✓ Dashboard → /
+  ✓ Cognition Lab → /cognition
+  ✓ Settings → /settings
+
+================================================================================
+DATABASES RESET (SCHEMA PRESERVED, DATA CLEARED)
+================================================================================
+
+[1] data/alcosoft.db
+    ├── trades: 0 rows (was 113)
+    ├── daily_stats: 0 rows (was 1)
+    ├── war_room_log: 0 rows (legacy table)
+    ├── cognition_cycles: 0 rows (ready for production)
+    ├── cognition_daily_reflections: 0 rows
+    ├── cognition_hypotheses: 0 rows
+    └── cognition_reviews: 0 rows
+
+[2] data/reflection.db (Adaptive Learning)
+    ├── signal_performance: 0 rows (was 20)
+    ├── symbol_behavior: 0 rows (was 8)
+    ├── time_window_performance: 0 rows (was 3)
+    ├── trade_records: 0 rows (was 113)
+    ├── multiplier_history: 0 rows (ready for production)
+    ├── multiplier_change_log: 0 rows
+    └── config_history: 0 rows
+
+[3] data/reflection_statistics.db
+    ├── market_observations: 0 rows (was 16)
+    └── adaptive_config_history: 0 rows
+
+================================================================================
+JSON DATA FILES CLEARED
+================================================================================
+
+✓ data/positions.json - REMOVED
+✓ data/session_briefing.json - REMOVED
+✓ data/live_capital.json - REMOVED
+✓ data/reflections/ - CLEARED (directory recreated)
+✓ data/reflection_snapshots/ - CLEARED (directory recreated)
+
+================================================================================
+CONFIGURATION PRESERVED
+================================================================================
+
+config/trading_settings.json - INTACT
+  ├── Risk settings
+  ├── Strategy parameters
+  ├── Screener config
+  ├── Market data settings
+  ├── Scheduling config
+  └── Adaptive learning config
+
+core/trading_settings.py - UPDATED
+  ├── "war_room_gating" - REMOVED (unused)
+  ├── "war_room_picks" → "cognition_picks"
+  ├── "war_room_interval_minutes" → "cognition_cycle_interval_minutes"
+  ├── UI Labels updated (War Room → AI Agent/Cognition)
+  └── Hints updated for current terminology
+
+================================================================================
+DASHBOARD WIDGETS - WHERE THEY ARE
+================================================================================
+
+MAIN DASHBOARD (/)
+  ├── 📊 Stats Cards
+  │   ├── Total Trades
+  │   ├── Win Rate
+  │   ├── Gross P&L
+  │   ├── Open Positions
+  │   └── Margin Status (if margin enabled)
+  │
+  ├── 📈 Charts
+  │   ├── P&L Bars (daily trade results)
+  │   ├── Win/Loss Pie Chart
+  │   ├── Cumulative P&L Line Chart
+  │   └── System Status (circuit breakers, feed health)
+  │
+  ├── 💼 Open Positions Table
+  │   (Empty now - displays when positions exist)
+  │
+  ├── 📋 Today's Stocks (Briefing)
+  │   (Populated by morning screener when it runs)
+  │
+  ├── 📊 Recent Trades Table
+  │   (Filled as trades are executed)
+  │
+  ├── 🤖 AI Agent Decisions (formerly War Room Log)
+  │   (Shows decision history)
+  │
+  └── 🦉 Owl Alpha - Daily Reflection
+      (Appears after 3:35 PM market close)
+
+COGNITION LAB (/cognition)
+  ├── 🧠 System Status Card
+  │   ├── Cognition Cycles Today
+  │   ├── Active Hypotheses
+  │   ├── Prediction Reviews
+  │   └── LLM Provider Status
+  │
+  ├── 🎯 Prediction Accuracy Card
+  │   ├── Total Predictions
+  │   ├── Successful Predictions
+  │   ├── Failed Predictions
+  │   └── Accuracy Percentage
+  │
+  ├── 💡 Active Hypotheses Card
+  │   (Top 3 hypotheses with confidence scores)
+  │
+  └── 📊 Today's Reflection Card
+      ├── Summary
+      ├── Regime Behavior
+      ├── Confidence Level
+      ├── Watch Themes
+      └── Unresolved Questions
+
+SETTINGS (/settings)
+  ├── 💰 Risk & Exits Tab
+  │   ├── Stop loss settings
+  │   ├── Margin controls
+  │   ├── Risk per trade
+  │   └── Daily loss circuit breaker
+  │
+  ├── ⚡ Strategy Tab
+  │   ├── Strategy type
+  │   ├── Max open positions
+  │   ├── Confidence thresholds
+  │   ├── AI strategy agreement
+  │   └── Math strategy agreement
+  │
+  ├── 🌅 Screener Tab
+  │   ├── Total stocks to scan
+  │   └── Cognition picks per run
+  │
+  ├── 📡 Market Data Tab
+  │   ├── Candle interval
+  │   ├── WebSocket health checks
+  │   └── Scan log frequency
+  │
+  └── ⏰ Scheduling Tab
+      └── Cognition cycle interval
+
+================================================================================
+WHAT WAS CLEARED & WHY
+================================================================================
+
+Test Trade History (113 trades)
+  - 101 paper trades (test data)
+  - 12 live trades (test data from previous testing)
+  - ✓ CLEARED - Fresh system should start at 0
+
+Adaptive Learning Test Data (47 rows)
+  - signal_performance: 20 test rows
+  - symbol_behavior: 8 test rows
+  - time_window_performance: 3 test rows
+  - trade_records mirror: 113 test rows
+  - market_observations: 16 test rows
+  - ✓ CLEARED - Production will accumulate real data
+
+Session State Files
+  - positions.json: Previous positions
+  - session_briefing.json: Previous stock picks
+  - live_capital.json: Previous capital tracking
+  - ✓ CLEARED - Fresh system resets on next run
+
+PRESERVED FOR PRODUCTION
+  ✓ Database schemas (all tables created, empty)
+  ✓ Configuration (trading_settings.json)
+  ✓ Application code (fully functional)
+  ✓ API endpoints (all tested)
+  ✓ Cognition Lab (ready to track real learning)
+
+================================================================================
+API ENDPOINTS - READY FOR PRODUCTION
+================================================================================
+
+Main Dashboard:
+  GET /api/status          → Returns daily stats, positions, trades
+  GET /api/settings        → Returns current config
+  POST /api/settings       → Updates config
+  GET /api/margin-status   → Margin deployment metrics
+  POST /api/emergency-squareoff → Close all positions immediately
+
+Cognition Lab:
+  GET /cognition/status            → System status
+  GET /cognition/cycles/today      → Today's observation cycles
+  GET /cognition/hypotheses        → Active hypotheses
+  GET /cognition/predictions/accuracy → Accuracy metrics
+  GET /cognition/reflection/today  → Daily reflection summary
+  GET /cognition/anomalies/today   → Detected anomalies
+  GET /cognition/patterns/today    → Market patterns
+  GET /cognition/llm-status        → LLM provider status
+
+================================================================================
+READY FOR PRODUCTION TRADING
+================================================================================
+
+✅ System is now in FRESH START state
+✅ All test data removed
+✅ All schemas intact and ready
+✅ Configuration preserved and updated
+✅ API endpoints tested and working
+✅ Cognition Lab ready for real data accumulation
+✅ Emergency squareoff button ready
+✅ Margin monitoring active
+✅ Capital tracking initialized
+
+Next Steps:
+1. Configure .env file with API keys
+2. Set TRADING_MODE=PAPER or LIVE
+3. Run the trading system
+4. Monitor dashboard at http://localhost:5000/
+5. View learning at http://localhost:5000/cognition/
+
+================================================================================

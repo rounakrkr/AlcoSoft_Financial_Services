@@ -29,7 +29,8 @@ from core.trading_settings import get as cfg
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# ── NIFTY 50 Stock Universe ───────────────────────────────────
+# ── Stock Universe (Configurable) ────────────────────────────
+# Add or remove stocks here — screener auto-adjusts
 NIFTY_50 = [
     "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
     "HINDUNILVR", "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK",
@@ -57,11 +58,12 @@ def run_morning_screener():
     """
     Called at 8:45 AM.
 
-    Step 1: Fetch indicators for all NIFTY 50 stocks.
+    Step 1: Fetch indicators for all available stocks (NIFTY_50 list).
     Step 2: Score every stock mathematically.
-    Step 3: Top N (default 25) scored by math.
-    Step 4: Top 4 → War Room (AI debate). Remaining 21 → math-only watchlist.
-    Step 5: Write briefing JSON.
+    Step 3: Gemini picks N best from ALL stocks (N = war_room_picks setting, configurable).
+    Step 4: From remaining stocks, pick best (screener_total - N) by math score.
+    Step 5: Total = N (AI) + (screener_total - N) (Math) = screener_total stocks for trading.
+    Step 6: Write briefing JSON.
     """
     logger.info("Morning screener starting...")
 
@@ -72,58 +74,60 @@ def run_morning_screener():
 
     logger.info(f"Fetched data for {len(summaries)} stocks.")
 
+    # Global market_bias NOT used for Gemini (AI analyzes independently)
+    # It's still calculated for reference/logging only
     market_bias = _get_market_bias()
-    logger.info(f"Market bias: {market_bias}")
 
-    # ── Math score all stocks ─────────────────────────────────
+    # ── Math score ALL available stocks ──────────────────────
     scored = _score_all_stocks(summaries)
+    total_stocks = len(scored)
+    logger.info(f"Scored {total_stocks} stocks")
 
-    screener_total, war_room_picks, math_watchlist_size = _screener_counts()
+    screener_total, war_room_count, _ = _screener_counts()
 
-    # ── Top N scored pool ─────────────────────────────────────
-    top_pool = scored[:screener_total]
-    if len(top_pool) < screener_total:
-        logger.warning(
-            f"Only {len(top_pool)}/{screener_total} stocks scored "
-            f"(yfinance may have failed for some symbols)."
-        )
+    # ── Step 1: Gemini picks N best from ALL available stocks ──
+    # (Don't limit to top screener_total — let Gemini scan all for true best picks)
+    all_candidates = scored  # ALL scored stocks
+    allowed_symbols = {s["symbol"] for s in all_candidates}
 
-    war_room_candidates = top_pool[:war_room_picks]
-    math_only           = top_pool[war_room_picks:war_room_picks + math_watchlist_size]
+    # Gemini analyzes independently - NO global market bias influence
+    ai_war_room_picks = _gemini_pick_stocks(all_candidates)
+    ai_war_room_picks = _validate_screener_picks(
+        ai_war_room_picks, allowed_symbols, all_candidates
+    )
+    if not ai_war_room_picks:
+        logger.warning(f"Gemini screener failed. Using math fallback for top {war_room_count}.")
+        ai_war_room_picks = _fallback_picks(scored[:war_room_count])
+
+    logger.info(f"War Room picks (by AI from all {total_stocks} stocks): {[p['ticker'] for p in ai_war_room_picks]}")
+
+    # ── Step 2: From remaining stocks, pick best (total - N) by math ──
+    ai_picked_symbols = {s.get("symbol", s.get("ticker")) for s in ai_war_room_picks}
+    remaining_stocks = [s for s in scored if s["symbol"] not in ai_picked_symbols]
+    
+    math_watchlist_count = screener_total - len(ai_war_room_picks)
+    watchlist_candidates = remaining_stocks[:math_watchlist_count]
 
     # Add per-stock market bias to watchlist
     watchlist = [{
         "ticker":         s["symbol"],
-        "trading_symbol": s["symbol"],   # fixed to -EQ after token resolve in main.py
+        "trading_symbol": s["symbol"],
         "direction":      "WATCH",
         "confidence":     0,
         "math_score":     s["score"],
-        "market_bias":    _get_stock_market_bias(s["symbol"]),  # Per-stock bias
+        "market_bias":    _get_stock_market_bias(s["symbol"]),
         "entry_price":    0.0,
         "stop_loss":      0.0,
         "reason":         f"Math score: {s['score']} | RSI: {s['rsi']} | Vol: {s['vol_ratio']}x",
-    } for s in math_only]
+    } for s in watchlist_candidates]
 
     logger.info(
-        f"Math watchlist ({len(watchlist)} stocks, no overlap with War Room): "
+        f"Math watchlist ({len(watchlist)} stocks from remaining {len(remaining_stocks)}): "
         f"{[s['ticker'] for s in watchlist]}"
     )
 
-    # ── Top 4 → War Room (AI debate) ──────────────────────────
-    allowed_symbols = {s["symbol"] for s in war_room_candidates}
-
-    war_room_picks = _gemini_pick_stocks(war_room_candidates, market_bias)
-    war_room_picks = _validate_screener_picks(
-        war_room_picks, allowed_symbols, war_room_candidates
-    )
-    if not war_room_picks:
-        logger.warning("Gemini screener failed. Using math fallback for top 4.")
-        war_room_picks = _fallback_picks(war_room_candidates)
-
-    logger.info(f"War Room picks: {[p['ticker'] for p in war_room_picks]}")
-
     # Add per-stock market bias to war room stocks
-    for stock in war_room_picks:
+    for stock in ai_war_room_picks:
         stock["market_bias"] = _get_stock_market_bias(stock.get("ticker", stock.get("symbol", "")))
 
     # ── Write briefing ────────────────────────────────────────
@@ -131,16 +135,17 @@ def run_morning_screener():
         "generated_at":    datetime.now().isoformat(),
         "session_type":    "MORNING_SCREENER",
         "market_bias":     market_bias,
-        "approved_stocks": war_room_picks,   # 4 — War Room + full risk
-        "watchlist":       watchlist,        # 21 — math only (excludes war room 4)
+        "approved_stocks": ai_war_room_picks,   # N — picked by AI from all available stocks
+        "watchlist":       watchlist,           # (screener_total-N) — best remaining by math
         "avoid_list":      [],
     }
 
     save_briefing(briefing)
     logger.info(
-        f"Morning screener done.\n"
-        f"  War Room  ({len(war_room_picks)}): {[p['ticker'] for p in war_room_picks]}\n"
-        f"  Watchlist ({len(watchlist)}): {[s['ticker'] for s in watchlist]}"
+        f"Morning screener done (AI from all {total_stocks} stocks, Math from remaining).\n"
+        f"  War Room  ({len(ai_war_room_picks)}): {[p['ticker'] for p in ai_war_room_picks]}\n"
+        f"  Watchlist ({len(watchlist)}): {[s['ticker'] for s in watchlist]}\n"
+        f"  Total trading stocks: {len(ai_war_room_picks) + len(watchlist)}"
     )
 
 
@@ -203,7 +208,7 @@ def _score_all_stocks(summaries: list[dict]) -> list[dict]:
 # ════════════════════════════════════════════════════════════
 
 def _fetch_all_summaries() -> list[dict]:
-    """Fetches prev day OHLCV + indicators for all NIFTY 50."""
+    """Fetches prev day OHLCV + indicators for all stocks in NIFTY_50 list."""
     summaries = []
 
     for symbol in NIFTY_50:
@@ -292,9 +297,12 @@ def _get_stock_market_bias(symbol: str) -> str:
     except Exception:
         return "NEUTRAL"
 
-
-def _gemini_pick_stocks(candidates: list[dict], market_bias: str) -> list[dict]:
-    """Gemini ranks math top-N; picks must stay in candidates list only."""
+def _gemini_pick_stocks(candidates: list[dict]) -> list[dict]:
+    """
+    Gemini analyzes ALL candidate stocks by NEWS/CATALYSTS independently.
+    Picks N best (configurable via war_room_picks setting).
+    No global bias - AI makes unbiased decisions based on merit.
+    """
     try:
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
         model = genai.GenerativeModel(
@@ -302,8 +310,9 @@ def _gemini_pick_stocks(candidates: list[dict], market_bias: str) -> list[dict]:
             system_instruction = _screener_system_prompt(),
         )
 
-        user_message = _build_screener_message(candidates, market_bias)
-        response     = model.generate_content(user_message)
+        user_message = _build_screener_message(candidates)
+        # No timeout set — let Gemini take as long as needed for analysis
+        response = model.generate_content(user_message)
         raw          = response.text.strip()
 
         raw = raw.replace("```json", "").replace("```", "").strip()
@@ -412,11 +421,10 @@ OUTPUT JSON ONLY:
 """.strip()
 
 
-def _build_screener_message(candidates: list[dict], market_bias: str) -> str:
+def _build_screener_message(candidates: list[dict]) -> str:
     n = int(cfg("screener", "war_room_picks", 4))
     symbols = ", ".join(s["symbol"] for s in candidates)
     lines = [
-        f"MARKET BIAS: {market_bias}",
         f"TODAY'S CANDIDATES ({len(candidates)}): {symbols}",
         "Pick based on NEWS/CATALYSTS/SECTOR MOMENTUM, NOT just math scores.",
         "",

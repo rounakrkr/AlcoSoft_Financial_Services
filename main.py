@@ -86,8 +86,9 @@ from core.state_manager import initialize_db, recover_state, load_briefing, save
 from core.data_fetcher import start_live_feed, stop_live_feed
 from core.strategy import run_strategy_loop
 from screener.morning_screener import run_morning_screener
-from war_room.orchestrator import run_war_room
+# from war_room.orchestrator import run_war_room  # DEPRECATED: Code preserved for reference
 from reflection.reflection_loop import run_reflection_loop
+from reflection.observation_loop import observation_loop_main
 
 
 # ── Time Constants ────────────────────────────────────────────
@@ -208,7 +209,7 @@ async def startup():
             purge_invalid_token_cache()
             logger.info(
                 f"Subscribing live feed: {len(all_stocks)} symbols "
-                f"({len(approved)} war room + {len(watchlist)} math)"
+                f"({len(approved)} legacy + {len(watchlist)} math/technical)"
             )
             start_live_feed(all_stocks)
 
@@ -218,8 +219,9 @@ async def startup():
             save_briefing(briefing)
 
             logger.info(f"Live feed active for {len(all_stocks)} symbols.")
-            logger.info(f"  War Room : {approved}")
-            logger.info(f"  Watchlist: {watchlist}")
+            if approved:
+                logger.info(f"  Legacy stocks : {approved}")
+            logger.info(f"  Math watchlist: {watchlist}")
         else:
             logger.warning("Briefing found but no stocks to trade. Waiting for updates...")
     else:
@@ -240,6 +242,22 @@ async def startup():
 
 
 # ════════════════════════════════════════════════════════════
+#   OBSERVATION CYCLE WRAPPER
+# ════════════════════════════════════════════════════════════
+
+async def run_observation_cycle():
+    """
+    Wrapper for scheduler to run observation cycle.
+    Called every 15 minutes by scheduler.
+    """
+    try:
+        from reflection.observation_loop import run_observation_cycle as observation_run
+        await observation_run()
+    except Exception as e:
+        logger.error(f"Observation cycle error: {e}", exc_info=True)
+
+
+# ════════════════════════════════════════════════════════════
 #   SCHEDULER SETUP
 # ════════════════════════════════════════════════════════════
 
@@ -256,17 +274,30 @@ def setup_scheduler() -> AsyncIOScheduler:
         max_instances=1,
     )
 
-    # War room — every N minutes during market hours
-    from core.trading_settings import get as cfg
-    war_room_interval = int(cfg("scheduling", "war_room_interval_minutes", 30))
-    scheduler.add_job(                                   #####
-        run_war_room,
+    # Observation loop — every 15 minutes during market hours
+    # Continuous market awareness + signal reliability tracking
+    scheduler.add_job(
+        run_observation_cycle,
         trigger="interval",
-        minutes=war_room_interval,
-        id="war_room",
-        name="AlcoSoft War Room",
+        minutes=15,
+        id="observation",
+        name="Market Observation Loop",
         max_instances=1,
     )
+
+    # War room — every N minutes during market hours
+    # DEPRECATED: War Room phased out in favor of Cognition Loop architecture.
+    # Code preserved in war_room/ for reference. Can be re-enabled by uncommenting below.
+    # from core.trading_settings import get as cfg
+    # war_room_interval = int(cfg("scheduling", "war_room_interval_minutes", 30))
+    # scheduler.add_job(
+    #     run_war_room,
+    #     trigger="interval",
+    #     minutes=war_room_interval,
+    #     id="war_room",
+    #     name="AlcoSoft War Room",
+    #     max_instances=1,
+    # )
 
     # Reflection loop — 3:35 PM daily
     scheduler.add_job(
@@ -282,7 +313,7 @@ def setup_scheduler() -> AsyncIOScheduler:
     logger.info(
         f"Scheduler started:\n"
         f"   Morning screener  : 08:45 AM daily\n"
-        f"   War room          : Every {war_room_interval} minutes\n"
+        f"   Observation loop  : Every 15 minutes\n"
         f"   Reflection loop   : 03:35 PM daily"
     )
     return scheduler

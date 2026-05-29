@@ -34,10 +34,38 @@ app = Flask(
     static_folder="static",
     static_url_path="/static",
 )
+app.config['TEMPLATES_AUTO_RELOAD'] = True
+app.jinja_env.auto_reload = True
 
 DB_PATH         = os.path.join(_ROOT, "data", "alcosoft.db")
+REFLECTION_DB_PATH = os.path.join(_ROOT, "data", "reflection.db")
 BRIEFING_PATH   = os.path.join(_ROOT, "data", "session_briefing.json")
 REFLECTIONS_DIR = os.path.join(_ROOT, "data", "reflections")
+
+# Adaptive Learning System
+try:
+    from reflection.reflection_engine import (
+        get_all_signal_stats,
+        get_all_time_window_stats,
+        get_all_symbol_stats,
+    )
+    from reflection.adaptive_config_updater import get_adaptive_config_summary
+    ADAPTIVE_AVAILABLE = True
+except ImportError:
+    ADAPTIVE_AVAILABLE = False
+
+
+def _reflection_db_query(query: str, params: tuple = ()) -> list:
+    if not os.path.exists(REFLECTION_DB_PATH):
+        return []
+    try:
+        conn = sqlite3.connect(REFLECTION_DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
 
 
 def _db_query(query: str, params: tuple = ()) -> list:
@@ -106,7 +134,7 @@ def api_status():
 
     briefing = {}
     if os.path.exists(BRIEFING_PATH):
-        with open(BRIEFING_PATH, encoding="utf-8") as f:
+        with open(BRIEFING_PATH, encoding="utf-8-sig") as f:
             briefing = json.load(f)
 
     war_log = _db_query("""
@@ -120,7 +148,7 @@ def api_status():
     reflection = {}
     ref_path = os.path.join(REFLECTIONS_DIR, f"{today}.json")
     if os.path.exists(ref_path):
-        with open(ref_path, encoding="utf-8") as f:
+        with open(ref_path, encoding="utf-8-sig") as f:
             reflection = json.load(f)
 
     total = stats.get("total_trades", 0)
@@ -131,7 +159,7 @@ def api_status():
     capital_display = float(cfg("risk", "paper_capital", 10000))
     if os.path.exists(cap_path):
         try:
-            with open(cap_path, encoding="utf-8") as f:
+            with open(cap_path, encoding="utf-8-sig") as f:
                 cap_data = json.load(f)
                 capital_display = cap_data.get("capital", capital_display)
         except Exception:
@@ -208,6 +236,195 @@ def api_status():
             },
         },
     })
+
+
+@app.route("/api/margin-status")
+def api_margin_status():
+    """
+    🔥 NEW: Margin monitoring endpoint.
+    Returns current margin deployment status.
+    """
+    try:
+        from core.order_executor import get_margin_status
+        margin = get_margin_status()
+        allow_margin = cfg("risk", "allow_margin", False)
+        forced_buy = cfg("risk", "forced_buy_margin", False)
+
+        return jsonify({
+            "ok": True,
+            "margin_enabled": allow_margin,
+            "forced_buy_enabled": forced_buy,
+            "real_capital": margin.get("real_capital", 0),
+            "margin_leverage": margin.get("margin_leverage", 1.0),
+            "total_available": margin.get("total_available_with_margin", 0),
+            "deployed": margin.get("current_position_value", 0),
+            "unrealized_pnl": margin.get("unrealized_pnl", 0),
+            "effective_capital": margin.get("effective_capital", 0),
+            "margin_used": margin.get("margin_used", 0),
+            "margin_pct": round(margin.get("margin_pct", 0), 2),
+            "remaining_margin": margin.get("remaining_margin", 0),
+            "is_over_leveraged": margin.get("is_over_leveraged", False),
+        })
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "margin_enabled": cfg("risk", "allow_margin", False),
+            "forced_buy_enabled": cfg("risk", "forced_buy_margin", False),
+        })
+
+
+@app.route("/api/emergency-squareoff", methods=["POST"])
+def api_emergency_squareoff():
+    """
+    🚨 EMERGENCY: Close all open positions immediately.
+    Requires POST to prevent accidental clicks.
+    """
+    import asyncio
+    try:
+        from core.emergency_squareoff import emergency_square_off_all
+
+        result = asyncio.run(emergency_square_off_all())
+        return jsonify({
+            "ok": True,
+            "status": result["status"],
+            "closed_count": result["closed_count"],
+            "failed_count": result["failed_count"],
+            "timestamp": result["timestamp"],
+            "details": result["details"],
+        })
+    except Exception as e:
+        import logging
+        logging.error(f"Emergency squareoff failed: {e}", exc_info=True)
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+        }), 500
+
+
+@app.route("/api/adaptive")
+def api_adaptive():
+    if not ADAPTIVE_AVAILABLE:
+        return jsonify({"ok": False, "error": "Adaptive engine not available"}), 503
+
+    signals = get_all_signal_stats()
+    windows = get_all_time_window_stats()
+    symbols = get_all_symbol_stats()
+    config_summary = get_adaptive_config_summary()
+
+    total_trades = sum(s.get("total_trades", 0) for s in signals)
+    total_wins = sum(s.get("winning_trades", 0) for s in signals)
+    overall_win_rate = round((total_wins / total_trades * 100) if total_trades > 0 else 0.0, 1)
+
+    multiplier_rows = _reflection_db_query(
+        "SELECT multiplier_type, multiplier_key, multiplier_value, raw_calculated_value, sample_size, confidence_strength, last_updated "
+        "FROM multiplier_history ORDER BY multiplier_type, multiplier_key"
+    )
+
+    change_history = _reflection_db_query(
+        "SELECT multiplier_type, multiplier_key, previous_value, new_value, raw_calculated_value, "
+        "sample_size, confidence_strength, reason_source, timestamp "
+        "FROM multiplier_change_log ORDER BY timestamp DESC LIMIT 50"
+    )
+
+    config_history = _reflection_db_query(
+        "SELECT config_date, changes_made, timestamp "
+        "FROM config_history ORDER BY timestamp DESC LIMIT 20"
+    )
+
+    reflection = {}
+    ref_path = os.path.join(REFLECTIONS_DIR, f"{datetime.now().strftime('%Y-%m-%d')}.json")
+    if os.path.exists(ref_path):
+        try:
+            with open(ref_path, encoding="utf-8-sig") as f:
+                reflection = json.load(f)
+        except Exception:
+            reflection = {}
+
+    avg_confidence = 0.0
+    if multiplier_rows:
+        avg_confidence = round(
+            sum(row.get("confidence_strength", 0) for row in multiplier_rows) / len(multiplier_rows),
+            2,
+        )
+
+    alerts = []
+    for row in multiplier_rows:
+        if row.get("sample_size", 0) < 20 and row.get("confidence_strength", 0) < 0.3:
+            alerts.append({
+                "level": "warning",
+                "message": f"Low confidence: {row.get('multiplier_type')} {row.get('multiplier_key')} only has {row.get('sample_size', 0)} samples",
+            })
+        if row.get("multiplier_value", 0) < 0.6 and row.get("sample_size", 0) < 30:
+            alerts.append({
+                "level": "danger",
+                "message": f"Multiplier suppressed fast: {row.get('multiplier_type')} {row.get('multiplier_key')} dropped to {row.get('multiplier_value', 0):.2f} with low samples",
+            })
+
+    strong_periods = [w for w in windows if w.get("win_rate", 0) >= 55]
+    weak_periods = [w for w in windows if w.get("win_rate", 0) < 50]
+
+    # Build adaptive alerts
+    for stats in signals:
+        if stats.get("total_trades", 0) < 10 and stats.get("win_rate", 0) < 50:
+            alerts.append({
+                "level": "warning",
+                "message": f"Low sample size: {stats.get('signal_name')} has only {stats.get('total_trades', 0)} trades",
+            })
+        if stats.get("win_rate", 0) < 40:
+            alerts.append({
+                "level": "danger",
+                "message": f"{stats.get('signal_name')} suppressed due to low win rate ({stats.get('win_rate', 0):.1f}%)",
+            })
+
+    for symbol in symbols:
+        if symbol.get("sl_hit_freq", 0) > 60 and symbol.get("volatility_profile", "").upper() == "HIGH":
+            alerts.append({
+                "level": "alert",
+                "message": f"Abnormal volatility: {symbol.get('symbol')} has SL hit frequency {symbol.get('sl_hit_freq', 0):.1f}%",
+            })
+
+    return jsonify({
+        "ok": True,
+        "signals": signals,
+        "time_windows": windows,
+        "symbols": symbols,
+        "config_summary": config_summary,
+        "overall_win_rate": overall_win_rate,
+        "multiplier_history": multiplier_rows,
+        "change_history": change_history,
+        "config_history": config_history,
+        "average_confidence": avg_confidence,
+        "strong_periods": strong_periods,
+        "weak_periods": weak_periods,
+        "alerts": alerts,
+        "reflection": reflection,
+    })
+
+
+# ════════════════════════════════════════════════════════════
+#   COGNITION LAB BLUEPRINT — Separate Research Dashboard
+# ════════════════════════════════════════════════════════════
+#
+# Creates dedicated routes for cognitive observation insights:
+# - /cognition/status — current cognition system status
+# - /cognition/cycles/today — today's observation cycles
+# - /cognition/hypotheses — active hypotheses
+# - /cognition/predictions/accuracy — prediction accuracy metrics
+# - /cognition/daily-reflection — today's reflection
+#
+# Keeps main dashboard (/) execution-focused and lightweight.
+# ════════════════════════════════════════════════════════════
+
+try:
+    from dashboard.cognition_lab import cognition_lab
+    app.register_blueprint(cognition_lab)
+    logger = __import__("logging").getLogger(__name__)
+    logger.info("🧠 Cognition Lab dashboard registered at /cognition")
+except Exception as e:
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Cognition Lab not available: {e}")
 
 
 if __name__ == "__main__":

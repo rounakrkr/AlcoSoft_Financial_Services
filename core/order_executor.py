@@ -33,6 +33,7 @@ from core.order_verifier import (
     record_order_sent,
     wait_for_order_verification,
 )
+from reflection.reflection_engine import record_trade
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -57,19 +58,199 @@ _squareoff_done = False
 # ════════════════════════════════════════════════════════════
 
 def calculate_quantity(price: float, stop_loss: float, risk_pct: float = None) -> int:
+    """
+    🚀 IMPROVED: Now supports forced_buy flag for margin-powered bulk buying.
+    Instead of just blocking when qty=0, this now calculates maximum buyable quantity
+    using full available margin.
+    """
     capital   = _get_available_capital()
     if risk_pct is None:
         risk_pct = float(cfg("risk", "max_risk_per_trade", 0.02))
-    max_loss  = capital * risk_pct
+    
+    # ─────────────────────────────────────────────────────────
+    # MARGIN-AWARE CAPITAL CALCULATION
+    # ─────────────────────────────────────────────────────────
+    allow_margin = cfg("risk", "allow_margin", False)
+    forced_buy = cfg("risk", "forced_buy_margin", False)  # 🔥 NEW: Force buying with margin
+    
+    if allow_margin:
+        margin_leverage = float(cfg("risk", "margin_leverage", 2.0))
+        if margin_leverage < 1.0:
+            logger.warning("⚠️ margin_leverage below 1.0, clamping to 1.0")
+            margin_leverage = 1.0
+        elif margin_leverage > 5.0:
+            logger.warning("⚠️ margin_leverage above 5.0, clamping to 5.0")
+            margin_leverage = 5.0
+
+        position_size_pct = float(cfg("risk", "position_size_margin", 0.75))
+        if position_size_pct < 0.10:
+            logger.warning("⚠️ position_size_margin below 10%, clamping to 10%")
+            position_size_pct = 0.10
+        elif position_size_pct > 1.0:
+            logger.warning("⚠️ position_size_margin above 100%, clamping to 100%")
+            position_size_pct = 1.0
+
+        capital_available = capital * margin_leverage
+        
+        if forced_buy:
+            # 🔥 FORCED BUY MODE: Use 100% of available margin for more aggressive sizing
+            position_size_pct = 1.0
+            logger.debug(
+                f"🔴 FORCED BUY ENABLED | Capital: ₹{capital} × {margin_leverage}x leverage "
+                f"= ₹{capital_available:.0f} available | Using 100% margin deployment"
+            )
+        else:
+            logger.debug(
+                f"💰 MARGIN ENABLED | Capital: ₹{capital} × {margin_leverage}x leverage "
+                f"= ₹{capital_available:.0f} available | Position size: {position_size_pct*100:.0f}%"
+            )
+    else:
+        capital_available = capital
+        position_size_pct = 0.20  # Conservative: only 20% per position without margin
+        if forced_buy:
+            logger.warning("⚠️ forced_buy_margin enabled but allow_margin=False! Margin disabled.")
+    
+    # ─────────────────────────────────────────────────────────
+    # QUANTITY CALCULATION
+    # ─────────────────────────────────────────────────────────
+    max_loss  = capital * risk_pct  # Risk is always based on REAL capital, not margin!
     stop_dist = abs(price - stop_loss)
     if stop_dist == 0:
         stop_dist = price * float(cfg("risk", "stop_loss_percent", 0.01)) if price > 0 else 1.0
         if stop_dist == 0:
             stop_dist = 1.0
         logger.warning(f"stop_dist was 0 for {price=}, {stop_loss=}, using {stop_dist}")
-    ideal_qty      = max_loss / stop_dist
-    affordable_qty = (capital * 0.20) / price
-    return max(1, int(min(ideal_qty, affordable_qty)))
+    
+    ideal_qty      = max_loss / stop_dist  # Based on risk tolerance
+    affordable_qty = (capital_available * position_size_pct) / price  # Based on available capital
+    
+    qty = int(min(ideal_qty, affordable_qty))
+    
+    if qty == 0 and forced_buy and allow_margin:
+        # 🔥 FORCED BUY FALLBACK: Can't meet risk tolerance? Buy what we can afford!
+        qty = int(affordable_qty)
+        if qty == 0:
+            logger.error(
+                f"❌ FORCED BUY FAILED | Price: ₹{price} | Real Capital: ₹{capital} | "
+                f"Margin Available: ₹{capital_available:.0f} ({margin_leverage}x leverage) | "
+                f"Even forced buy can't afford even 1 share!"
+            )
+            return 0
+        logger.warning(
+            f"⚠️ FORCED BUY: Risk calc says 0 qty, but buying {qty} @ ₹{price} "
+            f"(exceeds ideal risk but within margin budget)"
+        )
+    
+    if qty == 0:
+        if allow_margin:
+            logger.error(
+                f"❌ INSUFFICIENT MARGIN | Price: ₹{price} | Real Capital: ₹{capital} | "
+                f"Margin Available: ₹{capital_available:.0f} ({margin_leverage}x leverage) | "
+                f"Affordable: {affordable_qty:.2f} shares | Set 'forced_buy_margin' to force buying"
+            )
+        else:
+            logger.error(
+                f"❌ INSUFFICIENT CAPITAL | Price: ₹{price} | Capital: ₹{capital} | "
+                f"Affordable: {affordable_qty:.2f} shares | Margin disabled (set 'allow_margin' to enable)"
+            )
+        return 0
+    
+    capital_deployed = qty * price
+    if allow_margin:
+        margin_used = max(0, capital_deployed - capital)
+        logger.info(
+            f"✅ Quantity calculated (MARGIN) | Price: ₹{price} | Qty: {qty} | "
+            f"Deployed: ₹{capital_deployed:.0f} | Real capital: ₹{capital} | "
+            f"Margin used: ₹{margin_used:.0f} | "
+            f"{'🔥 FORCED' if forced_buy and qty == int(affordable_qty) else ''}"
+        )
+    else:
+        logger.info(f"✅ Quantity calculated | Price: ₹{price} | Qty: {qty} | Capital used: ₹{capital_deployed:.2f} of ₹{capital}")
+    
+    return qty
+
+
+def calculate_quantity_with_tranches(
+    price: float, 
+    stop_loss: float,
+    risk_pct: float = None,
+    max_tranches: int = 3
+) -> dict:
+    """
+    🚀 ADVANCED: Calculate how many tranches/positions to buy when using forced margin.
+    
+    Returns: {
+        'total_qty': int,           # Total shares across all tranches
+        'num_tranches': int,        # How many separate buys to make
+        'per_tranche_qty': int,     # Quantity per tranche
+        'margin_used': float,       # Total margin deployed
+        'margin_ratio': float,      # Margin % vs real capital
+    }
+    
+    Example: With ₹800 capital and ₹1000 stock at 2x margin:
+      → Can buy 1 share, but tranche mode calculates: 3 tranches × 0.5 shares each
+      → Or: wait for small price dips, pyramid up
+    """
+    capital = _get_available_capital()
+    if risk_pct is None:
+        risk_pct = float(cfg("risk", "max_risk_per_trade", 0.02))
+    
+    allow_margin = cfg("risk", "allow_margin", False)
+    if not allow_margin:
+        # No margin = no tranches, just single buy
+        qty = calculate_quantity(price, stop_loss, risk_pct)
+        return {
+            'total_qty': qty,
+            'num_tranches': 1,
+            'per_tranche_qty': qty,
+            'margin_used': qty * price - capital,
+            'margin_ratio': 0.0,
+        }
+    
+    margin_leverage = float(cfg("risk", "margin_leverage", 2.0))
+    if margin_leverage < 1.0:
+        logger.warning("⚠️ margin_leverage below 1.0, clamping to 1.0")
+        margin_leverage = 1.0
+    elif margin_leverage > 5.0:
+        logger.warning("⚠️ margin_leverage above 5.0, clamping to 5.0")
+        margin_leverage = 5.0
+
+    position_size_pct = float(cfg("risk", "position_size_margin", 0.75))
+    if position_size_pct < 0.10:
+        logger.warning("⚠️ position_size_margin below 10%, clamping to 10%")
+        position_size_pct = 0.10
+    elif position_size_pct > 1.0:
+        logger.warning("⚠️ position_size_margin above 100%, clamping to 100%")
+        position_size_pct = 1.0
+
+    capital_available = capital * margin_leverage
+    
+    # Calculate max buyable with margin
+    max_buyable_qty = int((capital_available * position_size_pct) / price)
+    
+    # Break into tranches (pyramid strategy)
+    # Each tranche gets equal allocation, but tries to maintain risk ratio
+    num_tranches = min(max_tranches, max(1, int(max_buyable_qty / 2)))
+    per_tranche_qty = max(1, int(max_buyable_qty / num_tranches))
+    total_qty = per_tranche_qty * num_tranches
+    
+    capital_deployed = total_qty * price
+    margin_used = max(0, capital_deployed - capital)
+    margin_ratio = margin_used / capital if capital > 0 else 0
+    
+    logger.info(
+        f"📊 TRANCHE CALC | Price: ₹{price} | Total: {total_qty} | "
+        f"Tranches: {num_tranches} × {per_tranche_qty} | "
+        f"Margin: ₹{margin_used:.0f} ({margin_ratio*100:.1f}%)"
+    )
+    
+    return {
+        'total_qty': total_qty,
+        'num_tranches': num_tranches,
+        'per_tranche_qty': per_tranche_qty,
+        'margin_used': margin_used,
+        'margin_ratio': margin_ratio,
+    }
 
 
 def calculate_stop_loss(price: float, direction: str = "BUY") -> float:
@@ -151,6 +332,31 @@ def _place_buy_order_impl(
         stop_loss = calculate_stop_loss(entry_price, "BUY")
 
     quantity     = calculate_quantity(entry_price, stop_loss, risk_pct)
+    
+    # 🚨 CRITICAL: Reject if insufficient capital
+    if quantity == 0:
+        logger.error(
+            f"❌ BUY REJECTED for {symbol} — Insufficient capital | "
+            f"Price: ₹{entry_price} | Available: ₹{_get_available_capital()}"
+        )
+        return {}
+    
+    # 🔥 MARGIN SAFETY: Check if this order would over-leverage
+    margin_status = get_margin_status()
+    capital_deployed_if_buy = quantity * entry_price
+    total_would_deploy = margin_status['deployed_in_positions'] + capital_deployed_if_buy
+    would_over_leverage = total_would_deploy > (margin_status['real_capital'] * margin_status['margin_leverage'])
+    
+    if would_over_leverage:
+        logger.warning(
+            f"⚠️ OVER-LEVERAGE WARNING for {symbol} | "
+            f"Current: ₹{margin_status['deployed_in_positions']:.0f} + "
+            f"This order: ₹{capital_deployed_if_buy:.0f} = "
+            f"₹{total_would_deploy:.0f} > "
+            f"Max available: ₹{margin_status['real_capital'] * margin_status['margin_leverage']:.0f}"
+        )
+        # Don't block, just warn. User can adjust settings if needed.
+    
     target_price = calculate_target(entry_price, stop_loss)
 
     trade = {
@@ -189,6 +395,8 @@ def _place_buy_order_impl(
             logger.error(f"❌ BUY order FAILED for {symbol}")
             raise OrderExecutionError(f"BUY order rejected for {symbol}")
 
+        logger.info(f"✅ BUY order placed: {trade['order_id']} | Qty: {quantity}")
+        
         record_order_sent(
             trade["order_id"],
             symbol,
@@ -201,24 +409,33 @@ def _place_buy_order_impl(
             )
             raise OrderExecutionError(f"BUY not verified for {symbol}")
 
-        # Step 2 — Place SL-M SELL order on Kotak immediately
-        # 🔧 NEW: Re-validate session before SL placement (extra safety)
-        if not validate_and_fix_session_before_order():
-            logger.warning(
-                f"⚠️ Session degraded after BUY. SL-M may fail. "
-                f"Will still attempt."
-            )
+        logger.info(f"✅ BUY verified on broker | Symbol: {symbol} | Qty: {quantity} | Product: {product} | SL: ₹{stop_loss}")
+
+        # ⚠️ DIAGNOSTIC: Check if BUY order is visible in positions (some exchanges need time)
+        import time
+        time.sleep(1)  # Small buffer for order settlement
         
-        trade["sl_order_id"] = _send_kotak_sl_order(
-            trading_symbol = trading_symbol,
-            quantity       = quantity,
-            trigger_price  = stop_loss,
-            product        = product,
-        )
+        # Step 2 — Place SL-M SELL order on Kotak immediately
+        # 🔧 NO PRE-VALIDATION: ensure_trade_token_on_client() already handles all token checks
+        # Calling validate_and_fix_session_before_order() here causes DOUBLE token refresh!
+        
+        logger.info(f"🔄 About to call _send_kotak_sl_order for {symbol} | Qty: {quantity} | Trigger: ₹{stop_loss} | Symbol: {trading_symbol} | Product: {product}")
+        try:
+            trade["sl_order_id"] = _send_kotak_sl_order(
+                trading_symbol = trading_symbol,
+                quantity       = quantity,
+                trigger_price  = stop_loss,
+                product        = product,
+            )
+            logger.info(f"✅ _send_kotak_sl_order returned: {trade['sl_order_id']}")
+        except Exception as e:
+            logger.error(f"❌ _send_kotak_sl_order THREW EXCEPTION: {e}", exc_info=True)
+            trade["sl_order_id"] = None
+        
         if trade["sl_order_id"]:
             logger.info(
                 f"🛡️ Kotak SL-M placed | {symbol} | "
-                f"Trigger: ₹{stop_loss} | OrderID: {trade['sl_order_id']}"
+                f"Qty: {quantity} | Trigger: ₹{stop_loss} | OrderID: {trade['sl_order_id']}"
             )
         else:
             logger.warning(
@@ -340,6 +557,53 @@ def _place_sell_order_impl(
         entry = float(position.get("entry_price") or 0)
         pnl = (exit_price - entry) * quantity if entry else None
         close_position(symbol, exit_price, reason)
+        
+        # ── Record trade outcome for reflection statistics ────
+        try:
+            from datetime import time as dt_time
+            
+            strategy_context = position.get("strategy", "UNKNOWN")
+            confidence = position.get("confidence", 0)  # Now contains adaptive-adjusted confidence from signal
+            
+            # Calculate drawdown if available (estimate from position tracking)
+            max_price = position.get("max_price_during_hold", exit_price)
+            drawdown = max(0, (max_price - exit_price) / exit_price * 100) if exit_price > 0 else 0
+            
+            # Get current time window for statistics
+            now = datetime.now().time()
+            hour = now.hour
+            minute = now.minute
+            total_min = hour * 60 + minute
+            
+            if total_min >= 9*60+15 and total_min < 10*60:
+                time_window = "9:15-10:00"
+            elif total_min >= 10*60 and total_min < 11*60+30:
+                time_window = "10:00-11:30"
+            elif total_min >= 11*60+30 and total_min < 13*60:
+                time_window = "11:30-1:00"
+            elif total_min >= 13*60 and total_min < 14*60:
+                time_window = "1:00-2:00"
+            elif total_min >= 14*60 and total_min < 15*60+30:
+                time_window = "2:00-3:30"
+            else:
+                time_window = "other"
+            
+            record_trade(
+                signal_name=strategy_context,
+                symbol=symbol,
+                entry_price=entry,
+                exit_price=exit_price,
+                pnl=pnl,
+                confidence=confidence,
+                time_window=time_window,
+                drawdown=drawdown,
+                sl_hit=False,  # Could track this from exit reason
+                recovered=False,  # Could track this from position history
+            )
+            logger.debug(f"📊 Signal recorded: {strategy_context} | {symbol} | PL={pnl} | DD={drawdown:.1f}%")
+        except Exception as e:
+            logger.debug(f"Could not record signal outcome: {e}")
+        
         try:
             from core.alerts import alert_sell
             alert_sell(symbol, quantity, exit_price, reason, pnl)
@@ -405,7 +669,7 @@ def _get_available_capital(force_refresh: bool = False) -> float:
     import time
 
     if TRADING_MODE == "PAPER":
-        return float(cfg("risk", "paper_capital", 10000))
+        return _calculate_paper_capital_available()
 
     now = time.time()
     if not force_refresh and (now - _capital_last_update) < CAPITAL_CACHE_TTL:
@@ -434,7 +698,148 @@ def _get_available_capital(force_refresh: bool = False) -> float:
     return _capital_cache
 
 
-def check_war_room_flip(live_prices: dict[str, float]):
+def _calculate_paper_capital_available() -> float:
+    """
+    FIXED: Paper capital now properly deducted based on open positions.
+
+    Formula: available = initial_capital - deployed_in_positions + closed_pnl
+    """
+    initial_capital = float(cfg("risk", "paper_capital", 10000))
+
+    # Sum deployment in all open positions
+    positions = get_open_positions()
+    deployed = sum(
+        float(p.get("quantity", 0)) * float(p.get("entry_price", 0))
+        for p in positions
+    )
+
+    # Sum P&L from all closed positions today
+    closed_pnl = get_today_gross_pnl()
+
+    # Available capital = initial - deployed + closed_pnl
+    available = initial_capital - deployed + closed_pnl
+
+    logger.debug(
+        f"Paper capital: Initial={initial_capital} - Deployed={deployed} + ClosedPnL={closed_pnl} = Available={available}"
+    )
+
+    return max(0, available)  # Never go below zero
+
+
+def get_margin_status() -> dict:
+    """
+    📊 MARGIN MONITORING: Returns current margin deployment status (FIXED).
+
+    NOW ACCOUNTS FOR:
+    - Current prices (not just entry prices)
+    - Unrealized P&L
+    - Closed P&L
+    - Paper vs Live modes
+
+    Returns: {
+        'real_capital': float,                # ₹ in real account
+        'margin_leverage': float,             # 2.0 = 2x, 3.0 = 3x, etc
+        'total_available_with_margin': float, # Real capital × leverage
+        'current_position_value': float,      # Current market value (not entry value)
+        'unrealized_pnl': float,              # Open position gains/losses
+        'effective_capital': float,           # Capital + unrealized + closed PnL
+        'margin_used': float,                 # ₹ margin actually being used
+        'margin_pct': float,                  # % of real capital (0-100+)
+        'remaining_margin': float,            # ₹ margin left to deploy
+        'is_over_leveraged': bool,            # margin_pct > 100%
+    }
+    """
+    # For PAPER mode, use calculated available capital
+    if TRADING_MODE == "PAPER":
+        real_capital = float(cfg("risk", "paper_capital", 10000))
+    else:
+        real_capital = _get_available_capital(force_refresh=True)
+
+    allow_margin = cfg("risk", "allow_margin", False)
+    margin_leverage = float(cfg("risk", "margin_leverage", 2.0))
+
+    if margin_leverage < 1.0:
+        margin_leverage = 1.0
+    elif margin_leverage > 5.0:
+        margin_leverage = 5.0
+
+    if not allow_margin:
+        return {
+            'real_capital': real_capital,
+            'margin_leverage': 1.0,
+            'total_available_with_margin': real_capital,
+            'current_position_value': 0.0,
+            'unrealized_pnl': 0.0,
+            'effective_capital': real_capital,
+            'margin_used': 0.0,
+            'margin_pct': 0.0,
+            'remaining_margin': 0.0,
+            'is_over_leveraged': False,
+        }
+
+    # Get CURRENT position values (not entry values)
+    positions = get_open_positions()
+    current_position_value = 0.0
+    entry_position_value = 0.0
+    unrealized_pnl = 0.0
+
+    for p in positions:
+        symbol = p.get("symbol", "")
+        qty = float(p.get("quantity", 0))
+        entry_price = float(p.get("entry_price", 0))
+
+        # Try to get current price
+        try:
+            tick = get_latest_tick(symbol)
+            current_price = float(tick.get("ltp", entry_price)) if tick else entry_price
+        except Exception:
+            current_price = entry_price  # Fallback to entry if tick unavailable
+
+        entry_value = qty * entry_price
+        current_value = qty * current_price
+        pnl = current_value - entry_value
+
+        current_position_value += current_value
+        entry_position_value += entry_value
+        unrealized_pnl += pnl
+
+    # Total P&L (closed + unrealized)
+    closed_pnl = get_today_gross_pnl()
+    total_pnl = closed_pnl + unrealized_pnl
+
+    # Effective capital = real + all P&L
+    effective_capital = real_capital + total_pnl
+
+    # Margin available = extra capital we can use beyond real capital
+    margin_available = real_capital * (margin_leverage - 1.0)
+
+    # Margin used = how much of the DEPLOYMENT exceeds effective capital
+    # If deployment > effective capital, we're using margin
+    margin_used = max(0, current_position_value - effective_capital)
+
+    # Margin percentage = current leverage ratio as percentage
+    # Example: if deployed ₹20,000 and real capital ₹10,000, leverage = 2.0x = 200%
+    current_leverage = (current_position_value / real_capital) if real_capital > 0 else 1.0
+    margin_pct = (current_leverage - 1.0) * 100  # Shows extra leverage beyond 1x as percentage
+
+    remaining_margin = max(0, margin_available - margin_used)
+    is_over_leveraged = margin_used > margin_available
+
+    return {
+        'real_capital': real_capital,
+        'margin_leverage': margin_leverage,
+        'total_available_with_margin': real_capital * margin_leverage,
+        'current_position_value': current_position_value,
+        'unrealized_pnl': unrealized_pnl,
+        'effective_capital': effective_capital,
+        'margin_used': margin_used,
+        'margin_pct': margin_pct,
+        'remaining_margin': remaining_margin,
+        'is_over_leveraged': is_over_leveraged,
+    }
+
+
+
     """
     Exits positions when war room changes its mind.
     Triggered if:
@@ -575,18 +980,34 @@ def _parse_order_response(response) -> str | None:
     CLEANER: Session refresh is done BEFORE place_order().
     Just parse the response.
     """
-    if response and isinstance(response, dict):
-        if response.get("error") or response.get("Error") or response.get("Error Message"):
-            logger.error("Kotak order error response: %s", response)
-            return None
-        order_id = (
-            response.get("nOrdNo")
-            or response.get("order_id")
-            or response.get("id")
-        )
-        if order_id:
-            return str(order_id)
-    logger.error("Unexpected Kotak response: %s", response)
+    if not response:
+        logger.error(f"❌ Order response is None/empty")
+        return None
+        
+    if not isinstance(response, dict):
+        logger.error(f"❌ Order response is not dict: {type(response)} = {response}")
+        return None
+    
+    # Check for errors FIRST
+    if response.get("error") or response.get("Error") or response.get("Error Message"):
+        logger.error("❌ Kotak order error response: %s", response)
+        return None
+    
+    # Try to find order_id in different possible field names
+    order_id = (
+        response.get("nOrdNo")       # Kotak's primary field
+        or response.get("order_id")
+        or response.get("id")
+        or response.get("ordNo")     # Alternative
+        or response.get("orderNo")   # Another alternative
+    )
+    
+    if order_id:
+        logger.debug(f"✅ Extracted order_id: {order_id}")
+        return str(order_id)
+    
+    logger.error(f"❌ No order_id found in response. Response keys: {list(response.keys()) if response else 'None'}")
+    logger.error(f"   Full response: {response}")
     return None
 
 
@@ -810,6 +1231,7 @@ def _send_kotak_sl_order(
     # 🔥 FIX (2026-05-27): Kotak order API REQUIRES the -EQ suffix!
     order_symbol = trading_symbol  # ← KEEP -EQ suffix!
     logger.debug(f"📋 SL-M order symbol: {order_symbol}")
+    logger.info(f"🔄 [SL-M] Starting SL order placement | Symbol: {order_symbol} | Qty: {quantity} | Trigger: ₹{trigger_price}")
     
     sl_kwargs = dict(
         exchange_segment   = "nse_cm",
@@ -827,24 +1249,34 @@ def _send_kotak_sl_order(
         trigger_price      = str(round(trigger_price, 2)),
     )
 
+    logger.info(f"📋 SL-M ORDER KWARGS (WILL SEND TO KOTAK):")
+    for key, val in sl_kwargs.items():
+        logger.info(f"    {key:20s} = {val}")
+    logger.info(f"   ℹ️ If Kotak rejects: Try exchange_segment='NSE' instead of 'nse_cm'")
+    logger.info(f"   ℹ️ If Kotak rejects: Check if product '{product}' supports SL orders (try 'CNC' if 'MIS' rejected)")
+
     # ✅ FIXED: Use sl_kwargs (not order_kwargs!)
     for attempt in range(2):
         try:
             # 🔐 CRITICAL: Ensure Trade token is set on client before order
             try:
                 if attempt == 0:
+                    logger.debug(f"[SL-M Attempt 1/2] Ensuring Trade token...")
                     client = ensure_trade_token_on_client()
+                    logger.debug(f"[SL-M Attempt 1/2] ✅ Got client with Trade token")
                 else:
                     logger.warning(f"[SL-M Attempt 2/2] Auth error detected — forcing fresh session with Trade token...")
                     from core.kotak_client import force_reconnect as _force_reconnect
                     _force_reconnect()
                     client = ensure_trade_token_on_client()
-            except RuntimeError as e:
+                    logger.debug(f"[SL-M Attempt 2/2] ✅ Got fresh client with Trade token")
+            except (RuntimeError, Exception) as e:
+                logger.error(f"🔐 SL-M: Token guarantee failed (Attempt {attempt+1}/2): {type(e).__name__}: {e}", exc_info=True)
                 if attempt == 0:
-                    logger.warning(f"🔐 SL-M: Token guarantee failed on attempt 1: {e} — will retry...")
+                    logger.warning(f"   Will retry on attempt 2...")
                     continue
                 else:
-                    logger.error(f"🔐 SL-M: Token guarantee failed on attempt 2: {e} — aborting")
+                    logger.error(f"   Both attempts failed — aborting SL-M order")
                     return None
             
             logger.debug(f"[SL-M Attempt {attempt + 1}/2] Sending SL-M order to Kotak...")
@@ -868,9 +1300,34 @@ def _send_kotak_sl_order(
             
             # 📋 TEMPORARY DIAGNOSTIC: Log raw broker response
             logger.info(f"📋 RAW BROKER RESPONSE (SL-M): {response}")
+            
+            # 🔥 CRITICAL: Check if response is an error BEFORE parsing
+            if response is None:
+                logger.error(f"❌ SL-M order returned None (broker circuit breaker or API error)")
+                if attempt == 0:
+                    continue
+                else:
+                    return None
+            
+            if isinstance(response, dict):
+                error_msg = response.get("error") or response.get("Error") or response.get("Error Message") or response.get("message")
+                if error_msg:
+                    logger.error(f"❌ SL-M order API error response: {error_msg}")
+                    logger.error(f"   Full response: {response}")
+                    if attempt == 0:
+                        continue
+                    else:
+                        return None
+            
             order_id = _parse_order_response(response)
             if order_id:
                 return order_id
+            else:
+                logger.error(f"❌ SL-M response parsing failed — no order_id found in: {response}")
+                if attempt == 0:
+                    continue
+                else:
+                    return None
         except (ConnectionError, OSError, TimeoutError) as e:
             if attempt == 0:
                 logger.warning("SL-M network error (attempt 1): %s", e)

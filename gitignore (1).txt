@@ -4,5 +4,3 @@ __pycache__/
 data/
 alco_env/
 .vs_code
-logs/
-results/

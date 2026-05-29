@@ -1,28 +1,31 @@
 {
   "risk": {
-    "stop_loss_percent": 0.015,
-    "trailing_sl_percent": 0.0125,
-    "target_rr_ratio": 2.5,
+    "stop_loss_percent": 0.002,
+    "trailing_sl_percent": 0.002,
+    "target_rr_ratio": 2.0,
     "max_risk_per_trade": 0.02,
-    "math_risk_per_trade": 0.04,
-    "max_daily_loss_percent": 0.1,
-    "paper_capital": 10000
+    "math_risk_per_trade": 0.02,
+    "max_daily_loss_percent": 0.05,
+    "paper_capital": 100000,
+    "allow_margin": false,
+    "forced_buy_margin": false,
+    "margin_leverage": 2.0,
+    "position_size_margin": 1.0
   },
   "strategy": {
     "strategy_type": "INTRADAY",
-    "max_open_positions": 2,
+    "max_open_positions": 5,
     "min_confidence": 65,
     "min_strategies_agree": 3,
     "math_strategies_agree": 3,
     "min_sell_signals": 2,
-    "signal_lookback_candles": 4,
+    "signal_lookback_candles": 3,
     "min_ws_candles_for_patterns": 3,
-    "war_room_gating": true,
-    "loop_interval_sec": 4
+    "loop_interval_sec": 5
   },
   "screener": {
-    "screener_total_stocks": 25,
-    "war_room_picks": 4
+    "screener_total_stocks": 8,
+    "cognition_picks": 8
   },
   "market_data": {
     "candle_interval_seconds": 300,
@@ -30,11 +33,26 @@
     "scan_log_interval_sec": 90
   },
   "scheduling": {
-    "war_room_interval_minutes": 40
+    "cognition_cycle_interval_minutes": 15
+  },
+  "adaptive": {
+    "last_updated": "2026-05-29T00:37:21.412622",
+    "strategy": {
+      "signal_confidence_multipliers": {
+        "test_signal": 1.0
+      },
+      "market_regime_multiplier": 1.0
+    },
+    "time_windows": {
+      "9:15-10:00": 1.0
+    },
+    "symbol_stops": {
+      "TEST": 0.97
+    }
   },
   "_meta": {
     "version": 1,
-    "updated_at": "2026-05-27T15:11:59.423130",
+    "updated_at": "2026-05-29T18:53:36.339088",
     "updated_via": "dashboard"
   }
 }
