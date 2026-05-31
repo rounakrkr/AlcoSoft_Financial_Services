@@ -11,9 +11,9 @@ const GROUP_LABELS = {
 const GROUP_DESCRIPTIONS = {
   risk: 'Trading risk controls including stop losses, targets, and margin settings.',
   strategy: 'Strategy-set mode, position limits, lookback, and loop timing used by the trading engine.',
-  screener: 'Morning stock selection and war room candidate settings.',
+  screener: 'Morning stock selection and cognition candidate settings.',
   market_data: 'Market data refresh rates and websocket health thresholds.',
-  scheduling: 'Timing for war room scans and strategy loop execution.',
+  scheduling: 'Timing for cognition scans and strategy loop execution.',
 };
 
 function displayValue(field, value) {

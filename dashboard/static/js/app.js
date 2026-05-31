@@ -16,9 +16,9 @@ function pnlClass(v) {
 function verdictClass(v) {
   if (!v) return '';
   v = v.toUpperCase();
-  if (v === 'BUY' || v === 'APPROVE') return 'war-verdict-buy';
-  if (v === 'AVOID' || v === 'REJECT') return 'war-verdict-avoid';
-  return 'war-verdict-wait';
+  if (v === 'BUY' || v === 'APPROVE') return 'agent-verdict-buy';
+  if (v === 'AVOID' || v === 'REJECT') return 'agent-verdict-avoid';
+  return 'agent-verdict-wait';
 }
 
 function agentEmoji(name) {
@@ -150,24 +150,24 @@ async function fetchAndRender() {
       }
     }
 
-    const warLog = document.getElementById('war-log');
-    if (warLog) {
-      if ((data.war_log || []).length === 0) {
-        warLog.innerHTML = '<div class="empty">🤫 War room hasn\'t spoken yet...</div>';
+    const decisionLog = document.getElementById('agent-decisions');
+    if (decisionLog) {
+      if ((data.agent_decisions || []).length === 0) {
+        decisionLog.innerHTML = '<div class="empty">Waiting for agent decisions...</div>';
       } else {
-        warLog.innerHTML = data.war_log.map((w) => {
+        decisionLog.innerHTML = data.agent_decisions.map((w) => {
           let reasons = [];
           try { reasons = JSON.parse(w.reasons || '[]'); } catch (_) {}
-          return `<div class="war-entry">
-            <div class="war-header">
+          return `<div class="agent-entry">
+            <div class="agent-header">
               <span class="agent-name">${agentEmoji(w.agent)} ${w.agent}</span>
               <span class="${verdictClass(w.verdict)}">${w.verdict}</span>
             </div>
             <div style="font-size:0.73rem;color:var(--text2)">
               🎯 ${w.symbol} | R${w.round_number} | 💪 ${w.confidence}% | ⏰ ${timeStr(w.timestamp)}
             </div>
-            ${reasons.length ? `<div class="war-reasons">💬 ${reasons.join(' · ')}</div>` : ''}
-            ${w.concern ? `<div class="war-reasons">⚠️ ${w.concern}</div>` : ''}
+            ${reasons.length ? `<div class="agent-reasons">💬 ${reasons.join(' · ')}</div>` : ''}
+            ${w.concern ? `<div class="agent-reasons">⚠️ ${w.concern}</div>` : ''}
           </div>`;
         }).join('');
       }

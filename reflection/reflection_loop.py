@@ -20,13 +20,13 @@
 #   - 3:35 PM  → Final Reflection Agent runs (after all data complete)
 # ============================================================
 
-import json
 import logging
 import os
 from datetime import datetime
 from dotenv import load_dotenv
 
 from core.state_manager import get_today_stats, get_recent_trades
+from core.safe_io import atomic_write_json, safe_read_json
 from reflection.adaptive_config_updater import apply_adaptive_config
 
 load_dotenv()
@@ -41,6 +41,14 @@ os.makedirs(REFLECTIONS_DIR, exist_ok=True)
 # ════════════════════════════════════════════════════════════
 
 def run_reflection_loop():
+    try:
+        return _run_reflection_loop_impl()
+    except Exception as exc:
+        logger.error("Reflection cycle failed safely: %s", exc, exc_info=True)
+        return None
+
+
+def _run_reflection_loop_impl():
     """
     Called at 3:35 PM daily (after market fully closes at 3:30 PM).
     
@@ -148,36 +156,36 @@ def _call_owl_final(context: str) -> dict | None:
     Runs at 3:35 PM after market close, does NOT affect trading.
     """
     try:
-        from war_room.agents.base_agent import (
-            _call_openrouter, _parse_json, OPENROUTER_KEYS, MODELS
+        from reflection.llm_gateway import (
+            call_openrouter, parse_json, OPENROUTER_KEYS, MODELS
         )
     except ImportError:
-        logger.error("War room base agent not available. Cannot run final reflection.")
+        logger.error("LLM gateway not available. Cannot run final reflection.")
         return None
 
     key = OPENROUTER_KEYS.get("reflection")
 
     try:
-        raw = _call_openrouter(
+        raw = call_openrouter(
             key=key,
             model=MODELS["reflection"],
             system=_system_prompt_final(),
             user=context,
         )
         logger.info("✅ OWL Alpha response received")
-        return _parse_json(raw)
+        return parse_json(raw)
 
     except Exception as e:
         logger.warning(f"OWL Alpha failed: {e}. Attempting GPT-OSS standby...")
         try:
-            raw = _call_openrouter(
+            raw = call_openrouter(
                 key=key,
                 model=MODELS["standby"],
                 system=_system_prompt_final(),
                 user=context,
             )
             logger.info("✅ GPT-OSS standby response received")
-            return _parse_json(raw)
+            return parse_json(raw)
         except Exception as e2:
             logger.error(f"OWL Alpha and standby both failed: {e2}")
             return None
@@ -315,7 +323,7 @@ Return ONLY valid JSON.
 def _build_reflection_context(
     stats: dict,
     trades: list,
-    war_room_log: list
+    agent_decision_log: list
 ) -> str:
     """Legacy context builder for compatibility."""
     
@@ -333,17 +341,16 @@ def _build_reflection_context(
 
     trades_text = "\n".join(trade_lines) if trade_lines else "No trades today."
 
-    # War room summary
-    war_lines = []
-    for log in war_room_log:
-        war_lines.append(
+    decision_lines = []
+    for log in agent_decision_log:
+        decision_lines.append(
             f"  [{log.get('agent')}] R{log.get('round_number')} | "
             f"{log.get('symbol')} | Verdict: {log.get('verdict')} | "
             f"Confidence: {log.get('confidence')}% | "
             f"Concern: {log.get('concern', 'None')}"
         )
 
-    war_text = "\n".join(war_lines) if war_lines else "No war room logs today."
+    decision_text = "\n".join(decision_lines) if decision_lines else "No agent decisions today."
 
     return f"""
 TODAY'S DATE: {datetime.now().strftime("%Y-%m-%d")}
@@ -357,8 +364,8 @@ PERFORMANCE SUMMARY:
 TRADE DETAILS:
 {trades_text}
 
-WAR ROOM DEBATE LOG:
-{war_text}
+AI AGENT DECISION LOG:
+{decision_text}
 """.strip()
 
 
@@ -370,9 +377,8 @@ WAR ROOM DEBATE LOG:
 def _save_reflection(date: str, insights: dict):
     """Saves today's reflection to data/reflections/YYYY-MM-DD.json"""
     path = os.path.join(REFLECTIONS_DIR, f"{date}.json")
-    with open(path, "w") as f:
-        json.dump(insights, f, indent=2)
-    logger.info(f"Reflection saved: {path}")
+    if atomic_write_json(path, insights, label="daily reflection", log=logger):
+        logger.info(f"Reflection saved: {path}")
 
 
 def _update_running_learnings(insights: dict):
@@ -382,13 +388,13 @@ def _update_running_learnings(insights: dict):
     """
     learnings_path = "data/learnings.json"
 
-    existing = []
-    if os.path.exists(learnings_path):
-        with open(learnings_path, "r") as f:
-            try:
-                existing = json.load(f)
-            except:
-                existing = []
+    existing = safe_read_json(
+        learnings_path,
+        [],
+        expected_type=list,
+        label="running learnings",
+        log=logger,
+    )
 
     # Keep last 10 days only
     existing.append({
@@ -400,32 +406,15 @@ def _update_running_learnings(insights: dict):
     })
     existing = existing[-10:]
 
-    with open(learnings_path, "w") as f:
-        json.dump(existing, f, indent=2)
+    atomic_write_json(learnings_path, existing, label="running learnings", log=logger)
 
 
-def _load_war_room_log_today() -> list:
-    """Reads today's war room entries from DB (legacy support)."""
-    import sqlite3
-    from datetime import date
-
-    db_path = "data/alcosoft.db"
-    if not os.path.exists(db_path):
-        return []
-
-    today = date.today().isoformat()
+def _load_agent_decision_log_today() -> list:
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
-            SELECT * FROM war_room_log
-            WHERE timestamp LIKE ?
-            ORDER BY id ASC
-        """, (f"{today}%",)).fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
+        from core.state_manager import load_agent_decisions_today
+        return load_agent_decisions_today(limit=100)
     except Exception as e:
-        logger.warning(f"War room log read failed: {e}")
+        logger.warning(f"Agent decision log read failed: {e}")
         return []
 
 
@@ -510,13 +499,13 @@ def _run_legacy_reflection(date: str):
     logger.warning("Running legacy reflection (no cognition engine)")
     stats = get_today_stats()
     trades = get_recent_trades(days=1)
-    war_room_log = _load_war_room_log_today()
+    agent_decision_log = _load_agent_decision_log_today()
 
-    if stats["total_trades"] == 0 and not war_room_log:
+    if stats["total_trades"] == 0 and not agent_decision_log:
         _save_reflection(date, _empty_reflection(date))
         return
 
-    context = _build_reflection_context(stats, trades, war_room_log)
+    context = _build_reflection_context(stats, trades, agent_decision_log)
     insights = _call_owl(context)
 
     if not insights:

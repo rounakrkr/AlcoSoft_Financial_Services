@@ -5,7 +5,6 @@
 #   stores rolling price history for strategy.py
 # ============================================================
 
-import json
 import time
 import logging
 import threading
@@ -14,6 +13,7 @@ from collections import defaultdict, deque
 import os
 
 from core.trading_settings import get as cfg
+from core.safe_io import atomic_write_json, safe_read_json
 
 logger = logging.getLogger(__name__)
 
@@ -423,8 +423,13 @@ def fix_briefing_trading_symbols(briefing: dict):
     if not os.path.exists(TOKENS_CACHE_PATH):
         return
 
-    with open(TOKENS_CACHE_PATH) as f:
-        token_cache = json.load(f)
+    token_cache = safe_read_json(
+        TOKENS_CACHE_PATH,
+        {},
+        expected_type=dict,
+        label="instrument token cache",
+        log=logger,
+    )
 
     for stock_list_key in ("approved_stocks", "watchlist"):
         for stock in briefing.get(stock_list_key, []):
@@ -439,13 +444,17 @@ def purge_invalid_token_cache():
     """Remove wrong series (BL/NC/etc.) from instrument_tokens.json."""
     if not os.path.exists(TOKENS_CACHE_PATH):
         return
-    with open(TOKENS_CACHE_PATH, "r") as f:
-        cached = json.load(f)
+    cached = safe_read_json(
+        TOKENS_CACHE_PATH,
+        {},
+        expected_type=dict,
+        label="instrument token cache",
+        log=logger,
+    )
     cleaned = {k: v for k, v in cached.items() if _is_valid_equity_entry(k, v)}
     if len(cleaned) != len(cached):
         os.makedirs("data", exist_ok=True)
-        with open(TOKENS_CACHE_PATH, "w") as f:
-            json.dump(cleaned, f, indent=2)
+        atomic_write_json(TOKENS_CACHE_PATH, cleaned, label="instrument token cache", log=logger)
         logger.info(
             f"Purged {len(cached) - len(cleaned)} invalid token(s) from cache."
         )
@@ -463,8 +472,13 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
     # Load cache if exists
     cached = {}
     if os.path.exists(TOKENS_CACHE_PATH):
-        with open(TOKENS_CACHE_PATH, "r") as f:
-            cached = json.load(f)
+        cached = safe_read_json(
+            TOKENS_CACHE_PATH,
+            {},
+            expected_type=dict,
+            label="instrument token cache",
+            log=logger,
+        )
 
     tokens_list = []
     updated     = False
@@ -526,8 +540,7 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
     # Save updated cache
     if updated:
         os.makedirs("data", exist_ok=True)
-        with open(TOKENS_CACHE_PATH, "w") as f:
-            json.dump(cached, f, indent=2)
+        atomic_write_json(TOKENS_CACHE_PATH, cached, label="instrument token cache", log=logger)
         logger.info("Instrument token cache updated.")
 
     return tokens_list

@@ -8,12 +8,14 @@
 #   This enables automatic parameter tuning based on measured outcomes.
 # ============================================================
 
-import json
 import logging
+import sqlite3
 from pathlib import Path
 from datetime import datetime
 
+from core.safe_io import atomic_write_json, safe_float, safe_read_json
 from reflection.reflection_engine import (
+    DB_PATH,
     get_all_signal_stats,
     get_all_time_window_stats,
     get_all_symbol_stats,
@@ -31,6 +33,9 @@ from reflection.reflection_engine import (
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path("config/trading_settings.json")
+MULTIPLIER_FLOOR = 0.4
+MULTIPLIER_CEILING = 1.2
+SYMBOL_SL_MIN_TRADES = 10
 
 
 # ════════════════════════════════════════════════════════════
@@ -39,24 +44,41 @@ CONFIG_PATH = Path("config/trading_settings.json")
 
 def _load_config() -> dict:
     """Load trading_settings.json."""
-    try:
-        with open(CONFIG_PATH, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to load config: {e}")
-        return {}
+    return safe_read_json(
+        CONFIG_PATH,
+        {},
+        expected_type=dict,
+        label="adaptive trading settings",
+        log=logger,
+    )
 
 
 def _save_config(config: dict) -> bool:
     """Save trading_settings.json."""
     try:
-        with open(CONFIG_PATH, "w") as f:
-            json.dump(config, f, indent=2)
+        if not atomic_write_json(CONFIG_PATH, config, label="adaptive trading settings", log=logger):
+            return False
         logger.info(f"✅ Config saved: {CONFIG_PATH}")
         return True
     except Exception as e:
         logger.error(f"Failed to save config: {e}")
         return False
+
+
+def _clamp_multiplier(value: float, floor: float = MULTIPLIER_FLOOR, ceiling: float = MULTIPLIER_CEILING) -> float:
+    return max(floor, min(ceiling, safe_float(value, 1.0)))
+
+
+def _symbol_sample_size(symbol: str) -> int:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.execute("SELECT COUNT(*) FROM trade_records WHERE symbol = ?", (symbol,))
+        count = cur.fetchone()[0]
+        conn.close()
+        return safe_int(count, 0)
+    except Exception as exc:
+        logger.warning("Symbol sample lookup failed for %s: %s", symbol, exc)
+        return 0
 
 
 # ════════════════════════════════════════════════════════════
@@ -113,6 +135,7 @@ def _calculate_signal_multipliers() -> dict[str, float]:
             new_multiplier=smoothed_mult,
             max_daily_change_pct=5.0,
         )
+        final_mult = _clamp_multiplier(final_mult)
         
         # 6. Store for next update
         _store_multiplier_history(
@@ -180,6 +203,7 @@ def _calculate_time_window_multipliers() -> dict[str, float]:
             new_multiplier=smoothed_mult,
             max_daily_change_pct=5.0,
         )
+        final_mult = _clamp_multiplier(final_mult)
         
         # 6. Store for next update
         _store_multiplier_history(
@@ -218,6 +242,7 @@ def _calculate_symbol_sl_adjustments() -> dict[str, float]:
     
     for stats in symbol_stats:
         symbol = stats["symbol"]
+        sample_size = _symbol_sample_size(symbol)
         
         # 1. Calculate raw adjustment
         raw_adjustment = get_symbol_sl_adjustment(symbol)
@@ -227,9 +252,11 @@ def _calculate_symbol_sl_adjustments() -> dict[str, float]:
         if historical_adj is None:
             historical_adj = 1.0
         
-        # 3. Calculate confidence strength (no minimum trades for symbol SL)
-        # Just use recent drawdown data
-        confidence_strength = 0.7  # Moderate confidence for volatility-based adjustment
+        confidence_strength = _calculate_confidence_strength(
+            total_trades=sample_size,
+            min_trades=SYMBOL_SL_MIN_TRADES,
+            target_trades=100,
+        )
         
         # 4. Apply EMA smoothing
         smoothed_adj = _apply_ema_smoothing(
@@ -245,6 +272,7 @@ def _calculate_symbol_sl_adjustments() -> dict[str, float]:
             new_multiplier=smoothed_adj,
             max_daily_change_pct=3.0,  # Tighter than signals
         )
+        final_adj = _clamp_multiplier(final_adj, floor=0.5, ceiling=2.0)
         
         # 6. Store for next update
         _store_multiplier_history(
@@ -252,14 +280,14 @@ def _calculate_symbol_sl_adjustments() -> dict[str, float]:
             multiplier_key=symbol,
             multiplier_value=final_adj,
             raw_calculated_value=raw_adjustment,
-            sample_size=1,
+            sample_size=sample_size,
             confidence_strength=confidence_strength,
         )
         
         adjustments[symbol] = final_adj
         
         logger.debug(
-            f"📈 Symbol: {symbol} | Volatility: {stats['volatility_profile']} | "
+            f"📈 Symbol: {symbol} | Trades: {sample_size} | Volatility: {stats['volatility_profile']} | "
             f"DD: {stats['avg_drawdown']:.2f}% | Raw: {raw_adjustment:.2f} | "
             f"Final: {final_adj:.2f}"
         )
@@ -321,6 +349,7 @@ def _calculate_market_regime_multiplier() -> float:
         new_multiplier=smoothed_mult,
         max_daily_change_pct=5.0,
     )
+    final_mult = _clamp_multiplier(final_mult)
     
     # 6. Store for next update
     _store_multiplier_history(

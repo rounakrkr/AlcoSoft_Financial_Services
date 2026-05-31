@@ -2,12 +2,13 @@
 #   ALCOSOFT FINANCIAL SERVICES
 #   core/order_executor.py — Order Placement & Management
 #   Changes: SL-M order on Kotak after BUY, trading_symbol fix,
-#   profit targets, war room flip exit, trailing SL,
+#   profit targets, signal-set exit, trailing SL,
 #   max daily loss check, squareoff flag
 # ============================================================
 
 import logging
 import os
+import threading
 from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
 
@@ -26,6 +27,7 @@ from core.audit_logger import (
     audit_order_placed, audit_position_closed, audit_system_error,
 )
 from core.trading_settings import get as cfg
+from core.safe_io import safe_float, safe_int
 from core.circuit_breaker import get_breaker
 from core.api_resilience import call_broker_api
 from core.order_verifier import (
@@ -47,6 +49,7 @@ INTRADAY_SQUAREOFF = dt_time(15, 15)
 _capital_cache: float = 10000.0
 _capital_last_update: float = 0.0
 CAPITAL_CACHE_TTL = 300
+_order_lock = threading.RLock()
 
 # ── Squareoff flag — prevents repeated calls after 3:15 ──────
 _squareoff_done = False
@@ -62,9 +65,16 @@ def calculate_quantity(price: float, stop_loss: float, risk_pct: float = None) -
     Instead of just blocking when qty=0, this now calculates maximum buyable quantity
     using full available margin.
     """
-    capital   = _get_available_capital()
+    price = safe_float(price, 0.0)
+    stop_loss = safe_float(stop_loss, 0.0)
+    if price <= 0:
+        logger.error("Quantity rejected: invalid price %r", price)
+        return 0
+
+    capital   = max(0.0, safe_float(_get_available_capital(), 0.0))
     if risk_pct is None:
-        risk_pct = float(cfg("risk", "max_risk_per_trade", 0.02))
+        risk_pct = safe_float(cfg("risk", "max_risk_per_trade", 0.02), 0.02)
+    risk_pct = max(0.0, min(1.0, safe_float(risk_pct, 0.02)))
     
     # ─────────────────────────────────────────────────────────
     # MARGIN-AWARE CAPITAL CALCULATION
@@ -73,7 +83,7 @@ def calculate_quantity(price: float, stop_loss: float, risk_pct: float = None) -
     forced_buy = cfg("risk", "forced_buy_margin", False)  # 🔥 NEW: Force buying with margin
     
     if allow_margin:
-        margin_leverage = float(cfg("risk", "margin_leverage", 2.0))
+        margin_leverage = safe_float(cfg("risk", "margin_leverage", 2.0), 2.0)
         if margin_leverage < 1.0:
             logger.warning("⚠️ margin_leverage below 1.0, clamping to 1.0")
             margin_leverage = 1.0
@@ -81,7 +91,7 @@ def calculate_quantity(price: float, stop_loss: float, risk_pct: float = None) -
             logger.warning("⚠️ margin_leverage above 5.0, clamping to 5.0")
             margin_leverage = 5.0
 
-        position_size_pct = float(cfg("risk", "position_size_margin", 0.75))
+        position_size_pct = safe_float(cfg("risk", "position_size_margin", 0.75), 0.75)
         if position_size_pct < 0.10:
             logger.warning("⚠️ position_size_margin below 10%, clamping to 10%")
             position_size_pct = 0.10
@@ -115,7 +125,7 @@ def calculate_quantity(price: float, stop_loss: float, risk_pct: float = None) -
     max_loss  = capital * risk_pct  # Risk is always based on REAL capital, not margin!
     stop_dist = abs(price - stop_loss)
     if stop_dist == 0:
-        stop_dist = price * float(cfg("risk", "stop_loss_percent", 0.01)) if price > 0 else 1.0
+        stop_dist = price * safe_float(cfg("risk", "stop_loss_percent", 0.01), 0.01) if price > 0 else 1.0
         if stop_dist == 0:
             stop_dist = 1.0
         logger.warning(f"stop_dist was 0 for {price=}, {stop_loss=}, using {stop_dist}")
@@ -190,9 +200,22 @@ def calculate_quantity_with_tranches(
       → Can buy 1 share, but tranche mode calculates: 3 tranches × 0.5 shares each
       → Or: wait for small price dips, pyramid up
     """
-    capital = _get_available_capital()
+    price = safe_float(price, 0.0)
+    stop_loss = safe_float(stop_loss, 0.0)
+    if price <= 0:
+        return {
+            'total_qty': 0,
+            'num_tranches': 0,
+            'per_tranche_qty': 0,
+            'margin_used': 0.0,
+            'margin_ratio': 0.0,
+        }
+
+    capital = max(0.0, safe_float(_get_available_capital(), 0.0))
     if risk_pct is None:
-        risk_pct = float(cfg("risk", "max_risk_per_trade", 0.02))
+        risk_pct = safe_float(cfg("risk", "max_risk_per_trade", 0.02), 0.02)
+    risk_pct = max(0.0, min(1.0, safe_float(risk_pct, 0.02)))
+    max_tranches = max(1, min(10, safe_int(max_tranches, 3)))
     
     allow_margin = cfg("risk", "allow_margin", False)
     if not allow_margin:
@@ -206,7 +229,7 @@ def calculate_quantity_with_tranches(
             'margin_ratio': 0.0,
         }
     
-    margin_leverage = float(cfg("risk", "margin_leverage", 2.0))
+    margin_leverage = safe_float(cfg("risk", "margin_leverage", 2.0), 2.0)
     if margin_leverage < 1.0:
         logger.warning("⚠️ margin_leverage below 1.0, clamping to 1.0")
         margin_leverage = 1.0
@@ -214,7 +237,7 @@ def calculate_quantity_with_tranches(
         logger.warning("⚠️ margin_leverage above 5.0, clamping to 5.0")
         margin_leverage = 5.0
 
-    position_size_pct = float(cfg("risk", "position_size_margin", 0.75))
+    position_size_pct = safe_float(cfg("risk", "position_size_margin", 0.75), 0.75)
     if position_size_pct < 0.10:
         logger.warning("⚠️ position_size_margin below 10%, clamping to 10%")
         position_size_pct = 0.10
@@ -253,7 +276,8 @@ def calculate_quantity_with_tranches(
 
 
 def calculate_stop_loss(price: float, direction: str = "BUY") -> float:
-    pct = float(cfg("risk", "stop_loss_percent", 0.01))
+    price = safe_float(price, 0.0)
+    pct = max(0.0001, min(0.20, safe_float(cfg("risk", "stop_loss_percent", 0.01), 0.01)))
     if direction == "BUY":
         return round(price * (1 - pct), 2)
     return round(price * (1 + pct), 2)
@@ -261,8 +285,10 @@ def calculate_stop_loss(price: float, direction: str = "BUY") -> float:
 
 def calculate_target(entry: float, stop_loss: float) -> float:
     """Target = entry + (risk × RR ratio). Default 2:1."""
+    entry = safe_float(entry, 0.0)
+    stop_loss = safe_float(stop_loss, entry)
     risk   = abs(entry - stop_loss)
-    rr     = float(cfg("risk", "target_rr_ratio", 2.0))
+    rr     = max(0.1, min(10.0, safe_float(cfg("risk", "target_rr_ratio", 2.0), 2.0)))
     return round(entry + (risk * rr), 2)
 
 
@@ -279,7 +305,7 @@ def _broker_safe_limit_price(ltp: float, transaction: str) -> float:
     Convert a desired market-style order into a limit order inside Kotak's
     protection band. Retail algo market orders are not allowed.
     """
-    ltp = max(float(ltp or 0), 0.05)
+    ltp = max(safe_float(ltp, 0.0), 0.05)
     pct = _market_protection_pct(ltp)
     if str(transaction).upper() == "B":
         return round(ltp * (1 + pct), 2)
@@ -298,14 +324,14 @@ def _current_position_valuation() -> dict:
 
     for p in get_open_positions():
         symbol = p.get("symbol", "")
-        qty = float(p.get("quantity", 0) or 0)
-        entry_price = float(p.get("entry_price", 0) or 0)
+        qty = safe_float(p.get("quantity", 0), 0.0)
+        entry_price = safe_float(p.get("entry_price", 0), 0.0)
 
         current_price = entry_price
         if get_latest_tick:
             try:
                 tick = get_latest_tick(symbol)
-                current_price = float(tick.get("ltp", entry_price)) if tick else entry_price
+                current_price = safe_float(tick.get("ltp", entry_price), entry_price) if tick else entry_price
             except Exception:
                 current_price = entry_price
 
@@ -341,6 +367,22 @@ def place_buy_order(
     🔧 FIXED VERSION: Validates session before attempting order.
     Prevents cascading failures from bad tokens.
     """
+    symbol = str(symbol or "").strip().upper()
+    confidence_value = max(0.0, min(100.0, safe_float(confidence, 0.0)))
+    min_confidence = max(0.0, min(100.0, safe_float(cfg("strategy", "min_confidence", 70), 70)))
+    if confidence_value < min_confidence:
+        logger.error(
+            "BUY blocked for %s: confidence %.1f below min_confidence %.1f",
+            symbol,
+            confidence_value,
+            min_confidence,
+        )
+        return {}
+
+    if any(str(p.get("symbol", "")).upper() == symbol for p in get_open_positions()):
+        logger.warning("BUY blocked for %s: local position already open", symbol)
+        return {}
+
     breaker = get_breaker("order")
     if breaker.is_open():
         logger.error("🔴 Order circuit OPEN — blocking BUY for %s", symbol)
@@ -355,18 +397,19 @@ def place_buy_order(
         return {}
 
     try:
-        return breaker.call(
-            _place_buy_order_impl,
-            symbol=symbol,
-            trading_symbol=trading_symbol,
-            entry_price=entry_price,
-            stop_loss=stop_loss,
-            strategy=strategy,
-            confidence=confidence,
-            product=product,
-            risk_pct=risk_pct,
-            default={},
-        )
+        with _order_lock:
+            return breaker.call(
+                _place_buy_order_impl,
+                symbol=symbol,
+                trading_symbol=trading_symbol,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                strategy=strategy,
+                confidence=confidence_value,
+                product=product,
+                risk_pct=risk_pct,
+                default={},
+            )
     except OrderExecutionError as e:
         logger.error("❌ BUY blocked after failure: %s", e)
         return {}
@@ -383,9 +426,25 @@ def _place_buy_order_impl(
     risk_pct:       float = None,
 ) -> dict:
     """Same as original, but with session validation before SL-M placement."""
+    symbol = str(symbol or "").strip().upper()
+    trading_symbol = trading_symbol or symbol
+    entry_price = safe_float(entry_price, 0.0)
+    confidence = int(max(0.0, min(100.0, safe_float(confidence, 0.0))))
+    if entry_price <= 0:
+        logger.error("BUY rejected for %s: invalid entry price %r", symbol, entry_price)
+        return {}
+
+    if any(str(p.get("symbol", "")).upper() == symbol for p in get_open_positions()):
+        logger.warning("BUY rejected for %s: local position already open", symbol)
+        return {}
 
     if stop_loss is None:
         stop_loss = calculate_stop_loss(entry_price, "BUY")
+    else:
+        stop_loss = safe_float(stop_loss, 0.0)
+    if stop_loss <= 0 or stop_loss >= entry_price:
+        logger.error("BUY rejected for %s: invalid stop loss %r", symbol, stop_loss)
+        return {}
 
     quantity     = calculate_quantity(entry_price, stop_loss, risk_pct)
     
@@ -400,8 +459,11 @@ def _place_buy_order_impl(
     # 🔥 MARGIN SAFETY: Check if this order would over-leverage
     margin_status = get_margin_status()
     capital_deployed_if_buy = quantity * entry_price
-    total_would_deploy = margin_status['deployed_in_positions'] + capital_deployed_if_buy
-    would_over_leverage = total_would_deploy > (margin_status['real_capital'] * margin_status['margin_leverage'])
+    deployed_now = safe_float(margin_status.get('deployed_in_positions'), 0.0)
+    real_capital = safe_float(margin_status.get('real_capital'), 0.0)
+    leverage = safe_float(margin_status.get('margin_leverage'), 1.0)
+    total_would_deploy = deployed_now + capital_deployed_if_buy
+    would_over_leverage = total_would_deploy > (real_capital * leverage)
     
     if would_over_leverage:
         logger.error(
@@ -536,19 +598,22 @@ def place_sell_order(
 ) -> bool:
     """Place SELL — protected by order circuit breaker."""
     breaker = get_breaker("order")
+    symbol = str(symbol or "").strip().upper()
+    exit_price = safe_float(exit_price, 0.0)
     if breaker.is_open():
         logger.error("🔴 Order circuit OPEN — blocking SELL for %s", symbol)
         return False
 
     try:
-        return breaker.call(
-            _place_sell_order_impl,
-            symbol=symbol,
-            exit_price=exit_price,
-            reason=reason,
-            product=product,
-            default=False,
-        )
+        with _order_lock:
+            return breaker.call(
+                _place_sell_order_impl,
+                symbol=symbol,
+                exit_price=exit_price,
+                reason=reason,
+                product=product,
+                default=False,
+            )
     except OrderExecutionError as e:
         logger.error("❌ SELL blocked after failure: %s", e)
         return False
@@ -561,14 +626,23 @@ def _place_sell_order_impl(
     product:    str = "MIS",
 ) -> bool:
 
+    symbol = str(symbol or "").strip().upper()
+    exit_price = safe_float(exit_price, 0.0)
+    if exit_price <= 0:
+        logger.error("SELL rejected for %s: invalid exit price %r", symbol, exit_price)
+        return False
+
     open_positions = get_open_positions()
-    position = next((p for p in open_positions if p["symbol"] == symbol), None)
+    position = next((p for p in open_positions if str(p.get("symbol", "")).upper() == symbol), None)
 
     if not position:
         logger.warning(f"No open position for {symbol}")
         return False
 
-    quantity       = position["quantity"]
+    quantity       = safe_int(position.get("quantity"), 0)
+    if quantity <= 0:
+        logger.error("SELL rejected for %s: invalid quantity %r", symbol, position.get("quantity"))
+        return False
     # ← FIXED: use stored trading_symbol, not raw ticker
     trading_symbol = position.get("trading_symbol") or symbol
     success        = True
@@ -610,7 +684,7 @@ def _place_sell_order_impl(
             raise OrderExecutionError(f"SELL not verified for {symbol}")
 
     if success:
-        entry = float(position.get("entry_price") or 0)
+        entry = safe_float(position.get("entry_price"), 0.0)
         pnl = (exit_price - entry) * quantity if entry else None
         close_position(symbol, exit_price, reason)
         
@@ -622,7 +696,7 @@ def _place_sell_order_impl(
             confidence = position.get("confidence", 0)  # Now contains adaptive-adjusted confidence from signal
             
             # Calculate drawdown if available (estimate from position tracking)
-            max_price = position.get("max_price_during_hold", exit_price)
+            max_price = safe_float(position.get("max_price_during_hold"), exit_price)
             drawdown = max(0, (max_price - exit_price) / exit_price * 100) if exit_price > 0 else 0
             
             # Get current time window for statistics
@@ -679,9 +753,9 @@ def check_stop_losses(live_prices: dict[str, float]):
     """Checks software SL. Kotak SL-M is the backup."""
     for position in get_open_positions():
         symbol      = position["symbol"]
-        trailing_sl = position.get("trailing_sl")
-        stop_loss   = position.get("stop_loss")
-        current     = live_prices.get(symbol)
+        trailing_sl = safe_float(position.get("trailing_sl"), 0.0)
+        stop_loss   = safe_float(position.get("stop_loss"), 0.0)
+        current     = safe_float(live_prices.get(symbol), 0.0)
 
         if not current:
             continue
@@ -706,8 +780,8 @@ def check_profit_targets(live_prices: dict[str, float]):
     """Exits when price hits 2:1 target."""
     for position in get_open_positions():
         symbol  = position["symbol"]
-        target  = position.get("target_price")
-        current = live_prices.get(symbol)
+        target  = safe_float(position.get("target_price"), 0.0)
+        current = safe_float(live_prices.get(symbol), 0.0)
 
         if not current or not target:
             continue
@@ -744,8 +818,9 @@ def _get_available_capital(force_refresh: bool = False) -> float:
             or limits.get("availablecash")
             or limits.get("data", {}).get("Net")
         )
-        if available and float(available) > 0:
-            _capital_cache = float(available)
+        available_value = safe_float(available, 0.0)
+        if available_value > 0:
+            _capital_cache = available_value
             _capital_last_update = now
             return _capital_cache
 
@@ -761,12 +836,12 @@ def _calculate_paper_capital_available() -> float:
 
     Formula: available = initial_capital - deployed_in_positions + closed_pnl
     """
-    initial_capital = float(cfg("risk", "paper_capital", 10000))
+    initial_capital = max(0.0, safe_float(cfg("risk", "paper_capital", 10000), 10000.0))
 
     # Sum deployment in all open positions
     positions = get_open_positions()
     deployed = sum(
-        float(p.get("quantity", 0)) * float(p.get("entry_price", 0))
+        safe_float(p.get("quantity", 0), 0.0) * safe_float(p.get("entry_price", 0), 0.0)
         for p in positions
     )
 
@@ -808,12 +883,12 @@ def get_margin_status() -> dict:
     """
     # For PAPER mode, use calculated available capital
     if TRADING_MODE == "PAPER":
-        real_capital = float(cfg("risk", "paper_capital", 10000))
+        real_capital = safe_float(cfg("risk", "paper_capital", 10000), 10000.0)
     else:
-        real_capital = _get_available_capital(force_refresh=True)
+        real_capital = safe_float(_get_available_capital(force_refresh=True), 0.0)
 
     allow_margin = cfg("risk", "allow_margin", False)
-    margin_leverage = float(cfg("risk", "margin_leverage", 2.0))
+    margin_leverage = safe_float(cfg("risk", "margin_leverage", 2.0), 2.0)
     valuation = _current_position_valuation()
     current_position_value = valuation["current_position_value"]
     entry_position_value = valuation["entry_position_value"]
@@ -880,13 +955,13 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
     """
     for position in get_open_positions():
         symbol      = position["symbol"]
-        current     = live_prices.get(symbol)
-        current_tsl = position.get("trailing_sl") or position.get("stop_loss", 0)
+        current     = safe_float(live_prices.get(symbol), 0.0)
+        current_tsl = safe_float(position.get("trailing_sl") or position.get("stop_loss", 0), 0.0)
 
         if not current:
             continue
 
-        tsl_pct = float(cfg("risk", "trailing_sl_percent", 0.008))
+        tsl_pct = max(0.0001, min(0.20, safe_float(cfg("risk", "trailing_sl_percent", 0.008), 0.008)))
         new_tsl = round(current * (1 - tsl_pct), 2)
 
         if new_tsl > current_tsl:
@@ -911,8 +986,8 @@ def check_max_daily_loss() -> bool:
     """Daily loss check based on actual available capital."""
     gross_pnl      = get_today_gross_pnl()
     # Use dynamic capital (live balance) for limit calculation
-    live_capital = _get_available_capital()
-    max_daily_loss = -(live_capital * float(cfg("risk", "max_daily_loss_percent", 0.05)))
+    live_capital = max(0.0, safe_float(_get_available_capital(), 0.0))
+    max_daily_loss = -(live_capital * max(0.0, min(1.0, safe_float(cfg("risk", "max_daily_loss_percent", 0.05), 0.05))))
 
     if gross_pnl <= max_daily_loss:
         logger.warning(
@@ -1063,7 +1138,16 @@ def _send_kotak_order(
         return None
 
     normalized_order_type = str(order_type).upper()
-    order_price = round(float(price or 0), 2)
+    order_price = round(safe_float(price, 0.0), 2)
+    if quantity <= 0 or order_price <= 0:
+        logger.error(
+            "Invalid broker order payload | symbol=%s transaction=%s qty=%r price=%r",
+            order_symbol,
+            transaction,
+            quantity,
+            price,
+        )
+        return None
     if normalized_order_type in ("MKT", "MARKET"):
         order_price = _broker_safe_limit_price(price, transaction)
         normalized_order_type = "L"
@@ -1250,6 +1334,16 @@ def _send_kotak_sl_order(
     # STEP 0: Handle trading symbol
     # 🔥 FIX (2026-05-27): Kotak order API REQUIRES the -EQ suffix!
     order_symbol = trading_symbol  # ← KEEP -EQ suffix!
+    trigger_price = safe_float(trigger_price, 0.0)
+    quantity = safe_int(quantity, 0)
+    if quantity <= 0 or trigger_price <= 0:
+        logger.error(
+            "Invalid SL order payload | symbol=%s qty=%r trigger=%r",
+            order_symbol,
+            quantity,
+            trigger_price,
+        )
+        return None
     logger.debug(f"📋 SL-M order symbol: {order_symbol}")
     logger.info(f"🔄 [SL-M] Starting SL order placement | Symbol: {order_symbol} | Qty: {quantity} | Trigger: ₹{trigger_price}")
     
@@ -1370,6 +1464,11 @@ def _modify_sl_order(
     quantity:      int,
 ) -> bool:
     """Modifies existing SL-M order when trailing SL moves up."""
+    new_trigger = safe_float(new_trigger, 0.0)
+    quantity = safe_int(quantity, 0)
+    if quantity <= 0 or new_trigger <= 0:
+        logger.error("Invalid SL modify payload | order_id=%s qty=%r trigger=%r", order_id, quantity, new_trigger)
+        return False
     try:
         # 🔐 CRITICAL: Ensure Trade token is set before modifying order
         client = ensure_trade_token_on_client()

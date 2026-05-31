@@ -24,6 +24,7 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 
 from core.state_manager import save_briefing
+from core.safe_io import safe_read_json
 from core.trading_settings import get as cfg
 
 load_dotenv()
@@ -426,7 +427,7 @@ def _validate_screener_picks(
 def _screener_system_prompt() -> str:
     n = _cognition_pick_count()
     return f"""
-INTRADAY STOCK SCREENER - Pick {n} stocks for live AI war room debate.
+INTRADAY STOCK SCREENER - Pick {n} stocks for live cognition screening.
 
 YOU ARE: Market analyst who combines technical setup with NEWS/CATALYSTS/SECTOR MOMENTUM.
 
@@ -507,8 +508,13 @@ if __name__ == "__main__":
     print("Running morning screener standalone...")
     run_morning_screener()
 
-    with open("data/session_briefing.json") as f:
-        briefing = json.load(f)
+    briefing = safe_read_json(
+        "data/session_briefing.json",
+        {},
+        expected_type=dict,
+        label="session briefing",
+        log=logger,
+    )
 
     print(f"\nMarket bias: {briefing.get('market_bias')}")
     print(f"\nCognition picks ({len(briefing.get('approved_stocks', []))}):")

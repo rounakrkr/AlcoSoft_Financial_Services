@@ -1,8 +1,13 @@
-import json
+import logging
 import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+
+from core.safe_io import safe_read_json
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -124,11 +129,17 @@ def _parse_sets(raw_sets: list[dict], side: str) -> tuple[StrategySetDefinition,
 
 
 def _read_strategy_sets(config_path: Path) -> StrategySetConfig:
-    with config_path.open("r", encoding="utf-8-sig") as f:
-        raw = json.load(f)
+    raw = safe_read_json(
+        config_path,
+        {},
+        expected_type=dict,
+        label="strategy set config",
+        log=logger,
+    )
 
     if not isinstance(raw, dict):
-        raise ValueError("strategy set config must be a JSON object")
+        logger.error("strategy set config must be a JSON object; disabling new entries")
+        raw = {}
 
     return StrategySetConfig(
         buy_sets=_parse_sets(raw.get("buy_sets", []), "buy"),
@@ -148,7 +159,14 @@ def load_strategy_sets(path: str | os.PathLike | None = None) -> StrategySetConf
         if cached and cached[0] == mtime_ns:
             return cached[1]
 
-        config = _read_strategy_sets(config_path)
+        try:
+            config = _read_strategy_sets(config_path)
+        except Exception as exc:
+            if cached:
+                logger.error("Strategy set reload failed; keeping last good config: %s", exc)
+                return cached[1]
+            logger.error("Strategy set config invalid; disabling strategy sets: %s", exc)
+            config = StrategySetConfig(buy_sets=tuple(), sell_sets=tuple())
         _cache[config_path] = (mtime_ns, config)
         return config
 

@@ -250,8 +250,8 @@ def build_market_snapshot() -> dict:
                 # This is simplified — actual data would come from broker
                 nifty_price = "NIFTY_PRICE_TBD"
                 nifty_trend = "BULLISH" if True else "BEARISH"
-        except:
-            pass
+        except Exception as exc:
+            logger.debug("NIFTY snapshot unavailable: %s", exc)
 
         snapshot = {
             "timestamp": datetime.now().isoformat(),

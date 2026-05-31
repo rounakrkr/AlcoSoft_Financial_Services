@@ -13,6 +13,8 @@ import threading
 from datetime import datetime
 from typing import Any
 
+from core.safe_io import atomic_write_json, safe_read_json
+
 logger = logging.getLogger(__name__)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -122,12 +124,14 @@ def load_settings(force: bool = False) -> dict:
 
         data = copy.deepcopy(DEFAULTS)
         if os.path.exists(path):
-            try:
-                with open(path, encoding="utf-8") as f:
-                    raw = json.load(f)
-                data = _deep_merge(data, raw)
-            except Exception as e:
-                logger.error(f"Failed to load {path}: {e}")
+            raw = safe_read_json(
+                path,
+                {},
+                expected_type=dict,
+                label="trading settings",
+                log=logger,
+            )
+            data = _deep_merge(data, raw)
 
         data["_meta"] = {
             **data.get("_meta", {}),
@@ -150,8 +154,8 @@ def save_settings(updates: dict) -> dict:
     }
 
     os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
-    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-        json.dump(merged, f, indent=2)
+    if not atomic_write_json(SETTINGS_PATH, merged, label="trading settings", log=logger):
+        raise OSError(f"Failed to save {SETTINGS_PATH}")
 
     global _cache, _mtime
     with _lock:

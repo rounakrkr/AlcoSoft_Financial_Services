@@ -4,7 +4,6 @@
 #   Run: python dashboard/app.py  →  http://localhost:5000
 # ============================================================
 
-import json
 import os
 import sqlite3
 import sys
@@ -28,6 +27,7 @@ from core.trading_settings import (
     get as cfg,
 )
 from core.strategy_sets import load_strategy_sets, normalize_set_key
+from core.safe_io import safe_read_json
 
 app = Flask(
     __name__,
@@ -59,27 +59,33 @@ except ImportError:
 def _reflection_db_query(query: str, params: tuple = ()) -> list:
     if not os.path.exists(REFLECTION_DB_PATH):
         return []
+    conn = None
     try:
         conn = sqlite3.connect(REFLECTION_DB_PATH)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(query, params).fetchall()
-        conn.close()
         return [dict(r) for r in rows]
     except Exception:
         return []
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _db_query(query: str, params: tuple = ()) -> list:
     if not os.path.exists(DB_PATH):
         return []
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(query, params).fetchall()
-        conn.close()
         return [dict(r) for r in rows]
     except Exception:
         return []
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _configured_strategy_sets() -> list:
@@ -169,8 +175,9 @@ def api_status():
     }
 
     positions = _db_query("""
-        SELECT symbol, entry_price, stop_loss, quantity,
-               strategy, entry_time, trading_mode
+        SELECT symbol, entry_price, stop_loss, trailing_sl,
+               target_price, quantity, strategy, confidence,
+               kotak_sl_order_id, entry_time, trading_mode
         FROM trades WHERE status = 'OPEN'
         ORDER BY id DESC
     """)
@@ -181,24 +188,30 @@ def api_status():
         FROM trades ORDER BY id DESC LIMIT 10
     """)
 
-    briefing = {}
-    if os.path.exists(BRIEFING_PATH):
-        with open(BRIEFING_PATH, encoding="utf-8-sig") as f:
-            briefing = json.load(f)
+    briefing = safe_read_json(
+        BRIEFING_PATH,
+        {},
+        expected_type=dict,
+        label="dashboard briefing",
+        log=app.logger,
+    )
 
-    war_log = _db_query("""
+    agent_decisions = _db_query("""
         SELECT agent, symbol, verdict, confidence,
                reasons, concern, timestamp, round_number
-        FROM war_room_log
+        FROM agent_decision_log
         WHERE timestamp LIKE ?
         ORDER BY id DESC LIMIT 10
     """, (f"{today}%",))
 
-    reflection = {}
     ref_path = os.path.join(REFLECTIONS_DIR, f"{today}.json")
-    if os.path.exists(ref_path):
-        with open(ref_path, encoding="utf-8-sig") as f:
-            reflection = json.load(f)
+    reflection = safe_read_json(
+        ref_path,
+        {},
+        expected_type=dict,
+        label="dashboard reflection",
+        log=app.logger,
+    )
 
     total = stats.get("total_trades", 0)
     winners = stats.get("winning_trades", 0)
@@ -207,12 +220,14 @@ def api_status():
     cap_path = os.path.join(_ROOT, "data", "live_capital.json")
     capital_display = float(cfg("risk", "paper_capital", 10000))
     if os.path.exists(cap_path):
-        try:
-            with open(cap_path, encoding="utf-8-sig") as f:
-                cap_data = json.load(f)
-                capital_display = cap_data.get("capital", capital_display)
-        except Exception:
-            pass
+        cap_data = safe_read_json(
+            cap_path,
+            {},
+            expected_type=dict,
+            label="live capital",
+            log=app.logger,
+        )
+        capital_display = cap_data.get("capital", capital_display)
 
     st = load_settings().get("strategy", {})
 
@@ -268,7 +283,7 @@ def api_status():
         "positions":   positions,
         "trades":      trades,
         "briefing":    briefing,
-        "war_log":     war_log,
+        "agent_decisions": agent_decisions,
         "reflection":  reflection,
         "charts": {
             "trade_labels":    labels,
@@ -405,14 +420,14 @@ def api_adaptive():
         "FROM config_history ORDER BY timestamp DESC LIMIT 20"
     )
 
-    reflection = {}
     ref_path = os.path.join(REFLECTIONS_DIR, f"{datetime.now().strftime('%Y-%m-%d')}.json")
-    if os.path.exists(ref_path):
-        try:
-            with open(ref_path, encoding="utf-8-sig") as f:
-                reflection = json.load(f)
-        except Exception:
-            reflection = {}
+    reflection = safe_read_json(
+        ref_path,
+        {},
+        expected_type=dict,
+        label="adaptive reflection",
+        log=app.logger,
+    )
 
     avg_confidence = 0.0
     if multiplier_rows:

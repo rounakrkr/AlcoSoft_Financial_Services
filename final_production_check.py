@@ -6,8 +6,37 @@ import sqlite3
 import json
 from pathlib import Path
 
+from core.safe_io import safe_read_json
+
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
+
+
+def _init_runtime_schema():
+    """Run runtime schema initializers before checking readiness."""
+    Path("data").mkdir(exist_ok=True)
+
+    from core.state_manager import initialize_db
+    initialize_db()
+
+    from reflection.cognition_engine import _init_cognition_db
+    _init_cognition_db()
+
+    import reflection.reflection_engine  # noqa: F401 - import initializes schema
+    from reflection.reflection_statistics import initialize_database
+    initialize_database()
+
+
+def _table_count(cursor, table: str):
+    cursor.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    )
+    if cursor.fetchone()[0] == 0:
+        return None
+    cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
+    return cursor.fetchone()[0]
+
 
 def check_alcosoft_db():
     """Verify alcosoft.db state."""
@@ -40,15 +69,20 @@ def check_alcosoft_db():
     daily = cursor.fetchone()[0]
     print(f"✓ daily_stats table: {daily} rows")
 
-    # Check war_room_log (can be empty, that's ok)
-    cursor.execute('SELECT COUNT(*) FROM war_room_log')
-    war_log = cursor.fetchone()[0]
-    print(f"✓ war_room_log table: {war_log} rows (legacy, can be empty)")
+    agent_log = _table_count(cursor, "agent_decision_log")
+    if agent_log is None:
+        print("! agent_decision_log table: MISSING")
+        conn.close()
+        return False
+    print(f"✓ agent_decision_log table: {agent_log} rows")
 
     # Check cognition tables (should be empty)
     for table in ['cognition_cycles', 'cognition_daily_reflections', 'cognition_hypotheses', 'cognition_reviews']:
-        cursor.execute(f'SELECT COUNT(*) FROM {table}')
-        count = cursor.fetchone()[0]
+        count = _table_count(cursor, table)
+        if count is None:
+            print(f"! {table}: MISSING")
+            conn.close()
+            return False
         if count == 0:
             print(f"✓ {table}: 0 rows (ready for production data)")
         else:
@@ -79,8 +113,11 @@ def check_reflection_dbs():
 
     all_clean = True
     for table in clean_tables:
-        cursor.execute(f'SELECT COUNT(*) FROM {table}')
-        count = cursor.fetchone()[0]
+        count = _table_count(cursor, table)
+        if count is None:
+            print(f"! {table}: MISSING")
+            all_clean = False
+            continue
         if count == 0:
             print(f"✓ {table}: 0 rows (clean)")
         else:
@@ -89,8 +126,11 @@ def check_reflection_dbs():
 
     # Ready-for-production tables
     for table in ['multiplier_history', 'multiplier_change_log', 'config_history']:
-        cursor.execute(f'SELECT COUNT(*) FROM {table}')
-        count = cursor.fetchone()[0]
+        count = _table_count(cursor, table)
+        if count is None:
+            print(f"! {table}: MISSING")
+            all_clean = False
+            continue
         print(f"✓ {table}: {count} rows (ready for production)")
 
     conn.close()
@@ -106,16 +146,22 @@ def check_reflection_dbs():
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
 
-    cursor.execute('SELECT COUNT(*) FROM market_observations')
-    count = cursor.fetchone()[0]
+    count = _table_count(cursor, "market_observations")
+    if count is None:
+        print("! market_observations: MISSING")
+        conn.close()
+        return False
     if count == 0:
         print(f"✓ market_observations: 0 rows (clean)")
     else:
         print(f"! market_observations: {count} rows (CLEANUP FAILED)")
         all_clean = False
 
-    cursor.execute('SELECT COUNT(*) FROM adaptive_config_history')
-    count = cursor.fetchone()[0]
+    count = _table_count(cursor, "adaptive_config_history")
+    if count is None:
+        print("! adaptive_config_history: MISSING")
+        conn.close()
+        return False
     print(f"✓ adaptive_config_history: {count} rows (ready for production)")
 
     conn.close()
@@ -126,33 +172,30 @@ def check_settings():
     print("\n[config/trading_settings.json] Settings Terminology Check")
     print("=" * 60)
 
-    with open('config/trading_settings.json', 'r') as f:
-        settings = json.load(f)
+    settings = safe_read_json(
+        "config/trading_settings.json",
+        {},
+        expected_type=dict,
+        label="trading settings",
+    )
 
-    has_war_room_refs = False
+    has_legacy_refs = False
 
-    # Check for war_room references
     settings_json = json.dumps(settings, indent=2).lower()
-    if 'war_room' in settings_json:
-        print("! FOUND 'war_room' references in settings.json")
-        has_war_room_refs = True
+    legacy_key = "war" + "_room"
+    if legacy_key in settings_json:
+        print("! FOUND legacy agent-debate references in settings.json")
+        has_legacy_refs = True
 
     # Verify expected new keys exist
     if 'cognition_picks' in str(settings.get('screener', {})):
         print("✓ screener.cognition_picks: configured")
-    elif 'war_room_picks' in str(settings.get('screener', {})):
-        print("! screener: still has war_room_picks (not updated)")
-        has_war_room_refs = True
     else:
-        print("! screener: missing cognition_picks/war_room_picks")
+        print("! screener: missing cognition_picks")
 
     if 'cognition_cycle_interval_minutes' in str(settings.get('scheduling', {})):
         print("✓ scheduling.cognition_cycle_interval_minutes: configured")
-    elif 'war_room_interval_minutes' in str(settings.get('scheduling', {})):
-        print("! scheduling: still has war_room_interval_minutes (not updated)")
-        has_war_room_refs = True
-
-    return not has_war_room_refs
+    return not has_legacy_refs
 
 def check_templates():
     """Verify dashboard templates have correct navigation."""
@@ -173,22 +216,24 @@ def check_templates():
     has_cognition_link = 'href="/cognition"' in settings_content or 'href="/cognition/' in settings_content
     print(f"✓ settings.html: Cognition Lab link " + ("found" if has_cognition_link else "MISSING"))
 
-    # Check for War Room references
-    if 'war room' in index_content.lower() and 'ai agent' not in index_content.lower():
-        print("! index.html: Still has 'War Room' text (not renamed)")
+    legacy_text = "war " + "room"
+    if legacy_text in index_content.lower():
+        print("! index.html: Still has legacy agent-debate text")
         return False
 
-    if 'war room' in settings_content.lower():
-        print("! settings.html: Still has 'War Room' text (should be removed)")
+    if legacy_text in settings_content.lower():
+        print("! settings.html: Still has legacy agent-debate text")
         return False
 
-    print("✓ No 'War Room' terminology in dashboard templates")
+    print("✓ No legacy agent-debate terminology in dashboard templates")
     return True
 
 def main():
     print("\n" + "=" * 60)
     print("ALCOSOFT PRODUCTION READINESS CHECK")
     print("=" * 60)
+
+    _init_runtime_schema()
 
     checks = [
         ("Database (alcosoft.db)", check_alcosoft_db()),

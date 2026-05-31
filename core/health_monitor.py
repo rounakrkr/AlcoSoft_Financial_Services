@@ -101,7 +101,7 @@ def check_briefing() -> Tuple[bool, str]:
         if approved + watchlist == 0:
             return False, "Briefing has no stocks"
         
-        return True, f"Briefing OK ({approved} war room, {watchlist} watchlist)"
+        return True, f"Briefing OK ({approved} cognition, {watchlist} watchlist)"
     except Exception as e:
         return False, str(e)
 

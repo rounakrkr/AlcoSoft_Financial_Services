@@ -224,7 +224,7 @@ async def startup():
         else:
             logger.warning("Briefing found but no stocks to trade. Waiting for updates...")
     else:
-        logger.warning("No briefing available. Waiting for screener/war room...")
+        logger.warning("No briefing available. Waiting for screener or cognition picks...")
 
     # Step 6 — Post-startup feed check (brief wait for WS connect + first ticks)
     logger.info("[6/6] Verifying live feed...")

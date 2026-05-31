@@ -20,6 +20,7 @@
 
 import asyncio
 import logging
+import math
 import os
 import pandas as pd
 import ta
@@ -46,6 +47,7 @@ from core.order_executor import (
 )
 from core.state_manager import load_briefing, get_open_positions
 from core.trading_settings import get as cfg, get_section
+from core.safe_io import atomic_write_json, safe_float, safe_int
 from core.strategy_sets import (
     StrategySetDefinition,
     load_strategy_sets,
@@ -82,13 +84,13 @@ def _apply_trading_settings():
     risk = get_section("risk")
 
     STRATEGY_TYPE         = s.get("strategy_type", "INTRADAY")
-    LOOP_INTERVAL         = int(s.get("loop_interval_sec", 5))
-    MAX_POSITIONS         = int(s.get("max_open_positions", 2))
-    MIN_CONFIDENCE        = int(s.get("min_confidence", 70))
-    LOOKBACK              = int(s.get("signal_lookback_candles", 3))
-    MIN_WS_CANDLES_FOR_PATTERNS = int(s.get("min_ws_candles_for_patterns", 2))
-    MATH_RISK_PER_TRADE   = float(risk.get("math_risk_per_trade", 0.05))
-    SCAN_LOG_INTERVAL     = int(md.get("scan_log_interval_sec", 90))
+    LOOP_INTERVAL         = max(1, safe_int(s.get("loop_interval_sec"), 5))
+    MAX_POSITIONS         = max(1, safe_int(s.get("max_open_positions"), 2))
+    MIN_CONFIDENCE        = int(max(0, min(100, safe_float(s.get("min_confidence"), 70))))
+    LOOKBACK              = max(1, safe_int(s.get("signal_lookback_candles"), 3))
+    MIN_WS_CANDLES_FOR_PATTERNS = max(1, safe_int(s.get("min_ws_candles_for_patterns"), 2))
+    MATH_RISK_PER_TRADE   = max(0.0, min(1.0, safe_float(risk.get("math_risk_per_trade"), 0.05)))
+    SCAN_LOG_INTERVAL     = max(30, safe_int(md.get("scan_log_interval_sec"), 90))
 
 
 _apply_trading_settings()
@@ -107,16 +109,19 @@ ADVISORY_MULTIPLIER_MAX = 1.05
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
-    return max(minimum, min(maximum, value))
+    number = safe_float(value, minimum)
+    return max(minimum, min(maximum, number))
 
 
 def _clamp_confidence(value: float) -> float:
-    return _clamp(float(value), 0.0, 100.0)
+    return _clamp(value, 0.0, 100.0)
 
 
 def _coerce_adaptive_multiplier(raw, label: str, default: float = 1.0) -> float:
     try:
         value = float(raw)
+        if not math.isfinite(value):
+            raise ValueError("not finite")
     except (TypeError, ValueError):
         logger.warning("Invalid adaptive multiplier for %s: %r; using %.2f", label, raw, default)
         return default
@@ -135,6 +140,8 @@ def _coerce_adaptive_multiplier(raw, label: str, default: float = 1.0) -> float:
 def _coerce_advisory_multiplier(raw, label: str, default: float = 1.0) -> float:
     try:
         value = float(raw)
+        if not math.isfinite(value):
+            raise ValueError("not finite")
     except (TypeError, ValueError):
         logger.warning("Invalid advisory multiplier for %s: %r; using %.2f", label, raw, default)
         return default
@@ -175,7 +182,10 @@ def _coerce_float_map(raw, label: str, normalize_keys: bool = False) -> dict[str
             continue
         try:
             out_key = normalize_set_key(key_text) if normalize_keys else key_text.upper()
-            out[out_key] = float(value)
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                raise ValueError("not finite")
+            out[out_key] = numeric
         except (TypeError, ValueError):
             logger.warning("Invalid adaptive value for %s.%s: %r", label, key_text, value)
     return out
@@ -189,6 +199,11 @@ def _load_adaptive_config():
     try:
         s = get_section("adaptive")
         if not s:
+            _adaptive_config = {}
+            _adaptive_signal_multipliers = {}
+            _adaptive_time_multipliers = {}
+            _adaptive_sl_values = {}
+            _adaptive_market_multiplier = 1.0
             return
         
         # Strategy adaptive values
@@ -220,7 +235,12 @@ def _load_adaptive_config():
         _adaptive_config = s
         logger.debug(f"📊 Adaptive config loaded | Signals: {len(_adaptive_signal_multipliers)} | Times: {len(_adaptive_time_multipliers)} | SLs: {len(_adaptive_sl_values)}")
     except Exception as e:
-        logger.debug(f"Adaptive config load: {e}")
+        _adaptive_config = {}
+        _adaptive_signal_multipliers = {}
+        _adaptive_time_multipliers = {}
+        _adaptive_sl_values = {}
+        _adaptive_market_multiplier = 1.0
+        logger.warning("Adaptive config load failed; using neutral multipliers: %s", e)
 
 
 _load_adaptive_config()
@@ -348,7 +368,7 @@ def _waiting_pattern_result(name: str, ws_count: int) -> dict:
 
 
 def _log_full_scan(briefing: dict):
-    """Log every watchlist + war room symbol so logs don't look like only 3-4 stocks exist."""
+    """Log every cognition and watchlist symbol so quiet stocks stay visible."""
     from core.data_fetcher import get_feed_stats
 
     stats = get_feed_stats()
@@ -1224,6 +1244,8 @@ def _resolve_base_confidence(
 def _strategy_confidence_weight(triggered_set: dict) -> float:
     try:
         value = float(triggered_set.get("confidence_weight", 1.0))
+        if not math.isfinite(value):
+            raise ValueError("not finite")
     except (TypeError, ValueError):
         return 1.0
     return _clamp(value, 0.1, 2.0)
@@ -1255,9 +1277,13 @@ def _build_confidence_trace(
     if reload_config:
         _load_adaptive_config()
 
+    set_name = str(triggered_set.get("set_name") or "UNKNOWN")
     final_confidence = _clamp_confidence(base_confidence)
-    set_key = normalize_set_key(triggered_set["set_name"])
-    signal_multiplier = _adaptive_signal_multipliers.get(set_key, 1.0)
+    set_key = normalize_set_key(set_name)
+    signal_multiplier = _coerce_adaptive_multiplier(
+        _adaptive_signal_multipliers.get(set_key, 1.0),
+        f"runtime.signal.{set_key}",
+    )
     confidence_weight = _strategy_confidence_weight(triggered_set)
 
     final_confidence *= signal_multiplier
@@ -1265,8 +1291,14 @@ def _build_confidence_trace(
 
     now = now or datetime.now().time()
     time_window = _get_time_window(now)
-    time_multiplier = _adaptive_time_multipliers.get(time_window, 1.0)
-    market_multiplier = _adaptive_market_multiplier
+    time_multiplier = _coerce_adaptive_multiplier(
+        _adaptive_time_multipliers.get(time_window, 1.0),
+        f"runtime.time_window.{time_window}",
+    )
+    market_multiplier = _coerce_adaptive_multiplier(
+        _adaptive_market_multiplier,
+        "runtime.market_regime",
+    )
     advisory_multiplier = 1.0
     advisory_reason = "neutral"
 
@@ -1298,6 +1330,7 @@ def _build_confidence_trace(
         "market_regime_multiplier": round(market_multiplier, 4),
         "advisory_multiplier": round(advisory_multiplier, 4),
         "advisory_reason": advisory_reason,
+        "min_confidence": _clamp_confidence(MIN_CONFIDENCE),
         "final_confidence": round(_clamp_confidence(final_confidence), 4),
     }
 
@@ -1311,7 +1344,8 @@ def _adaptive_stop_loss_multiplier(symbol: str) -> float:
 
 
 def _calculate_adaptive_stop_loss(symbol: str, price: float, direction: str = "BUY") -> float:
-    pct = float(cfg("risk", "stop_loss_percent", 0.01))
+    price = safe_float(price, 0.0)
+    pct = _clamp(safe_float(cfg("risk", "stop_loss_percent", 0.01), 0.01), 0.0001, 0.20)
     pct *= _adaptive_stop_loss_multiplier(symbol)
     if direction == "BUY":
         return round(price * (1 - pct), 2)
@@ -1340,7 +1374,8 @@ def _format_confidence_trace(trace: dict | None) -> str:
         f"time={trace.get('time_window')}@{trace.get('time_window_multiplier', 1.0)} "
         f"market_x={trace.get('market_regime_multiplier', 1.0)} "
         f"advisory_x={trace.get('advisory_multiplier', 1.0)} "
-        f"final={round(trace.get('final_confidence', 0), 1)}"
+        f"final={round(trace.get('final_confidence', 0), 1)} "
+        f"min={round(trace.get('min_confidence', MIN_CONFIDENCE), 1)}"
     )
 
 
@@ -1678,11 +1713,11 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
 
             briefing = load_briefing()
             if not briefing:
-                logger.warning("No briefing. Waiting for war room...")
+                logger.warning("No briefing. Waiting for screener or cognition picks...")
                 await asyncio.sleep(LOOP_INTERVAL)
                 continue
 
-            # Periodic log: ALL 21 math + 4 war room stocks (not just signal fires)
+            # Periodic log: every tracked symbol, not just signal fires.
             if time.time() - _last_scan_log >= SCAN_LOG_INTERVAL:
                 _last_scan_log = time.time()
                 _log_full_scan(briefing)
@@ -1693,12 +1728,15 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
             # Update live capital file for dashboard
             try:
                 from core.order_executor import _get_available_capital
-                import json
                 cap = _get_available_capital()
-                with open("data/live_capital.json", "w") as f:
-                    json.dump({"capital": cap, "timestamp": datetime.now().isoformat()}, f)
+                atomic_write_json(
+                    "data/live_capital.json",
+                    {"capital": cap, "timestamp": datetime.now().isoformat()},
+                    label="live capital",
+                    log=logger,
+                )
             except Exception:
-                pass
+                logger.debug("Live capital snapshot update skipped", exc_info=True)
 
             if now >= NO_NEW_TRADES:
                 await asyncio.sleep(LOOP_INTERVAL)

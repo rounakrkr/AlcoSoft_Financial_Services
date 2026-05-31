@@ -26,6 +26,7 @@ class StopLossOrderMathTests(unittest.TestCase):
                         entry_price=100.0,
                         stop_loss=99.0,
                         strategy="TEST",
+                        confidence=75,
                     )
 
         self.assertEqual(trade["order_id"], "PAPER-1")
@@ -40,6 +41,23 @@ class StopLossOrderMathTests(unittest.TestCase):
                         entry_price=100.0,
                         stop_loss=99.0,
                         strategy="TEST",
+                        confidence=75,
+                    )
+
+        self.assertEqual(trade, {})
+        impl.assert_not_called()
+
+    def test_buy_blocks_below_runtime_min_confidence(self):
+        with patch("core.order_executor.cfg", return_value=65):
+            with patch("core.order_executor.get_open_positions", return_value=[]):
+                with patch("core.order_executor._place_buy_order_impl") as impl:
+                    trade = place_buy_order(
+                        symbol="TEST",
+                        trading_symbol="TEST-EQ",
+                        entry_price=100.0,
+                        stop_loss=99.0,
+                        strategy="TEST",
+                        confidence=30,
                     )
 
         self.assertEqual(trade, {})

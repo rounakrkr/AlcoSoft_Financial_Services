@@ -139,7 +139,7 @@ main {
 .positions-card { grid-column: span 7; }
 .briefing-card  { grid-column: span 5; }
 .trades-card    { grid-column: span 7; }
-.war-card       { grid-column: span 5; }
+.agent-card     { grid-column: span 5; }
 .reflection-card{ grid-column: span 12; }
 
 .table-wrap {
@@ -256,7 +256,7 @@ main {
 .loss { color: var(--red);   font-weight: 600; }
 .neutral { color: var(--text2); }
 
-/* briefing / war room */
+/* briefing / agent decisions */
 .stock-list { display: flex; flex-direction: column; gap: 0.6rem; }
 .stock-pill {
   background: var(--card2);
@@ -285,7 +285,7 @@ main {
   font-size: 0.7rem;
   font-weight: 600;
 }
-.war-entry {
+.agent-entry {
   background: var(--card2);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -293,16 +293,16 @@ main {
   margin-bottom: 0.5rem;
   font-size: 0.78rem;
 }
-.war-header {
+.agent-header {
   display: flex;
   justify-content: space-between;
   margin-bottom: 0.25rem;
 }
 .agent-name { font-weight: 600; color: var(--accent); }
-.war-verdict-buy   { color: var(--green); font-weight: 600; }
-.war-verdict-avoid { color: var(--red);   font-weight: 600; }
-.war-verdict-wait  { color: var(--yellow); font-weight: 600; }
-.war-reasons { color: var(--text2); font-size: 0.73rem; margin-top: 0.15rem; }
+.agent-verdict-buy   { color: var(--green); font-weight: 600; }
+.agent-verdict-avoid { color: var(--red);   font-weight: 600; }
+.agent-verdict-wait  { color: var(--yellow); font-weight: 600; }
+.agent-reasons { color: var(--text2); font-size: 0.73rem; margin-top: 0.15rem; }
 
 /* ---------- REFLECTION SECTION (unbold, grade slightly smaller) ---------- */
 .reflection-grid {
@@ -553,7 +553,7 @@ main {
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr 1fr; padding: 1rem; }
   .stat-card, .positions-card, .briefing-card,
-  .trades-card, .war-card, .reflection-card { grid-column: span 2; }
+  .trades-card, .agent-card, .reflection-card { grid-column: span 2; }
   .field-grid { grid-template-columns: 1fr; }
   .positions-table, .trades-table { min-width: 560px; }
   .positions-table td:first-child,

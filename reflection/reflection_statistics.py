@@ -470,7 +470,7 @@ def get_latest_market_observation() -> Optional[Dict]:
         
         try:
             obs_data = json.loads(obs_json) if obs_json else {}
-        except:
+        except Exception:
             obs_data = {}
         
         return {

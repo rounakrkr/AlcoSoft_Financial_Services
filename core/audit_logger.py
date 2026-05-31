@@ -142,16 +142,16 @@ class AuditLogger:
             severity=severity,
         )
     
-    def log_war_room_decision(
+    def log_agent_decision(
         self,
         symbol: str,
         round_number: int,
         agents_verdict: dict,  # agent -> verdict
         mediator_action: str,
     ):
-        """Log war room debate outcome."""
+        """Log AI agent decision outcome."""
         self.log_event(
-            "WAR_ROOM_DECISION",
+            "AGENT_DECISION",
             {
                 "symbol": symbol,
                 "round": round_number,
@@ -287,8 +287,8 @@ def audit_position_closed(*args, **kwargs):
     get_audit_logger().log_position_closed(*args, **kwargs)
 
 
-def audit_war_room_decision(*args, **kwargs):
-    get_audit_logger().log_war_room_decision(*args, **kwargs)
+def audit_agent_decision(*args, **kwargs):
+    get_audit_logger().log_agent_decision(*args, **kwargs)
 
 
 def audit_system_error(*args, **kwargs):

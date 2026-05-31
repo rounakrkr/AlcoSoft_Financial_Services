@@ -27,7 +27,7 @@ def reset_alcosoft_db():
     tables_to_clear = [
         'trades',
         'daily_stats',
-        'war_room_log',
+        'agent_decision_log',
         'cognition_cycles',
         'cognition_daily_reflections',
         'cognition_hypotheses',
