@@ -1,7 +1,11 @@
 import unittest
+import json
+import tempfile
 from datetime import time as dt_time
+from pathlib import Path
+from unittest.mock import patch
 
-from core.strategy_sets import load_strategy_sets, normalize_set_key
+from core.strategy_sets import clear_strategy_set_cache, load_strategy_sets, normalize_set_key
 from core import strategy
 
 
@@ -94,6 +98,59 @@ class StrategySetConfigTests(unittest.TestCase):
             strategy._adaptive_signal_multipliers = old_signal
             strategy._adaptive_time_multipliers = old_time
             strategy._adaptive_market_multiplier = old_market
+
+    def test_cognition_advisory_is_hard_capped_in_strategy(self):
+        triggered_set = {
+            "set_name": "BUY_TEST",
+            "base_confidence": 80,
+            "confidence_weight": 1.0,
+        }
+
+        with patch(
+            "reflection.insight_bridge.get_execution_advisory",
+            return_value={"confidence_multiplier": 1.5, "reason": "bad_upstream"},
+        ):
+            trace = strategy._build_confidence_trace(
+                80,
+                triggered_set,
+                symbol="TEST",
+                now=dt_time(9, 30),
+                reload_config=False,
+            )
+
+        self.assertEqual(trace["advisory_multiplier"], 1.05)
+        self.assertEqual(trace["final_confidence"], 84.0)
+
+    def test_strategy_set_cache_reloads_when_file_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sets.json"
+            path.write_text(
+                json.dumps({
+                    "buy_sets": [{
+                        "name": "BUY_A",
+                        "conditions": ["rsi_macd_momentum"],
+                        "base_confidence": 70,
+                    }],
+                    "sell_sets": [],
+                }),
+                encoding="utf-8",
+            )
+            clear_strategy_set_cache()
+            self.assertEqual(load_strategy_sets(path).buy_sets[0].name, "BUY_A")
+
+            path.write_text(
+                json.dumps({
+                    "buy_sets": [{
+                        "name": "BUY_B",
+                        "conditions": ["rsi_macd_momentum"],
+                        "base_confidence": 71,
+                    }],
+                    "sell_sets": [],
+                }),
+                encoding="utf-8",
+            )
+            clear_strategy_set_cache()
+            self.assertEqual(load_strategy_sets(path).buy_sets[0].name, "BUY_B")
 
     def test_adaptive_symbol_stop_changes_runtime_stop_loss(self):
         old_stops = strategy._adaptive_sl_values.copy()

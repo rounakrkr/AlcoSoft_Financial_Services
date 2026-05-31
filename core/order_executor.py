@@ -346,7 +346,7 @@ def place_buy_order(
         logger.error("🔴 Order circuit OPEN — blocking BUY for %s", symbol)
         return {}
 
-    if not validate_and_fix_session_before_order():
+    if TRADING_MODE == "LIVE" and not validate_and_fix_session_before_order():
         logger.error(
             f"❌ BUY BLOCKED: Session not ready for {symbol} "
             f"(token invalid or couldn't refresh)"

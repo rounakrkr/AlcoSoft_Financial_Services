@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +20,10 @@ class StrategySetDefinition:
 class StrategySetConfig:
     buy_sets: tuple[StrategySetDefinition, ...]
     sell_sets: tuple[StrategySetDefinition, ...]
+
+
+_cache_lock = threading.Lock()
+_cache: dict[Path, tuple[int | None, StrategySetConfig]] = {}
 
 
 def _default_path() -> Path:
@@ -118,8 +123,7 @@ def _parse_sets(raw_sets: list[dict], side: str) -> tuple[StrategySetDefinition,
     return tuple(sorted(parsed, key=lambda s: (s.priority, s.name)))
 
 
-def load_strategy_sets(path: str | os.PathLike | None = None) -> StrategySetConfig:
-    config_path = Path(path) if path else strategy_sets_path()
+def _read_strategy_sets(config_path: Path) -> StrategySetConfig:
     with config_path.open("r", encoding="utf-8-sig") as f:
         raw = json.load(f)
 
@@ -130,6 +134,28 @@ def load_strategy_sets(path: str | os.PathLike | None = None) -> StrategySetConf
         buy_sets=_parse_sets(raw.get("buy_sets", []), "buy"),
         sell_sets=_parse_sets(raw.get("sell_sets", []), "sell"),
     )
+
+
+def load_strategy_sets(path: str | os.PathLike | None = None) -> StrategySetConfig:
+    config_path = (Path(path) if path else strategy_sets_path()).resolve()
+    try:
+        mtime_ns = config_path.stat().st_mtime_ns
+    except OSError:
+        mtime_ns = None
+
+    with _cache_lock:
+        cached = _cache.get(config_path)
+        if cached and cached[0] == mtime_ns:
+            return cached[1]
+
+        config = _read_strategy_sets(config_path)
+        _cache[config_path] = (mtime_ns, config)
+        return config
+
+
+def clear_strategy_set_cache() -> None:
+    with _cache_lock:
+        _cache.clear()
 
 
 def get_strategy_set_names(side: str | None = None) -> list[str]:

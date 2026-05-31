@@ -109,7 +109,7 @@ def _detect_market_condition(snapshot: dict) -> str:
     Returns: "BULLISH", "BEARISH", "MIXED", or "RANGING"
     """
     if not snapshot.get("price_movements"):
-        return "UNKNOWN"
+        return "RANGING" if snapshot.get("symbols_with_data", 0) > 0 else "UNKNOWN"
     
     movements = snapshot["price_movements"]
     positive = sum(1 for m in movements if m["pct_change"] > 0)
@@ -134,7 +134,7 @@ def _detect_trend_strength(snapshot: dict) -> str:
     Returns: "STRONG", "WEAK", or "UNKNOWN"
     """
     if not snapshot.get("price_movements"):
-        return "UNKNOWN"
+        return "WEAK" if snapshot.get("symbols_with_data", 0) > 0 else "UNKNOWN"
     
     movements = snapshot["price_movements"]
     large_moves = sum(1 for m in movements if abs(m["pct_change"]) > 0.5)
@@ -192,7 +192,7 @@ def _analyze_reversal_activity() -> str:
     total_signals = len(signal_stats)
     
     if total_signals == 0:
-        return "UNKNOWN"
+        return "LOW"
     
     weak_ratio = weak_signals / total_signals
     

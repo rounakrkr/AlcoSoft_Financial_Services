@@ -102,6 +102,8 @@ _adaptive_market_multiplier: float = 1.0
 
 ADAPTIVE_MULTIPLIER_MIN = 0.4
 ADAPTIVE_MULTIPLIER_MAX = 1.2
+ADVISORY_MULTIPLIER_MIN = 0.95
+ADVISORY_MULTIPLIER_MAX = 1.05
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
@@ -123,6 +125,24 @@ def _coerce_adaptive_multiplier(raw, label: str, default: float = 1.0) -> float:
     if clipped != value:
         logger.warning(
             "Adaptive multiplier for %s clipped from %.4f to %.4f",
+            label,
+            value,
+            clipped,
+        )
+    return clipped
+
+
+def _coerce_advisory_multiplier(raw, label: str, default: float = 1.0) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid advisory multiplier for %s: %r; using %.2f", label, raw, default)
+        return default
+
+    clipped = _clamp(value, ADVISORY_MULTIPLIER_MIN, ADVISORY_MULTIPLIER_MAX)
+    if clipped != value:
+        logger.warning(
+            "Advisory multiplier for %s clipped from %.4f to %.4f",
             label,
             value,
             clipped,
@@ -1212,27 +1232,75 @@ def _strategy_confidence_weight(triggered_set: dict) -> float:
 def _apply_adaptive_confidence(
     base_confidence: float,
     triggered_set: dict,
+    symbol: str | None = None,
     now: dt_time | None = None,
     reload_config: bool = True,
 ) -> float:
+    return _build_confidence_trace(
+        base_confidence,
+        triggered_set,
+        symbol=symbol,
+        now=now,
+        reload_config=reload_config,
+    )["final_confidence"]
+
+
+def _build_confidence_trace(
+    base_confidence: float,
+    triggered_set: dict,
+    symbol: str | None = None,
+    now: dt_time | None = None,
+    reload_config: bool = True,
+) -> dict:
     if reload_config:
         _load_adaptive_config()
 
-    adaptive_confidence = _clamp_confidence(base_confidence)
-
+    final_confidence = _clamp_confidence(base_confidence)
     set_key = normalize_set_key(triggered_set["set_name"])
-    if set_key in _adaptive_signal_multipliers:
-        adaptive_confidence *= _adaptive_signal_multipliers[set_key]
+    signal_multiplier = _adaptive_signal_multipliers.get(set_key, 1.0)
+    confidence_weight = _strategy_confidence_weight(triggered_set)
 
-    adaptive_confidence *= _strategy_confidence_weight(triggered_set)
+    final_confidence *= signal_multiplier
+    final_confidence *= confidence_weight
 
     now = now or datetime.now().time()
     time_window = _get_time_window(now)
-    if time_window in _adaptive_time_multipliers:
-        adaptive_confidence *= _adaptive_time_multipliers[time_window]
+    time_multiplier = _adaptive_time_multipliers.get(time_window, 1.0)
+    market_multiplier = _adaptive_market_multiplier
+    advisory_multiplier = 1.0
+    advisory_reason = "neutral"
 
-    adaptive_confidence *= _adaptive_market_multiplier
-    return _clamp_confidence(adaptive_confidence)
+    final_confidence *= time_multiplier
+    final_confidence *= market_multiplier
+
+    if symbol:
+        try:
+            from reflection.insight_bridge import get_execution_advisory
+
+            advisory = get_execution_advisory(symbol)
+            advisory_multiplier = _coerce_advisory_multiplier(
+                advisory.get("confidence_multiplier", 1.0),
+                f"cognition_advisory.{symbol}",
+                default=1.0,
+            )
+            advisory_reason = advisory.get("reason", "neutral")
+        except Exception as exc:
+            logger.debug("Cognition advisory skipped for %s: %s", symbol, exc)
+
+    final_confidence *= advisory_multiplier
+
+    return {
+        "base_confidence": round(_clamp_confidence(base_confidence), 4),
+        "signal_multiplier": round(signal_multiplier, 4),
+        "confidence_weight": round(confidence_weight, 4),
+        "time_window": time_window,
+        "time_window_multiplier": round(time_multiplier, 4),
+        "market_regime_multiplier": round(market_multiplier, 4),
+        "advisory_multiplier": round(advisory_multiplier, 4),
+        "advisory_reason": advisory_reason,
+        "final_confidence": round(_clamp_confidence(final_confidence), 4),
+    }
+
 
 
 def _adaptive_stop_loss_multiplier(symbol: str) -> float:
@@ -1250,10 +1318,11 @@ def _calculate_adaptive_stop_loss(symbol: str, price: float, direction: str = "B
     return round(price * (1 + pct), 2)
 
 
-def _confidence_rejection_reason(triggered_set: dict, confidence: float) -> str:
+def _confidence_rejection_reason(triggered_set: dict, confidence: float, trace: dict | None = None) -> str:
+    trace_text = f" | {_format_confidence_trace(trace)}" if trace else ""
     return (
         f"Final confidence {round(confidence, 1)} below "
-        f"min_confidence {MIN_CONFIDENCE} for {triggered_set['set_name']}"
+        f"min_confidence {MIN_CONFIDENCE} for {triggered_set['set_name']}{trace_text}"
     )
 
 
@@ -1261,12 +1330,33 @@ def _triggered_condition_names(triggered_set: dict) -> list[str]:
     return [condition["name"] for condition in triggered_set.get("conditions", [])]
 
 
-def _format_strategy_set_reason(triggered_set: dict, price_src: str, confidence: float) -> str:
+def _format_confidence_trace(trace: dict | None) -> str:
+    if not trace:
+        return ""
+    return (
+        f"base={round(trace.get('base_confidence', 0), 1)} "
+        f"signal_x={trace.get('signal_multiplier', 1.0)} "
+        f"weight_x={trace.get('confidence_weight', 1.0)} "
+        f"time={trace.get('time_window')}@{trace.get('time_window_multiplier', 1.0)} "
+        f"market_x={trace.get('market_regime_multiplier', 1.0)} "
+        f"advisory_x={trace.get('advisory_multiplier', 1.0)} "
+        f"final={round(trace.get('final_confidence', 0), 1)}"
+    )
+
+
+def _format_strategy_set_reason(
+    triggered_set: dict,
+    price_src: str,
+    confidence: float,
+    confidence_trace: dict | None = None,
+) -> str:
     names = ", ".join(_triggered_condition_names(triggered_set))
+    trace = _format_confidence_trace(confidence_trace)
     return (
         f"{triggered_set['set_name']} | "
         f"Satisfied: {names} | price={price_src} | "
         f"adapted_conf={round(confidence, 1)}"
+        f"{' | ' + trace if trace else ''}"
     )
 
 
@@ -1282,6 +1372,7 @@ def _log_triggered_strategy_set(action: str, signal: dict):
         f"Price: {signal['price']}\n"
         f"Triggered Set: {signal['set_name']}\n"
         f"Set Side: {signal['set_side'].upper()}\n"
+        f"Confidence: {_format_confidence_trace(signal.get('confidence_trace'))}\n"
         f"Satisfied:\n{satisfied}\n"
         f"Why: {signal.get('set_notes') or 'All configured set conditions were satisfied'}"
     )
@@ -1316,9 +1407,12 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
         return {"action": "WAIT", "reason": "No complete BUY strategy set triggered"}
 
     base_confidence = _resolve_base_confidence(stock, triggered_set, "confidence")
-    adaptive_confidence = _apply_adaptive_confidence(base_confidence, triggered_set)
+    confidence_trace = _build_confidence_trace(base_confidence, triggered_set, symbol=symbol)
+    adaptive_confidence = confidence_trace["final_confidence"]
     if adaptive_confidence < MIN_CONFIDENCE:
-        return {"action": "WAIT", "reason": _confidence_rejection_reason(triggered_set, adaptive_confidence)}
+        reason = _confidence_rejection_reason(triggered_set, adaptive_confidence, confidence_trace)
+        logger.info("BUY blocked | %s | %s", symbol, reason)
+        return {"action": "WAIT", "reason": reason}
 
     price, price_src = _get_entry_price(symbol)
     if not price:
@@ -1338,7 +1432,13 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
         "set_side": triggered_set["side"],
         "set_conditions": triggered_set["conditions"],
         "set_notes": triggered_set.get("notes", ""),
-        "reason": _format_strategy_set_reason(triggered_set, price_src, adaptive_confidence),
+        "confidence_trace": confidence_trace,
+        "reason": _format_strategy_set_reason(
+            triggered_set,
+            price_src,
+            adaptive_confidence,
+            confidence_trace,
+        ),
         "signals": len(triggered_set["conditions"]),
     }
 
@@ -1374,9 +1474,12 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
         return {"action": "WAIT", "reason": "Math: no complete BUY strategy set triggered"}
 
     base_confidence = _resolve_base_confidence(stock, triggered_set, "math_score")
-    adaptive_confidence = _apply_adaptive_confidence(base_confidence, triggered_set)
+    confidence_trace = _build_confidence_trace(base_confidence, triggered_set, symbol=symbol)
+    adaptive_confidence = confidence_trace["final_confidence"]
     if adaptive_confidence < MIN_CONFIDENCE:
-        return {"action": "WAIT", "reason": _confidence_rejection_reason(triggered_set, adaptive_confidence)}
+        reason = _confidence_rejection_reason(triggered_set, adaptive_confidence, confidence_trace)
+        logger.info("MATH BUY blocked | %s | %s", symbol, reason)
+        return {"action": "WAIT", "reason": reason}
 
     price, price_src = _get_entry_price(symbol)
     if not price:
@@ -1396,7 +1499,13 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
         "set_side":     triggered_set["side"],
         "set_conditions": triggered_set["conditions"],
         "set_notes":    triggered_set.get("notes", ""),
-        "reason":       _format_strategy_set_reason(triggered_set, price_src, adaptive_confidence),
+        "confidence_trace": confidence_trace,
+        "reason":       _format_strategy_set_reason(
+            triggered_set,
+            price_src,
+            adaptive_confidence,
+            confidence_trace,
+        ),
         "signals":      len(triggered_set["conditions"]),
         "risk_pct":     MATH_RISK_PER_TRADE,
     }
