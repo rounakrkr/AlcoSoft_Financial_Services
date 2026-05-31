@@ -119,7 +119,6 @@ breakers = {
     "broker": CircuitBreaker("Broker API", failure_threshold=2, recovery_timeout=30),
     "order": CircuitBreaker("Order Execution", failure_threshold=3, recovery_timeout=60),
     "data_feed": CircuitBreaker("Market Data Feed", failure_threshold=5, recovery_timeout=120),
-    "war_room": CircuitBreaker("War Room", failure_threshold=3, recovery_timeout=60),
     "strategy": CircuitBreaker("Strategy Loop", failure_threshold=5, recovery_timeout=120),
 }
 

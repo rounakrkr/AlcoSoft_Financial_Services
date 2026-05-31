@@ -16,9 +16,6 @@
     "strategy_type": "INTRADAY",
     "max_open_positions": 5,
     "min_confidence": 65,
-    "min_strategies_agree": 3,
-    "math_strategies_agree": 3,
-    "min_sell_signals": 2,
     "signal_lookback_candles": 3,
     "min_ws_candles_for_patterns": 3,
     "loop_interval_sec": 5

@@ -396,7 +396,7 @@ def cognition_dashboard():
                 <div class="card">
                     <h3>📈 Overall Win Rate</h3>
                     <div class="stat-big" id="adaptive-winrate">0.0%</div>
-                    <div class="stat-label">Across all signals</div>
+                    <div class="stat-label">Across all strategy sets</div>
                 </div>
                 <div class="card">
                     <h3>🎛️ Market Regime</h3>
@@ -415,16 +415,16 @@ def cognition_dashboard():
                 </div>
             </div>
 
-            <!-- SIGNAL PERFORMANCE -->
-            <div class="section-title">⭐ Signal Performance</div>
+            <!-- STRATEGY SET PERFORMANCE -->
+            <div class="section-title">⭐ Strategy Set Performance</div>
             <div class="card">
-                <h3>📊 Signal Statistics</h3>
+                <h3>📊 Strategy Set Statistics</h3>
                 <table class="table" id="signal-table">
                     <thead><tr>
-                        <th>Signal</th><th>Trades</th><th>Win %</th><th>Avg RR</th><th>Multiplier</th><th>Confidence</th>
+                        <th>Set</th><th>Side</th><th>Trades</th><th>Win %</th><th>Avg RR</th><th>Multiplier</th><th>Confidence</th>
                     </tr></thead>
                     <tbody id="signal-body">
-                        <tr><td colspan="6" class="info-text">📍 Waiting for real trades... Adaptive multipliers will appear after signals accumulate enough data (min 10 trades)</td></tr>
+                        <tr><td colspan="7" class="info-text">📍 Waiting for real trades... Strategy-set multipliers will appear after sets accumulate enough data (min 10 trades)</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -532,14 +532,15 @@ def cognition_dashboard():
                         document.getElementById('adaptive-changes').textContent = adapt.change_history?.length || 0;
                         document.getElementById('adaptive-confidence').textContent = adapt.average_confidence?.toFixed(2) || '0.00';
 
-                        // Signal Performance
-                        if (adapt.signals && adapt.signals.length > 0) {
-                            const signalHtml = adapt.signals.map(s => `
+                        // Strategy Set Performance
+                        if (adapt.strategy_sets && adapt.strategy_sets.length > 0) {
+                            const signalHtml = adapt.strategy_sets.map(s => `
                                 <tr>
-                                    <td>${s.signal_name || 'Unknown'}</td>
+                                    <td>${s.set_name || s.signal_name || 'Unknown'}</td>
+                                    <td>${s.side || '—'}</td>
                                     <td>${s.total_trades || 0}</td>
                                     <td>${(s.win_rate || 0).toFixed(1)}%</td>
-                                    <td>${(s.avg_reward_ratio || 0).toFixed(2)}</td>
+                                    <td>${(s.avg_rr || 0).toFixed(2)}</td>
                                     <td>${(s.multiplier || 1).toFixed(2)}</td>
                                     <td>${(s.confidence || 0).toFixed(2)}</td>
                                 </tr>

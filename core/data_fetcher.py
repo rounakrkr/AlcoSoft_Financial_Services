@@ -36,7 +36,7 @@ _subscribed_symbols = []           # currently subscribed stock list
 _reconnect_attempts = 0            # retry counter
 _max_reconnect = 10                # max retries
 _reconnect_delay = 5               # initial delay seconds
-_reconnect_lock = threading.Lock() # avoid simultaneous reconnect
+_reconnect_lock = threading.RLock() # avoid simultaneous reconnect/deadlock
 _reconnect_timer = None
 _keepalive_timer  = None          # proactive ping before Kotak 4-min timeout
 

@@ -2,19 +2,10 @@
 #   ALCOSOFT FINANCIAL SERVICES
 #   core/strategy.py — The Fast Math Loop
 #
-#   BUY STRATEGIES:
-#     Indicators: RSI+MACD, EMA Crossover, Bollinger Bounce
-#     Candle patterns: Hammer, Engulfing, Inverted Hammer, Morning Star,
-#     Piercing Line, Bullish Harami, Three White Soldiers, Dragonfly Doji,
-#     Bullish Marubozu, Volume Breakout
-#
-#   BUY GATE: At least one candle pattern (pattern_hit) is ALWAYS required.
-#     min=1 → candle pattern only (indicators alone cannot buy)
-#     min=2 → candle pattern + total fired >= 2 (2nd can be candle or indicator)
-#
-#   SELL STRATEGIES (4):
-#     RSI Overbought, MACD Bearish, Bearish Engulfing,
-#     EMA Breakdown
+#   SIGNAL STRATEGY SETS:
+#     Set definitions live in config/strategy_sets.json.
+#     Conditions inside a set are ANDed together; sets are ORed.
+#     Buy and sell sets are evaluated separately.
 #
 #   All strategies support multi-candle lookback window.
 #   A signal is valid if it fired in ANY of the last N candles.
@@ -24,8 +15,7 @@
 #     2. Trailing SL update
 #     3. Profit Target (2:1 RR)
 #     4. Sell Signals (technical reversal)
-#     5. War Room Flip (AI says exit)
-#     6. 3:15 PM Squareoff (intraday only)
+#     5. 3:15 PM Squareoff (intraday only)
 # ============================================================
 
 import asyncio
@@ -35,8 +25,10 @@ import pandas as pd
 import ta
 import time
 import yfinance as yf
+from dataclasses import dataclass
 from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
+from typing import Callable
 
 from core.data_fetcher import (
     get_latest_tick,
@@ -48,14 +40,17 @@ from core.order_executor import (
     place_sell_order,
     check_stop_losses,
     check_profit_targets,
-    # check_war_room_flip,  # DEPRECATED: Function removed with War Room phase-out
     update_trailing_stop_losses,
     squareoff_all_intraday,
     check_max_daily_loss,
-    calculate_stop_loss,
 )
 from core.state_manager import load_briefing, get_open_positions
 from core.trading_settings import get as cfg, get_section
+from core.strategy_sets import (
+    StrategySetDefinition,
+    load_strategy_sets,
+    normalize_set_key,
+)
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -65,14 +60,10 @@ STRATEGY_TYPE         = "INTRADAY"
 LOOP_INTERVAL         = 5
 MAX_POSITIONS         = 2
 MIN_CONFIDENCE        = 70
-MIN_STRATEGIES_AGREE  = 2
-MATH_STRATEGIES_AGREE = 2
 MATH_RISK_PER_TRADE   = 0.05
-MIN_SELL_SIGNALS      = 1
 LOOKBACK              = 3
 MIN_WS_CANDLES_FOR_PATTERNS = 2
 SCAN_LOG_INTERVAL     = 90
-WAR_ROOM_GATING       = False  # DEPRECATED: War Room phased out. Set to False to skip gate checks.
 
 _failed_order_cooldown: dict[str, float] = {}
 _last_scan_log: float = 0.0
@@ -83,9 +74,8 @@ _yfinance_cache: dict[str, list] = {}
 def _apply_trading_settings():
     """Reload tunables from config/trading_settings.json (dashboard-editable)."""
     global STRATEGY_TYPE, LOOP_INTERVAL, MAX_POSITIONS, MIN_CONFIDENCE
-    global MIN_STRATEGIES_AGREE, MATH_STRATEGIES_AGREE, MATH_RISK_PER_TRADE
-    global MIN_SELL_SIGNALS, LOOKBACK, MIN_WS_CANDLES_FOR_PATTERNS
-    global SCAN_LOG_INTERVAL, WAR_ROOM_GATING
+    global MATH_RISK_PER_TRADE, LOOKBACK, MIN_WS_CANDLES_FOR_PATTERNS
+    global SCAN_LOG_INTERVAL
 
     s = get_section("strategy")
     md = get_section("market_data")
@@ -95,12 +85,8 @@ def _apply_trading_settings():
     LOOP_INTERVAL         = int(s.get("loop_interval_sec", 5))
     MAX_POSITIONS         = int(s.get("max_open_positions", 2))
     MIN_CONFIDENCE        = int(s.get("min_confidence", 70))
-    MIN_STRATEGIES_AGREE  = int(s.get("min_strategies_agree", 2))
-    MATH_STRATEGIES_AGREE = int(s.get("math_strategies_agree", 2))
-    MIN_SELL_SIGNALS      = int(s.get("min_sell_signals", 1))
     LOOKBACK              = int(s.get("signal_lookback_candles", 3))
     MIN_WS_CANDLES_FOR_PATTERNS = int(s.get("min_ws_candles_for_patterns", 2))
-    WAR_ROOM_GATING       = bool(s.get("war_room_gating", True))
     MATH_RISK_PER_TRADE   = float(risk.get("math_risk_per_trade", 0.05))
     SCAN_LOG_INTERVAL     = int(md.get("scan_log_interval_sec", 90))
 
@@ -113,6 +99,66 @@ _adaptive_signal_multipliers: dict[str, float] = {}
 _adaptive_time_multipliers: dict[str, float] = {}
 _adaptive_sl_values: dict[str, float] = {}
 _adaptive_market_multiplier: float = 1.0
+
+ADAPTIVE_MULTIPLIER_MIN = 0.4
+ADAPTIVE_MULTIPLIER_MAX = 1.2
+
+
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
+
+
+def _clamp_confidence(value: float) -> float:
+    return _clamp(float(value), 0.0, 100.0)
+
+
+def _coerce_adaptive_multiplier(raw, label: str, default: float = 1.0) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid adaptive multiplier for %s: %r; using %.2f", label, raw, default)
+        return default
+
+    clipped = _clamp(value, ADAPTIVE_MULTIPLIER_MIN, ADAPTIVE_MULTIPLIER_MAX)
+    if clipped != value:
+        logger.warning(
+            "Adaptive multiplier for %s clipped from %.4f to %.4f",
+            label,
+            value,
+            clipped,
+        )
+    return clipped
+
+
+def _coerce_multiplier_map(raw, label: str, normalize_keys: bool = True) -> dict[str, float]:
+    if not isinstance(raw, dict):
+        return {}
+
+    out: dict[str, float] = {}
+    for key, value in raw.items():
+        key_text = str(key).strip()
+        if not key_text:
+            continue
+        map_key = normalize_set_key(key_text) if normalize_keys else key_text
+        out[map_key] = _coerce_adaptive_multiplier(value, f"{label}.{key_text}")
+    return out
+
+
+def _coerce_float_map(raw, label: str, normalize_keys: bool = False) -> dict[str, float]:
+    if not isinstance(raw, dict):
+        return {}
+
+    out: dict[str, float] = {}
+    for key, value in raw.items():
+        key_text = str(key).strip()
+        if not key_text:
+            continue
+        try:
+            out_key = normalize_set_key(key_text) if normalize_keys else key_text.upper()
+            out[out_key] = float(value)
+        except (TypeError, ValueError):
+            logger.warning("Invalid adaptive value for %s.%s: %r", label, key_text, value)
+    return out
 
 
 def _load_adaptive_config():
@@ -127,14 +173,29 @@ def _load_adaptive_config():
         
         # Strategy adaptive values
         strategy_adaptive = s.get("strategy", {})
-        _adaptive_signal_multipliers = strategy_adaptive.get("signal_confidence_multipliers", {})
-        _adaptive_market_multiplier = strategy_adaptive.get("market_regime_multiplier", 1.0)
+        if not isinstance(strategy_adaptive, dict):
+            strategy_adaptive = {}
+        _adaptive_signal_multipliers = _coerce_multiplier_map(
+            strategy_adaptive.get("signal_confidence_multipliers", {}),
+            "adaptive.strategy.signal_confidence_multipliers",
+        )
+        _adaptive_market_multiplier = _coerce_adaptive_multiplier(
+            strategy_adaptive.get("market_regime_multiplier", 1.0),
+            "adaptive.strategy.market_regime_multiplier",
+        )
         
         # Time window adaptive values
-        _adaptive_time_multipliers = s.get("time_windows", {})
+        _adaptive_time_multipliers = _coerce_multiplier_map(
+            s.get("time_windows", {}),
+            "adaptive.time_windows",
+            normalize_keys=False,
+        )
         
         # Symbol-specific SL values
-        _adaptive_sl_values = s.get("symbol_stops", {})
+        _adaptive_sl_values = _coerce_float_map(
+            s.get("symbol_stops", {}),
+            "adaptive.symbol_stops",
+        )
         
         _adaptive_config = s
         logger.debug(f"📊 Adaptive config loaded | Signals: {len(_adaptive_signal_multipliers)} | Times: {len(_adaptive_time_multipliers)} | SLs: {len(_adaptive_sl_values)}")
@@ -275,7 +336,7 @@ def _log_full_scan(briefing: dict):
     lines = [f"─── Scan summary ({len(stats.get('subscribed', []))} subscribed) ───"]
 
     for label, stocks in (
-        ("War Room", briefing.get("approved_stocks", [])),
+        ("Cognition", briefing.get("approved_stocks", [])),
         ("Math", briefing.get("watchlist", [])),
     ):
         for stock in stocks:
@@ -477,6 +538,9 @@ def _build_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["rsi"]        = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
     df["avg_vol"]    = df["volume"].rolling(20).mean()
+    typical_price    = (df["high"] + df["low"] + df["close"]) / 3
+    cumulative_vol   = df["volume"].replace(0, pd.NA).cumsum()
+    df["vwap"]       = (typical_price * df["volume"]).cumsum() / cumulative_vol
 
     macd_obj         = ta.trend.MACD(df["close"], window_slow=26,
                                       window_fast=12, window_sign=9)
@@ -710,32 +774,6 @@ def _build_buy_strategies(
     return strategies
 
 
-def _apply_buy_gate(all_strategies: list[dict], min_required: int) -> tuple[bool, str]:
-    """
-    BUY rules:
-      - Always: at least one candle pattern_hit in lookback
-      - min_required == 1: candle pattern only (no indicator-only buys)
-      - min_required >= 2: pattern_hit + total fired >= min_required
-    """
-    candle = [s for s in all_strategies if s.get("kind") == "candle"]
-    fired  = [s for s in all_strategies if s["fired"]]
-    patterns = [s for s in candle if s.get("pattern_hit")]
-
-    if not patterns:
-        names = [s["name"] for s in candle]
-        return False, f"No candle pattern (need 1+ of: {', '.join(names[:4])}...)"
-
-    if min_required <= 1:
-        return True, f"Candle pattern: {', '.join(s['name'] for s in patterns)}"
-
-    if len(fired) < min_required:
-        return False, (
-            f"Only {len(fired)}/{min_required} strategies fired "
-            f"(candle OK: {', '.join(s['name'] for s in patterns)})"
-        )
-    return True, ""
-
-
 # ════════════════════════════════════════════════════════════
 #   SELL STRATEGIES
 # ════════════════════════════════════════════════════════════
@@ -803,27 +841,463 @@ def strategy_sell_ema_breakdown(df: pd.DataFrame) -> dict:
 
 
 # ════════════════════════════════════════════════════════════
+@dataclass(frozen=True)
+class StrategyEvaluationContext:
+    side: str
+    indicator_df: pd.DataFrame
+    pattern_df: pd.DataFrame | None = None
+    ws_count: int = 0
+
+
+StrategyConditionFn = Callable[[StrategyEvaluationContext], dict]
+
+
+def _price_above_column_condition(df: pd.DataFrame, column: str, label: str) -> dict:
+    value = df[column].iloc[-1] if column in df.columns else None
+    if value is None or pd.isna(value):
+        return _indicator_strategy_result(label, False, f"{column} not ready")
+
+    close = df["close"].iloc[-1]
+    return _indicator_strategy_result(
+        label,
+        close > value,
+        f"Close={round(close, 2)} > {column.upper()}={round(value, 2)}",
+    )
+
+
+def _price_below_column_condition(df: pd.DataFrame, column: str, label: str) -> dict:
+    value = df[column].iloc[-1] if column in df.columns else None
+    if value is None or pd.isna(value):
+        return _indicator_strategy_result(label, False, f"{column} not ready")
+
+    close = df["close"].iloc[-1]
+    return _indicator_strategy_result(
+        label,
+        close < value,
+        f"Close={round(close, 2)} < {column.upper()}={round(value, 2)}",
+    )
+
+
+def condition_rsi_macd_momentum(ctx: StrategyEvaluationContext) -> dict:
+    return strategy_rsi_macd(ctx.indicator_df)
+
+
+def condition_ema_9_21_crossover(ctx: StrategyEvaluationContext) -> dict:
+    return strategy_ema_crossover(ctx.indicator_df)
+
+
+def condition_bollinger_band_bounce(ctx: StrategyEvaluationContext) -> dict:
+    return strategy_bollinger_bounce(ctx.indicator_df)
+
+
+def _buy_candle_condition(
+    ctx: StrategyEvaluationContext,
+    name: str,
+    fn: Callable[[pd.DataFrame, pd.DataFrame | None], dict],
+) -> dict:
+    if ctx.pattern_df is None:
+        return _waiting_candle_strategy(name, ctx.ws_count)
+    return fn(ctx.pattern_df, ctx.indicator_df)
+
+
+def condition_hammer_reversal(ctx: StrategyEvaluationContext) -> dict:
+    return _buy_candle_condition(ctx, "Hammer Reversal", strategy_hammer)
+
+
+def condition_bullish_engulfing(ctx: StrategyEvaluationContext) -> dict:
+    return _buy_candle_condition(ctx, "Bullish Engulfing", strategy_bullish_engulfing)
+
+
+def condition_inverted_hammer(ctx: StrategyEvaluationContext) -> dict:
+    return _buy_candle_condition(ctx, "Inverted Hammer", strategy_inverted_hammer)
+
+
+def condition_dragonfly_doji(ctx: StrategyEvaluationContext) -> dict:
+    return _buy_candle_condition(ctx, "Dragonfly Doji", strategy_dragonfly_doji)
+
+
+def condition_bullish_marubozu(ctx: StrategyEvaluationContext) -> dict:
+    return _buy_candle_condition(ctx, "Bullish Marubozu", strategy_bullish_marubozu)
+
+
+def condition_piercing_line(ctx: StrategyEvaluationContext) -> dict:
+    return _buy_candle_condition(ctx, "Piercing Line", strategy_piercing_line)
+
+
+def condition_bullish_harami(ctx: StrategyEvaluationContext) -> dict:
+    return _buy_candle_condition(ctx, "Bullish Harami", strategy_bullish_harami)
+
+
+def condition_morning_star(ctx: StrategyEvaluationContext) -> dict:
+    return _buy_candle_condition(ctx, "Morning Star", strategy_morning_star)
+
+
+def condition_three_white_soldiers(ctx: StrategyEvaluationContext) -> dict:
+    return _buy_candle_condition(ctx, "Three White Soldiers", strategy_three_white_soldiers)
+
+
+def condition_volume_breakout(ctx: StrategyEvaluationContext) -> dict:
+    return _buy_candle_condition(ctx, "Volume Breakout", strategy_volume_breakout)
+
+
+def condition_bullish_reversal_candle(ctx: StrategyEvaluationContext) -> dict:
+    if ctx.pattern_df is None:
+        return _waiting_candle_strategy("Bullish Reversal Candle", ctx.ws_count)
+
+    candle_results = [
+        condition_hammer_reversal(ctx),
+        condition_bullish_engulfing(ctx),
+        condition_inverted_hammer(ctx),
+        condition_dragonfly_doji(ctx),
+        condition_bullish_marubozu(ctx),
+        condition_piercing_line(ctx),
+        condition_bullish_harami(ctx),
+        condition_morning_star(ctx),
+        condition_three_white_soldiers(ctx),
+    ]
+    fired = [r for r in candle_results if r.get("fired")]
+    pattern_hits = [r for r in candle_results if r.get("pattern_hit")]
+    names = [r["name"] for r in fired or pattern_hits]
+
+    return _candle_strategy_result(
+        "Bullish Reversal Candle",
+        pattern_hit=bool(pattern_hits),
+        fired=bool(fired),
+        reason=", ".join(names) if names else "No bullish reversal candle",
+    )
+
+
+def condition_volume_spike(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if "avg_vol" not in df.columns:
+        return _indicator_strategy_result("Volume Spike", False, "avg_vol not ready")
+
+    recent_volume = df["volume"].iloc[-LOOKBACK:]
+    recent_avg = df["avg_vol"].iloc[-LOOKBACK:]
+    spike = bool((recent_volume > (recent_avg * 1.5)).fillna(False).any())
+    latest_volume = round(float(df["volume"].iloc[-1]), 2)
+    latest_avg = df["avg_vol"].iloc[-1]
+    avg_text = "not ready" if pd.isna(latest_avg) else round(float(latest_avg), 2)
+    return _indicator_strategy_result(
+        "Volume Spike",
+        spike,
+        f"LatestVol={latest_volume}, AvgVol={avg_text}",
+    )
+
+
+def condition_price_above_ema20(ctx: StrategyEvaluationContext) -> dict:
+    return _price_above_column_condition(ctx.indicator_df, "ema20", "Price above EMA20")
+
+
+def condition_price_below_ema20(ctx: StrategyEvaluationContext) -> dict:
+    return _price_below_column_condition(ctx.indicator_df, "ema20", "Price below EMA20")
+
+
+def condition_price_above_vwap(ctx: StrategyEvaluationContext) -> dict:
+    return _price_above_column_condition(ctx.indicator_df, "vwap", "Price above VWAP")
+
+
+def condition_price_below_vwap(ctx: StrategyEvaluationContext) -> dict:
+    return _price_below_column_condition(ctx.indicator_df, "vwap", "Price below VWAP")
+
+
+def condition_rsi_recovering(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2 or "rsi" not in df.columns:
+        return _indicator_strategy_result("RSI recovering", False, "RSI not ready")
+
+    recent_oversold = bool((df["rsi"].iloc[-LOOKBACK:] < 35).fillna(False).any())
+    rising = df["rsi"].iloc[-1] > df["rsi"].iloc[-2]
+    latest = round(float(df["rsi"].iloc[-1]), 1)
+    fired = recent_oversold and rising and latest < 60
+    return _indicator_strategy_result(
+        "RSI recovering",
+        fired,
+        f"RSI={latest}, recent_oversold={recent_oversold}, rising={rising}",
+    )
+
+
+def condition_rsi_weakening(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2 or "rsi" not in df.columns:
+        return _indicator_strategy_result("RSI weakening", False, "RSI not ready")
+
+    recent_hot = bool((df["rsi"].iloc[-LOOKBACK:] > 60).fillna(False).any())
+    falling = df["rsi"].iloc[-1] < df["rsi"].iloc[-2]
+    latest = round(float(df["rsi"].iloc[-1]), 1)
+    fired = recent_hot and falling
+    return _indicator_strategy_result(
+        "RSI weakening",
+        fired,
+        f"RSI={latest}, recent_hot={recent_hot}, falling={falling}",
+    )
+
+
+def condition_rsi_overbought(ctx: StrategyEvaluationContext) -> dict:
+    return strategy_sell_rsi_overbought(ctx.indicator_df)
+
+
+def condition_macd_bearish_cross(ctx: StrategyEvaluationContext) -> dict:
+    return strategy_sell_macd_bearish(ctx.indicator_df)
+
+
+def condition_bearish_pattern(ctx: StrategyEvaluationContext) -> dict:
+    return strategy_sell_bearish_engulfing(ctx.indicator_df)
+
+
+def condition_ema20_breakdown(ctx: StrategyEvaluationContext) -> dict:
+    return strategy_sell_ema_breakdown(ctx.indicator_df)
+
+
+def condition_price_below_recent_support(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < LOOKBACK + 1:
+        return _indicator_strategy_result("Price below recent support", False, "Not enough candles")
+
+    prior_lows = df["low"].iloc[-(LOOKBACK + 1):-1]
+    support = prior_lows.min()
+    close = df["close"].iloc[-1]
+    fired = close < support
+    return _indicator_strategy_result(
+        "Price below recent support",
+        fired,
+        f"Close={round(close, 2)}, Support={round(support, 2)}",
+    )
+
+
+CONDITION_REGISTRY: dict[str, StrategyConditionFn] = {
+    "rsi_macd_momentum": condition_rsi_macd_momentum,
+    "ema_9_21_crossover": condition_ema_9_21_crossover,
+    "bollinger_band_bounce": condition_bollinger_band_bounce,
+    "hammer_reversal": condition_hammer_reversal,
+    "bullish_engulfing": condition_bullish_engulfing,
+    "inverted_hammer": condition_inverted_hammer,
+    "dragonfly_doji": condition_dragonfly_doji,
+    "bullish_marubozu": condition_bullish_marubozu,
+    "piercing_line": condition_piercing_line,
+    "bullish_harami": condition_bullish_harami,
+    "morning_star": condition_morning_star,
+    "three_white_soldiers": condition_three_white_soldiers,
+    "volume_breakout": condition_volume_breakout,
+    "bullish_reversal_candle": condition_bullish_reversal_candle,
+    "volume_spike": condition_volume_spike,
+    "price_above_ema20": condition_price_above_ema20,
+    "price_below_ema20": condition_price_below_ema20,
+    "price_above_vwap": condition_price_above_vwap,
+    "price_below_vwap": condition_price_below_vwap,
+    "rsi_recovering": condition_rsi_recovering,
+    "rsi_weakening": condition_rsi_weakening,
+    "rsi_overbought": condition_rsi_overbought,
+    "macd_bearish_cross": condition_macd_bearish_cross,
+    "bearish_pattern": condition_bearish_pattern,
+    "ema20_breakdown": condition_ema20_breakdown,
+    "price_below_recent_support": condition_price_below_recent_support,
+}
+
+
+class StrategySetEvaluator:
+    def __init__(self, condition_registry: dict[str, StrategyConditionFn]):
+        self.condition_registry = condition_registry
+
+    def evaluate(self, side: str, ctx: StrategyEvaluationContext) -> dict | None:
+        config = load_strategy_sets()
+        set_defs = config.buy_sets if side == "buy" else config.sell_sets
+
+        for set_def in set_defs:
+            condition_results = self._evaluate_conditions(set_def, ctx)
+            if condition_results and all(r.get("fired") for r in condition_results):
+                return {
+                    "side": set_def.side,
+                    "set_name": set_def.name,
+                    "conditions": condition_results,
+                    "priority": set_def.priority,
+                    "base_confidence": set_def.base_confidence,
+                    "confidence_weight": set_def.confidence_weight,
+                    "notes": set_def.notes,
+                }
+
+        return None
+
+    def _evaluate_conditions(
+        self,
+        set_def: StrategySetDefinition,
+        ctx: StrategyEvaluationContext,
+    ) -> list[dict]:
+        results = []
+        for condition_key in set_def.conditions:
+            fn = self.condition_registry.get(condition_key)
+            if fn is None:
+                results.append({
+                    "key": condition_key,
+                    "name": condition_key,
+                    "fired": False,
+                    "reason": "Condition not registered",
+                })
+                continue
+
+            result = dict(fn(ctx))
+            result["key"] = condition_key
+            results.append(result)
+
+        return results
+
+
+_strategy_set_evaluator = StrategySetEvaluator(CONDITION_REGISTRY)
+
+
+def _confidence_to_percent(raw) -> float | None:
+    if raw is None:
+        return None
+
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+
+    if 0 <= value <= 1:
+        value *= 100
+    return _clamp_confidence(value)
+
+
+def _stock_confidence_to_percent(raw, stock_confidence_key: str) -> float | None:
+    if raw in (None, ""):
+        return None
+
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+
+    if stock_confidence_key == "math_score" and 0 < value <= 10:
+        value *= 10
+    elif stock_confidence_key == "confidence" and value == 0:
+        return None
+    elif 0 <= value <= 1:
+        value *= 100
+
+    return _clamp_confidence(value)
+
+
+def _triggered_set_base_confidence(triggered_set: dict) -> float:
+    value = _confidence_to_percent(triggered_set.get("base_confidence"))
+    return value if value is not None else _clamp_confidence(MIN_CONFIDENCE)
+
+
+def _resolve_base_confidence(
+    stock: dict,
+    triggered_set: dict,
+    stock_confidence_key: str,
+) -> float:
+    set_base = _triggered_set_base_confidence(triggered_set)
+    stock_confidence = _stock_confidence_to_percent(
+        stock.get(stock_confidence_key),
+        stock_confidence_key,
+    )
+    if stock_confidence is None:
+        return set_base
+
+    # Conservative fusion: a weak screener/AI score can veto a strong set,
+    # but it cannot inflate the configured quality of that set.
+    return min(set_base, stock_confidence)
+
+
+def _strategy_confidence_weight(triggered_set: dict) -> float:
+    try:
+        value = float(triggered_set.get("confidence_weight", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    return _clamp(value, 0.1, 2.0)
+
+
+def _apply_adaptive_confidence(
+    base_confidence: float,
+    triggered_set: dict,
+    now: dt_time | None = None,
+    reload_config: bool = True,
+) -> float:
+    if reload_config:
+        _load_adaptive_config()
+
+    adaptive_confidence = _clamp_confidence(base_confidence)
+
+    set_key = normalize_set_key(triggered_set["set_name"])
+    if set_key in _adaptive_signal_multipliers:
+        adaptive_confidence *= _adaptive_signal_multipliers[set_key]
+
+    adaptive_confidence *= _strategy_confidence_weight(triggered_set)
+
+    now = now or datetime.now().time()
+    time_window = _get_time_window(now)
+    if time_window in _adaptive_time_multipliers:
+        adaptive_confidence *= _adaptive_time_multipliers[time_window]
+
+    adaptive_confidence *= _adaptive_market_multiplier
+    return _clamp_confidence(adaptive_confidence)
+
+
+def _adaptive_stop_loss_multiplier(symbol: str) -> float:
+    value = _adaptive_sl_values.get(str(symbol).upper())
+    if value is None:
+        return 1.0
+    return _clamp(value, 0.5, 2.0)
+
+
+def _calculate_adaptive_stop_loss(symbol: str, price: float, direction: str = "BUY") -> float:
+    pct = float(cfg("risk", "stop_loss_percent", 0.01))
+    pct *= _adaptive_stop_loss_multiplier(symbol)
+    if direction == "BUY":
+        return round(price * (1 - pct), 2)
+    return round(price * (1 + pct), 2)
+
+
+def _confidence_rejection_reason(triggered_set: dict, confidence: float) -> str:
+    return (
+        f"Final confidence {round(confidence, 1)} below "
+        f"min_confidence {MIN_CONFIDENCE} for {triggered_set['set_name']}"
+    )
+
+
+def _triggered_condition_names(triggered_set: dict) -> list[str]:
+    return [condition["name"] for condition in triggered_set.get("conditions", [])]
+
+
+def _format_strategy_set_reason(triggered_set: dict, price_src: str, confidence: float) -> str:
+    names = ", ".join(_triggered_condition_names(triggered_set))
+    return (
+        f"{triggered_set['set_name']} | "
+        f"Satisfied: {names} | price={price_src} | "
+        f"adapted_conf={round(confidence, 1)}"
+    )
+
+
+def _log_triggered_strategy_set(action: str, signal: dict):
+    conditions = signal.get("set_conditions", [])
+    satisfied = "\n".join(
+        f"- {condition['name']}: {condition.get('reason', '')}"
+        for condition in conditions
+    )
+    logger.info(
+        f"{action} SIGNAL TRIGGERED\n"
+        f"Symbol: {signal['symbol']}\n"
+        f"Price: {signal['price']}\n"
+        f"Triggered Set: {signal['set_name']}\n"
+        f"Set Side: {signal['set_side'].upper()}\n"
+        f"Satisfied:\n{satisfied}\n"
+        f"Why: {signal.get('set_notes') or 'All configured set conditions were satisfied'}"
+    )
+
+
 #   BUY SIGNAL EVALUATOR
 # ════════════════════════════════════════════════════════════
 
 def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
     symbol = stock["ticker"]
 
-    if WAR_ROOM_GATING:
-        if stock.get("direction") not in ("BUY_ONLY",):
-            return {"action": "WAIT", "reason": f"War room direction: {stock.get('direction', 'unknown')}"}
+    if stock.get("direction") == "AVOID":
+        return {"action": "WAIT", "reason": "Stock explicitly marked AVOID"}
 
-        if stock.get("confidence", 0) < MIN_CONFIDENCE:
-            return {"action": "WAIT", "reason": f"War room confidence too low ({stock.get('confidence')}%)"}
-
-        if stock.get("market_bias") == "BEARISH":
-            return {"action": "WAIT", "reason": "Stock market bias: BEARISH"}
-    else:
-        if stock.get("direction") == "AVOID":
-            return {"action": "WAIT", "reason": "Stock explicitly marked AVOID"}
-
-        if stock.get("market_bias") == "BEARISH":
-            return {"action": "WAIT", "reason": "Stock market bias: BEARISH"}
+    if stock.get("market_bias") == "BEARISH":
+        return {"action": "WAIT", "reason": "Stock market bias: BEARISH"}
 
     df = _get_indicator_df(symbol)
     if df is None:
@@ -831,60 +1305,41 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
 
     ws_count   = len(get_candle_history(symbol))
     pattern_df = _get_pattern_df(symbol)
-    all_strategies = _build_buy_strategies(df, pattern_df, ws_count)
-    total      = len(all_strategies)
+    ctx = StrategyEvaluationContext(
+        side="buy",
+        indicator_df=df,
+        pattern_df=pattern_df,
+        ws_count=ws_count,
+    )
+    triggered_set = _strategy_set_evaluator.evaluate("buy", ctx)
+    if not triggered_set:
+        return {"action": "WAIT", "reason": "No complete BUY strategy set triggered"}
 
-    fired       = [s for s in all_strategies if s["fired"]]
-    fired_count = len(fired)
-    fired_names = [s["name"] for s in fired]
-    pattern_hits = [s["name"] for s in all_strategies if s.get("pattern_hit")]
-
-    ok, gate_msg = _apply_buy_gate(all_strategies, MIN_STRATEGIES_AGREE)
-    if not ok:
-        return {"action": "WAIT", "reason": gate_msg}
+    base_confidence = _resolve_base_confidence(stock, triggered_set, "confidence")
+    adaptive_confidence = _apply_adaptive_confidence(base_confidence, triggered_set)
+    if adaptive_confidence < MIN_CONFIDENCE:
+        return {"action": "WAIT", "reason": _confidence_rejection_reason(triggered_set, adaptive_confidence)}
 
     price, price_src = _get_entry_price(symbol)
     if not price:
         return {"action": "WAIT", "reason": f"No live price for {symbol} (WS tick missing)"}
 
-    stop_loss = calculate_stop_loss(price, "BUY")
-    
-    # ── Apply Adaptive Confidence Multipliers ────────────
-    base_confidence = stock.get("confidence", MIN_CONFIDENCE)
-    adaptive_confidence = base_confidence
-    
-    # Apply signal confidence multipliers
-    for signal in fired:
-        signal_key = signal["name"].lower().replace(" ", "_")
-        if signal_key in _adaptive_signal_multipliers:
-            mult = _adaptive_signal_multipliers[signal_key]
-            adaptive_confidence *= mult
-    
-    # Apply time window multiplier
-    now = datetime.now().time()
-    time_window = _get_time_window(now)
-    if time_window in _adaptive_time_multipliers:
-        time_mult = _adaptive_time_multipliers[time_window]
-        adaptive_confidence *= time_mult
-    
-    # Apply market regime multiplier
-    adaptive_confidence *= _adaptive_market_multiplier
-    
-    # Cap confidence between 0-100
-    adaptive_confidence = max(0, min(100, adaptive_confidence))
+    stop_loss = _calculate_adaptive_stop_loss(symbol, price, "BUY")
     
     return {
         "action":    "BUY",
         "symbol":    symbol,
         "price":     round(price, 2),
         "stop_loss": stop_loss,
+        "base_confidence": round(base_confidence, 1),
         "confidence": round(adaptive_confidence, 1),
-        "reason":    (
-            f"{fired_count}/{total}: {', '.join(fired_names)} | "
-            f"candle: {', '.join(pattern_hits)} | price={price_src} | "
-            f"adapted_conf={round(adaptive_confidence, 1)}"
-        ),
-        "signals":   fired_count,
+        "strategy": triggered_set["set_name"],
+        "set_name": triggered_set["set_name"],
+        "set_side": triggered_set["side"],
+        "set_conditions": triggered_set["conditions"],
+        "set_notes": triggered_set.get("notes", ""),
+        "reason": _format_strategy_set_reason(triggered_set, price_src, adaptive_confidence),
+        "signals": len(triggered_set["conditions"]),
     }
 
 
@@ -908,51 +1363,25 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
 
     ws_count   = len(get_candle_history(symbol))
     pattern_df = _get_pattern_df(symbol)
-    all_strategies = _build_buy_strategies(df, pattern_df, ws_count)
-    total      = len(all_strategies)
-
-    fired       = [s for s in all_strategies if s["fired"]]
-    fired_count = len(fired)
-    fired_names = [s["name"] for s in fired]
-    pattern_hits = [s["name"] for s in all_strategies if s.get("pattern_hit")]
-
-    logger.debug(
-        f"[MATH] {symbol} | {fired_count}/{total} | candles={ws_count} | "
-        f"patterns={pattern_hits or 'none'} | {fired_names or 'none'}"
+    ctx = StrategyEvaluationContext(
+        side="buy",
+        indicator_df=df,
+        pattern_df=pattern_df,
+        ws_count=ws_count,
     )
+    triggered_set = _strategy_set_evaluator.evaluate("buy", ctx)
+    if not triggered_set:
+        return {"action": "WAIT", "reason": "Math: no complete BUY strategy set triggered"}
 
-    ok, gate_msg = _apply_buy_gate(all_strategies, MATH_STRATEGIES_AGREE)
-    if not ok:
-        return {"action": "WAIT", "reason": f"Math: {gate_msg}"}
+    base_confidence = _resolve_base_confidence(stock, triggered_set, "math_score")
+    adaptive_confidence = _apply_adaptive_confidence(base_confidence, triggered_set)
+    if adaptive_confidence < MIN_CONFIDENCE:
+        return {"action": "WAIT", "reason": _confidence_rejection_reason(triggered_set, adaptive_confidence)}
 
     price, price_src = _get_entry_price(symbol)
     if not price:
         return {"action": "WAIT", "reason": f"No live price for {symbol}"}
-    stop_loss = calculate_stop_loss(price, "BUY")
-    
-    # ── Apply Adaptive Confidence Multipliers (MATH) ────────────
-    base_confidence = stock.get("math_score", 50)
-    adaptive_confidence = base_confidence
-    
-    # Apply signal confidence multipliers
-    for signal in fired:
-        signal_key = signal["name"].lower().replace(" ", "_")
-        if signal_key in _adaptive_signal_multipliers:
-            mult = _adaptive_signal_multipliers[signal_key]
-            adaptive_confidence *= mult
-    
-    # Apply time window multiplier
-    now = datetime.now().time()
-    time_window = _get_time_window(now)
-    if time_window in _adaptive_time_multipliers:
-        time_mult = _adaptive_time_multipliers[time_window]
-        adaptive_confidence *= time_mult
-    
-    # Apply market regime multiplier
-    adaptive_confidence *= _adaptive_market_multiplier
-    
-    # Cap confidence between 0-100
-    adaptive_confidence = max(0, min(100, adaptive_confidence))
+    stop_loss = _calculate_adaptive_stop_loss(symbol, price, "BUY")
     
     return {
         "action":       "BUY",
@@ -960,13 +1389,15 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
         "symbol":       symbol,
         "price":        round(price, 2),
         "stop_loss":    stop_loss,
+        "base_confidence": round(base_confidence, 1),
         "confidence":   round(adaptive_confidence, 1),
-        "reason":       (
-            f"MATH {fired_count}/{total}: {', '.join(fired_names)} | "
-            f"candle: {', '.join(pattern_hits)} | price={price_src} | "
-            f"adapted_conf={round(adaptive_confidence, 1)}"
-        ),
-        "signals":      fired_count,
+        "strategy":     triggered_set["set_name"],
+        "set_name":     triggered_set["set_name"],
+        "set_side":     triggered_set["side"],
+        "set_conditions": triggered_set["conditions"],
+        "set_notes":    triggered_set.get("notes", ""),
+        "reason":       _format_strategy_set_reason(triggered_set, price_src, adaptive_confidence),
+        "signals":      len(triggered_set["conditions"]),
         "risk_pct":     MATH_RISK_PER_TRADE,
     }
 
@@ -995,28 +1426,21 @@ def _check_sell_signals(live_prices: dict[str, float]):
         })
         df = _build_indicators(df)
 
-        sell_strategies = [
-            strategy_sell_rsi_overbought(df),
-            strategy_sell_macd_bearish(df),
-            strategy_sell_bearish_engulfing(df),
-            strategy_sell_ema_breakdown(df),
-        ]
+        ctx = StrategyEvaluationContext(side="sell", indicator_df=df)
+        triggered_set = _strategy_set_evaluator.evaluate("sell", ctx)
+        if not triggered_set:
+            continue
 
-        fired       = [s for s in sell_strategies if s["fired"]]
-        fired_count = len(fired)
-        fired_names = [s["name"] for s in fired]
-
-        logger.debug(
-            f"📉 {symbol} | Sell signals: {fired_count}/4 | "
-            f"{fired_names if fired_names else 'None'}"
-        )
-
-        if fired_count >= MIN_SELL_SIGNALS:
-            logger.info(
-                f"🔴 SELL SIGNAL | {symbol} | ₹{current} | "
-                f"{fired_count}/4: {', '.join(fired_names)}"
-            )
-            place_sell_order(symbol, current, "SELL_SIGNAL")
+        signal = {
+            "symbol": symbol,
+            "price": round(current, 2),
+            "set_name": triggered_set["set_name"],
+            "set_side": triggered_set["side"],
+            "set_conditions": triggered_set["conditions"],
+            "set_notes": triggered_set.get("notes", ""),
+        }
+        _log_triggered_strategy_set("SELL", signal)
+        place_sell_order(symbol, current, f"SELL_SET:{triggered_set['set_name']}")
 
 
 # ════════════════════════════════════════════════════════════
@@ -1028,7 +1452,6 @@ def _check_all_exits(live_prices: dict[str, float]):
     update_trailing_stop_losses(live_prices)
     check_profit_targets(live_prices)
     _check_sell_signals(live_prices)
-    # check_war_room_flip(live_prices)  # DEPRECATED: War Room phased out
     if STRATEGY_TYPE == "INTRADAY":
         squareoff_all_intraday(live_prices)
 
@@ -1046,7 +1469,7 @@ def _is_market_open(now: dt_time) -> bool:
 
 def _get_live_prices(briefing: dict) -> dict[str, float]:
     prices = {}
-    # War Room + Watchlist dono se symbols lo
+    # Cognition picks + watchlist symbols.
     all_stocks = briefing.get("approved_stocks", []) + briefing.get("watchlist", [])
     for stock in all_stocks:
         symbol = stock["ticker"]
@@ -1117,19 +1540,28 @@ def _drop_incomplete_candle_if_present(hist):
 
 async def run_strategy_loop(shutdown_event: asyncio.Event):
     global _last_scan_log
+    try:
+        strategy_set_config = load_strategy_sets()
+        buy_set_count = len(strategy_set_config.buy_sets)
+        sell_set_count = len(strategy_set_config.sell_sets)
+    except Exception:
+        buy_set_count = 0
+        sell_set_count = 0
+
     logger.info(
         f"⚡ Strategy loop started | "
         f"Mode: {STRATEGY_TYPE} | "
         f"Lookback: {LOOKBACK} candles | "
-        f"War Room buy: {MIN_STRATEGIES_AGREE} (+ candle required) | "
-        f"Math buy: {MATH_STRATEGIES_AGREE} (+ candle required) | "
+        f"Buy sets: {buy_set_count} | "
+        f"Sell sets: {sell_set_count} | "
         f"Pattern candles: {MIN_WS_CANDLES_FOR_PATTERNS}+ live WS | "
-        f"Sell: {MIN_SELL_SIGNALS}/4"
+        f"Config: strategy_sets.json"
     )
 
     while not shutdown_event.is_set():
         try:
             _apply_trading_settings()
+            _load_adaptive_config()
             now = datetime.now().time()
             if not _is_market_open(now):
                 await asyncio.sleep(30)
@@ -1177,16 +1609,13 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
                     continue
                 signal = _evaluate_buy_signal(stock, briefing)
                 if signal["action"] == "BUY":
-                    logger.info(
-                        f"🟢 BUY SIGNAL | {signal['symbol']} | "
-                        f"₹{signal['price']} | {signal['reason']}"
-                    )
+                    _log_triggered_strategy_set("BUY", signal)
                     trade = place_buy_order(
                         symbol         = signal["symbol"],
                         trading_symbol = stock.get("trading_symbol", signal["symbol"]),
                         entry_price    = signal["price"],
                         stop_loss      = signal["stop_loss"],
-                        strategy       = signal["reason"],
+                        strategy       = signal["strategy"],
                         confidence     = signal.get("confidence", 0),
                     )
                     if trade:
@@ -1195,11 +1624,11 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
                     else:
                         _failed_order_cooldown[signal["symbol"]] = time.time()  # fail pe mark
 
-            # Math watchlist — excludes War Room symbols (no overlap)
-            war_room_syms = {s["ticker"] for s in briefing.get("approved_stocks", [])}
+            # Math watchlist excludes cognition picks (no overlap).
+            cognition_syms = {s["ticker"] for s in briefing.get("approved_stocks", [])}
             open_syms = {p["symbol"] for p in get_open_positions()}
             for stock in briefing.get("watchlist", []):
-                if stock["ticker"] in war_room_syms:
+                if stock["ticker"] in cognition_syms:
                     continue
                 if open_count >= MAX_POSITIONS:
                     break
@@ -1208,16 +1637,13 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
 
                 signal = _evaluate_math_signal(stock, briefing)
                 if signal["action"] == "BUY":
-                    logger.info(
-                        f"[MATH BUY] {signal['symbol']} | "
-                        f"Rs.{signal['price']} | {signal['reason']}"
-                    )
+                    _log_triggered_strategy_set("BUY", signal)
                     trade = place_buy_order(
                         symbol         = signal["symbol"],
                         trading_symbol = stock.get("trading_symbol", signal["symbol"]),
                         entry_price    = signal["price"],
                         stop_loss      = signal["stop_loss"],
-                        strategy       = signal["reason"],
+                        strategy       = signal["strategy"],
                         confidence     = signal.get("confidence", 0),
                         risk_pct = signal.get("risk_pct", MATH_RISK_PER_TRADE),   # or directly MATH_RISK_PER_TRADE
                     )

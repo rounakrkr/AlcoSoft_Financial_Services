@@ -232,6 +232,12 @@ main {
   text-align: left;
 }
 
+.strategy-sub {
+  margin-top: 3px;
+  color: var(--text2);
+  font-size: 0.72rem;
+}
+
 /* status badges */
 .status-badge {
   display: inline-block;

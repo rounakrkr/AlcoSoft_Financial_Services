@@ -1,21 +1,17 @@
-#!/usr/bin/env python
-"""Test SL order placement to diagnose failures."""
-import sys
-import logging
-from core.order_executor import place_buy_order
+import unittest
 
-# Setup logging to see detailed messages
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
-)
+from core.order_executor import calculate_stop_loss, calculate_target
 
-# Test with a simple order
-result = place_buy_order(
-    symbol='TEST',
-    trading_symbol='SBIN-EQ',
-    entry_price=500.0,
-    stop_loss=495.0,
-    strategy='TEST'
-)
-print(f"\n✅ Order placed: {result}")
+
+class StopLossOrderMathTests(unittest.TestCase):
+    def test_stop_loss_and_target_math_is_deterministic(self):
+        entry = 500.0
+        stop_loss = calculate_stop_loss(entry, "BUY")
+        target = calculate_target(entry, stop_loss)
+
+        self.assertLess(stop_loss, entry)
+        self.assertGreater(target, entry)
+
+
+if __name__ == "__main__":
+    unittest.main()

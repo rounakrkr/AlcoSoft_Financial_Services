@@ -38,6 +38,11 @@ function timeStr(iso) {
   });
 }
 
+function exitSetName(notes) {
+  const prefix = 'SELL_SET:';
+  return notes && notes.startsWith(prefix) ? notes.slice(prefix.length) : '';
+}
+
 async function fetchAndRender() {
   try {
     const res = await fetch('/api/status');
@@ -122,6 +127,9 @@ async function fetchAndRender() {
       } else {
         trBody.innerHTML = data.trades.map((t) => {
           const pnlVal = parseFloat(t.pnl || 0);
+          const exitSet = exitSetName(t.notes || '');
+          const strategyTitle = exitSet ? `${t.strategy || ''} | Exit: ${exitSet}` : (t.strategy || '');
+          const strategyHtml = `${t.strategy || '—'}${exitSet ? `<div class="strategy-sub">Exit: ${exitSet}</div>` : ''}`;
           const emoji = t.status === 'CLOSED' ? '✅' : t.status === 'STOPPED' ? '🛑' : '🟡';
           const st = (t.status || '').toUpperCase();
           const statusCls =
@@ -136,7 +144,7 @@ async function fetchAndRender() {
             <td class="mono col-num">${t.exit_price ? fmt(t.exit_price) : '—'}</td>
             <td class="mono col-pnl ${pnlClass(t.pnl)}">${pnlText}</td>
             <td class="col-status"><span class="status-badge ${statusCls}">${st || '—'}</span></td>
-            <td class="cell-strategy" title="${t.strategy || ''}">${t.strategy || '—'}</td>
+            <td class="cell-strategy" title="${strategyTitle}">${strategyHtml}</td>
           </tr>`;
         }).join('');
       }
@@ -277,17 +285,18 @@ async function fetchAdaptiveData() {
     set('adaptive-confidence', (data.average_confidence || 0).toFixed(2));
 
     // Determine if we have adaptive data
-    const hasSignals = data.signals && data.signals.length > 0;
+    const hasSignals = data.strategy_sets && data.strategy_sets.length > 0;
     const hasWindows = data.time_windows && data.time_windows.length > 0;
     const hasSymbols = data.symbols && data.symbols.length > 0;
 
     const signalsBody = document.getElementById('signals-body');
     if (signalsBody) {
       signalsBody.innerHTML = hasSignals
-        ? data.signals.map((signal) => {
-            const current = data.multiplier_history.find((row) => row.multiplier_type === 'signal' && row.multiplier_key === signal.signal_name.toLowerCase().replace(/\s+/g, '_')) || {};
+        ? data.strategy_sets.map((signal) => {
+            const setName = signal.set_name || signal.signal_name || 'Unknown';
+            const current = data.multiplier_history.find((row) => row.multiplier_type === 'signal' && row.multiplier_key === setName.toLowerCase().replace(/\s+/g, '_')) || {};
             return renderAdaptiveTableRow([
-              `<strong>${signal.signal_name}</strong>`,
+              `<strong>${setName}</strong><div class="strategy-sub">${signal.side || ''}</div>`,
               signal.total_trades || 0,
               fmtPct(signal.win_rate),
               signal.avg_rr?.toFixed(2) || '—',
@@ -296,7 +305,7 @@ async function fetchAdaptiveData() {
               current.confidence_strength?.toFixed(2) || '0.00',
             ]);
           }).join('')
-        : '<tr><td colspan="7" class="empty">⏳ Waiting for real trades... Adaptive multipliers will appear after signals accumulate enough data (min 10 trades)</td></tr>';
+        : '<tr><td colspan="7" class="empty">⏳ Waiting for real trades... Strategy-set multipliers will appear after sets accumulate enough data (min 10 trades)</td></tr>';
     }
 
     const windowsBody = document.getElementById('windows-body');

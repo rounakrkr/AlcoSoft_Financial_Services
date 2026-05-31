@@ -27,6 +27,7 @@ from core.trading_settings import (
     FIELD_SCHEMA,
     get as cfg,
 )
+from core.strategy_sets import load_strategy_sets, normalize_set_key
 
 app = Flask(
     __name__,
@@ -81,6 +82,54 @@ def _db_query(query: str, params: tuple = ()) -> list:
         return []
 
 
+def _configured_strategy_sets() -> list:
+    try:
+        config = load_strategy_sets()
+        return list(config.buy_sets) + list(config.sell_sets)
+    except Exception:
+        return []
+
+
+def _strategy_set_performance_rows(signal_stats: list[dict], multiplier_rows: list[dict]) -> list[dict]:
+    set_defs = _configured_strategy_sets()
+    if not set_defs:
+        return signal_stats
+
+    stats_by_name = {row.get("signal_name"): row for row in signal_stats}
+    multipliers = {
+        row.get("multiplier_key"): row
+        for row in multiplier_rows
+        if row.get("multiplier_type") == "signal"
+    }
+
+    rows = []
+    for set_def in set_defs:
+        stats = stats_by_name.get(set_def.name, {})
+        multiplier = multipliers.get(normalize_set_key(set_def.name), {})
+        rows.append({
+            "signal_name": set_def.name,
+            "set_name": set_def.name,
+            "side": set_def.side.upper(),
+            "conditions": list(set_def.conditions),
+            "priority": set_def.priority,
+            "base_confidence": set_def.base_confidence,
+            "confidence_weight": set_def.confidence_weight,
+            "notes": set_def.notes,
+            "total_trades": stats.get("total_trades", 0),
+            "winning_trades": stats.get("winning_trades", 0),
+            "losing_trades": stats.get("losing_trades", 0),
+            "win_rate": stats.get("win_rate", 0.0),
+            "avg_profit": stats.get("avg_profit", 0.0),
+            "avg_loss": stats.get("avg_loss", 0.0),
+            "avg_rr": stats.get("avg_rr", 0.0),
+            "avg_drawdown": stats.get("avg_drawdown", 0.0),
+            "multiplier": multiplier.get("multiplier_value", 1.0),
+            "confidence": multiplier.get("confidence_strength", 0.0),
+        })
+
+    return rows
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -128,7 +177,7 @@ def api_status():
 
     trades = _db_query("""
         SELECT symbol, action, entry_price, exit_price,
-               pnl, status, strategy, entry_time, exit_time
+               pnl, status, strategy, notes, entry_time, exit_time
         FROM trades ORDER BY id DESC LIMIT 10
     """)
 
@@ -330,19 +379,20 @@ def api_adaptive():
     if not ADAPTIVE_AVAILABLE:
         return jsonify({"ok": False, "error": "Adaptive engine not available"}), 503
 
-    signals = get_all_signal_stats()
+    raw_signals = get_all_signal_stats()
     windows = get_all_time_window_stats()
     symbols = get_all_symbol_stats()
     config_summary = get_adaptive_config_summary()
-
-    total_trades = sum(s.get("total_trades", 0) for s in signals)
-    total_wins = sum(s.get("winning_trades", 0) for s in signals)
-    overall_win_rate = round((total_wins / total_trades * 100) if total_trades > 0 else 0.0, 1)
 
     multiplier_rows = _reflection_db_query(
         "SELECT multiplier_type, multiplier_key, multiplier_value, raw_calculated_value, sample_size, confidence_strength, last_updated "
         "FROM multiplier_history ORDER BY multiplier_type, multiplier_key"
     )
+    signals = _strategy_set_performance_rows(raw_signals, multiplier_rows)
+
+    total_trades = sum(s.get("total_trades", 0) for s in signals)
+    total_wins = sum(s.get("winning_trades", 0) for s in signals)
+    overall_win_rate = round((total_wins / total_trades * 100) if total_trades > 0 else 0.0, 1)
 
     change_history = _reflection_db_query(
         "SELECT multiplier_type, multiplier_key, previous_value, new_value, raw_calculated_value, "
@@ -389,15 +439,17 @@ def api_adaptive():
 
     # Build adaptive alerts
     for stats in signals:
-        if stats.get("total_trades", 0) < 10 and stats.get("win_rate", 0) < 50:
+        trade_count = stats.get("total_trades", 0)
+        set_name = stats.get("set_name") or stats.get("signal_name")
+        if 0 < trade_count < 10 and stats.get("win_rate", 0) < 50:
             alerts.append({
                 "level": "warning",
-                "message": f"Low sample size: {stats.get('signal_name')} has only {stats.get('total_trades', 0)} trades",
+                "message": f"Low sample size: {set_name} has only {trade_count} trades",
             })
-        if stats.get("win_rate", 0) < 40:
+        if trade_count >= 10 and stats.get("win_rate", 0) < 40:
             alerts.append({
                 "level": "danger",
-                "message": f"{stats.get('signal_name')} suppressed due to low win rate ({stats.get('win_rate', 0):.1f}%)",
+                "message": f"{set_name} suppressed due to low win rate ({stats.get('win_rate', 0):.1f}%)",
             })
 
     for symbol in symbols:
@@ -410,6 +462,7 @@ def api_adaptive():
     return jsonify({
         "ok": True,
         "signals": signals,
+        "strategy_sets": signals,
         "time_windows": windows,
         "symbols": symbols,
         "config_summary": config_summary,

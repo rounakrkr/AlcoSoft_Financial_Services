@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 _cognitive_timer: Timer | None = None
 _is_running = False
+_last_cycle_slot: str | None = None
 
 
 def is_market_hours() -> bool:
@@ -76,6 +77,27 @@ def is_cognitive_cycle_time() -> bool:
     return minutes_since_first % cycle_interval == 0
 
 
+def _current_cognitive_slot() -> str | None:
+    from core.trading_settings import get as cfg
+
+    now = datetime.now()
+    first_cycle = dt_time(9, 30)
+    last_cycle = dt_time(15, 15)
+    now_time = now.time()
+    if now_time < first_cycle or now_time > last_cycle:
+        return None
+
+    cycle_interval = max(1, int(cfg("scheduling", "cognition_cycle_interval_minutes", 15)))
+    current_minute = now.hour * 60 + now.minute
+    first_minute = first_cycle.hour * 60 + first_cycle.minute
+    if current_minute < first_minute:
+        return None
+
+    slot_index = (current_minute - first_minute) // cycle_interval
+    slot_minute = first_minute + (slot_index * cycle_interval)
+    return f"{now.date().isoformat()}-{slot_minute}"
+
+
 def schedule_cognitive_cycle():
     """
     Non-blocking cognitive cycle scheduler.
@@ -98,14 +120,21 @@ def schedule_cognitive_cycle():
     scheduler.start()
     ```
     """
+    global _last_cycle_slot
+
     if not is_market_hours():
         return
     
-    if is_cognitive_cycle_time():
+    slot = _current_cognitive_slot()
+    if not slot or slot == _last_cycle_slot:
+        return
+
+    if slot:
         try:
             from reflection.cognitive_agents import run_cognitive_observation_cycle
             logger.debug("🧠 Cognitive cycle trigger detected")
             run_cognitive_observation_cycle()
+            _last_cycle_slot = slot
         except Exception as e:
             logger.warning(f"Cognitive cycle execution failed: {e}")
 
@@ -160,11 +189,9 @@ def register_cognitive_cycle_with_apscheduler(scheduler):
     scheduler.start()
     ```
     """
-    from reflection.cognitive_agents import run_cognitive_observation_cycle
-    
     # Run cognitive cycle check every minute
     scheduler.add_job(
-        run_cognitive_observation_cycle,
+        schedule_cognitive_cycle,
         'cron',
         second=0,
         max_instances=1,

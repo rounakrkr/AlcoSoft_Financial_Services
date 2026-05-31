@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "buy_sets": [
+    {
+      "name": "BUY_RSI_MACD_REVERSAL",
+      "priority": 10,
+      "base_confidence": 72,
+      "confidence_weight": 1.0,
+      "notes": "Oversold momentum recovery confirmed by a reversal candle.",
+      "conditions": [
+        "rsi_macd_momentum",
+        "bullish_reversal_candle"
+      ]
+    },
+    {
+      "name": "BUY_EMA_VOLUME_MOMENTUM",
+      "priority": 20,
+      "base_confidence": 76,
+      "confidence_weight": 1.05,
+      "notes": "Trend continuation after bullish EMA confirmation and strong participation.",
+      "conditions": [
+        "ema_9_21_crossover",
+        "volume_spike",
+        "price_above_ema20"
+      ]
+    },
+    {
+      "name": "BUY_BREAKOUT_CONFIRMATION",
+      "priority": 30,
+      "base_confidence": 74,
+      "confidence_weight": 1.05,
+      "notes": "Breakout candle with volume and price holding above short trend.",
+      "conditions": [
+        "volume_breakout",
+        "price_above_ema20"
+      ]
+    },
+    {
+      "name": "BUY_BOLLINGER_REVERSAL",
+      "priority": 40,
+      "base_confidence": 70,
+      "confidence_weight": 1.0,
+      "notes": "Mean-reversion bounce confirmed by bullish candle structure.",
+      "conditions": [
+        "bollinger_band_bounce",
+        "bullish_reversal_candle"
+      ]
+    },
+    {
+      "name": "BUY_VWAP_REVERSAL",
+      "priority": 50,
+      "base_confidence": 73,
+      "confidence_weight": 1.0,
+      "notes": "Price reclaims VWAP while RSI recovers and candle structure turns bullish.",
+      "conditions": [
+        "price_above_vwap",
+        "rsi_recovering",
+        "bullish_reversal_candle"
+      ]
+    }
+  ],
+  "sell_sets": [
+    {
+      "name": "SELL_RSI_MACD_WEAKNESS",
+      "priority": 10,
+      "base_confidence": 70,
+      "confidence_weight": 1.0,
+      "notes": "Overbought momentum rolls over with bearish confirmation.",
+      "conditions": [
+        "rsi_overbought",
+        "macd_bearish_cross",
+        "bearish_pattern"
+      ]
+    },
+    {
+      "name": "SELL_EMA_BREAKDOWN",
+      "priority": 20,
+      "base_confidence": 70,
+      "confidence_weight": 1.0,
+      "notes": "Price breaks below EMA20 and remains below short trend support.",
+      "conditions": [
+        "ema20_breakdown",
+        "price_below_ema20"
+      ]
+    },
+    {
+      "name": "SELL_VWAP_WEAKNESS",
+      "priority": 30,
+      "base_confidence": 70,
+      "confidence_weight": 1.0,
+      "notes": "Price loses VWAP while RSI weakens and bearish candle structure appears.",
+      "conditions": [
+        "price_below_vwap",
+        "rsi_weakening",
+        "bearish_pattern"
+      ]
+    },
+    {
+      "name": "SELL_BREAKDOWN_CONFIRMATION",
+      "priority": 40,
+      "base_confidence": 72,
+      "confidence_weight": 1.05,
+      "notes": "Support breakdown confirmed by volume and bearish candle action.",
+      "conditions": [
+        "price_below_recent_support",
+        "volume_spike",
+        "bearish_pattern"
+      ]
+    }
+  ]
+}

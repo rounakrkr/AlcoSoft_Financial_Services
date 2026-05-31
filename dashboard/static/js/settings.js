@@ -10,7 +10,7 @@ const GROUP_LABELS = {
 
 const GROUP_DESCRIPTIONS = {
   risk: 'Trading risk controls including stop losses, targets, and margin settings.',
-  strategy: 'Signal thresholds and position sizing rules used by the trading engine.',
+  strategy: 'Strategy-set mode, position limits, lookback, and loop timing used by the trading engine.',
   screener: 'Morning stock selection and war room candidate settings.',
   market_data: 'Market data refresh rates and websocket health thresholds.',
   scheduling: 'Timing for war room scans and strategy loop execution.',

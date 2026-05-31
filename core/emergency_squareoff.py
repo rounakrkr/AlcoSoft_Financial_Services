@@ -28,7 +28,7 @@ async def emergency_square_off_all() -> dict:
     """
     logger.critical("🚨 EMERGENCY SQUARE OFF ALL INITIATED")
 
-    from core.state_manager import get_open_positions, close_position
+    from core.state_manager import get_open_positions
     from core.data_fetcher import get_latest_tick
     from core.order_executor import place_sell_order
     from core.audit_logger import audit_system_error
@@ -71,7 +71,6 @@ async def emergency_square_off_all() -> dict:
             )
 
             if result:
-                close_position(symbol, exit_price, reason="EMERGENCY_SQUAREOFF")
                 closed.append({
                     'symbol': symbol,
                     'qty': qty,

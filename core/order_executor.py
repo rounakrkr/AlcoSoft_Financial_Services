@@ -20,7 +20,7 @@ from core.token_validator import (
 from core.state_manager import (
     save_open_position, close_position, get_open_positions,
     update_trailing_sl, update_sl_order_id,
-    get_today_gross_pnl, load_briefing,
+    get_today_gross_pnl,
 )
 from core.audit_logger import (
     audit_order_placed, audit_position_closed, audit_system_error,
@@ -266,6 +266,63 @@ def calculate_target(entry: float, stop_loss: float) -> float:
     return round(entry + (risk * rr), 2)
 
 
+def _market_protection_pct(price: float) -> float:
+    if price < 100:
+        return 0.02
+    if price <= 500:
+        return 0.01
+    return 0.005
+
+
+def _broker_safe_limit_price(ltp: float, transaction: str) -> float:
+    """
+    Convert a desired market-style order into a limit order inside Kotak's
+    protection band. Retail algo market orders are not allowed.
+    """
+    ltp = max(float(ltp or 0), 0.05)
+    pct = _market_protection_pct(ltp)
+    if str(transaction).upper() == "B":
+        return round(ltp * (1 + pct), 2)
+    return max(0.05, round(ltp * (1 - pct), 2))
+
+
+def _current_position_valuation() -> dict:
+    try:
+        from core.data_fetcher import get_latest_tick
+    except Exception:
+        get_latest_tick = None
+
+    current_position_value = 0.0
+    entry_position_value = 0.0
+    unrealized_pnl = 0.0
+
+    for p in get_open_positions():
+        symbol = p.get("symbol", "")
+        qty = float(p.get("quantity", 0) or 0)
+        entry_price = float(p.get("entry_price", 0) or 0)
+
+        current_price = entry_price
+        if get_latest_tick:
+            try:
+                tick = get_latest_tick(symbol)
+                current_price = float(tick.get("ltp", entry_price)) if tick else entry_price
+            except Exception:
+                current_price = entry_price
+
+        entry_value = qty * entry_price
+        current_value = qty * current_price
+
+        entry_position_value += entry_value
+        current_position_value += current_value
+        unrealized_pnl += current_value - entry_value
+
+    return {
+        "entry_position_value": entry_position_value,
+        "current_position_value": current_position_value,
+        "unrealized_pnl": unrealized_pnl,
+    }
+
+
 # ════════════════════════════════════════════════════════════
 #   BUY ORDER
 # ════════════════════════════════════════════════════════════
@@ -347,14 +404,14 @@ def _place_buy_order_impl(
     would_over_leverage = total_would_deploy > (margin_status['real_capital'] * margin_status['margin_leverage'])
     
     if would_over_leverage:
-        logger.warning(
+        logger.error(
             f"⚠️ OVER-LEVERAGE WARNING for {symbol} | "
             f"Current: ₹{margin_status['deployed_in_positions']:.0f} + "
             f"This order: ₹{capital_deployed_if_buy:.0f} = "
             f"₹{total_would_deploy:.0f} > "
             f"Max available: ₹{margin_status['real_capital'] * margin_status['margin_leverage']:.0f}"
         )
-        # Don't block, just warn. User can adjust settings if needed.
+        return {}
     
     target_price = calculate_target(entry_price, stop_loss)
 
@@ -532,8 +589,8 @@ def _place_sell_order_impl(
             trading_symbol = trading_symbol,
             transaction    = "S",
             quantity       = quantity,
-            price          = exit_price,
-            order_type     = "MKT",   # Market sell for speed
+            price          = _broker_safe_limit_price(exit_price, "S"),
+            order_type     = "L",
             product        = product,
         )
         if not order_id:
@@ -596,7 +653,7 @@ def _place_sell_order_impl(
                 confidence=confidence,
                 time_window=time_window,
                 drawdown=drawdown,
-                sl_hit=False,  # Could track this from exit reason
+                sl_hit=reason in ("STOPLOSS", "TRAILING_SL"),
                 recovered=False,  # Could track this from position history
             )
             logger.debug(f"📊 Signal recorded: {strategy_context} | {symbol} | PL={pnl} | DD={drawdown:.1f}%")
@@ -757,6 +814,13 @@ def get_margin_status() -> dict:
 
     allow_margin = cfg("risk", "allow_margin", False)
     margin_leverage = float(cfg("risk", "margin_leverage", 2.0))
+    valuation = _current_position_valuation()
+    current_position_value = valuation["current_position_value"]
+    entry_position_value = valuation["entry_position_value"]
+    unrealized_pnl = valuation["unrealized_pnl"]
+    closed_pnl = get_today_gross_pnl()
+    total_pnl = closed_pnl + unrealized_pnl
+    effective_capital = real_capital + total_pnl
 
     if margin_leverage < 1.0:
         margin_leverage = 1.0
@@ -764,51 +828,21 @@ def get_margin_status() -> dict:
         margin_leverage = 5.0
 
     if not allow_margin:
+        remaining_cash = max(0.0, real_capital - current_position_value)
         return {
             'real_capital': real_capital,
             'margin_leverage': 1.0,
             'total_available_with_margin': real_capital,
-            'current_position_value': 0.0,
-            'unrealized_pnl': 0.0,
-            'effective_capital': real_capital,
+            'current_position_value': current_position_value,
+            'deployed_in_positions': entry_position_value,
+            'entry_position_value': entry_position_value,
+            'unrealized_pnl': unrealized_pnl,
+            'effective_capital': effective_capital,
             'margin_used': 0.0,
             'margin_pct': 0.0,
-            'remaining_margin': 0.0,
-            'is_over_leveraged': False,
+            'remaining_margin': remaining_cash,
+            'is_over_leveraged': current_position_value > real_capital,
         }
-
-    # Get CURRENT position values (not entry values)
-    positions = get_open_positions()
-    current_position_value = 0.0
-    entry_position_value = 0.0
-    unrealized_pnl = 0.0
-
-    for p in positions:
-        symbol = p.get("symbol", "")
-        qty = float(p.get("quantity", 0))
-        entry_price = float(p.get("entry_price", 0))
-
-        # Try to get current price
-        try:
-            tick = get_latest_tick(symbol)
-            current_price = float(tick.get("ltp", entry_price)) if tick else entry_price
-        except Exception:
-            current_price = entry_price  # Fallback to entry if tick unavailable
-
-        entry_value = qty * entry_price
-        current_value = qty * current_price
-        pnl = current_value - entry_value
-
-        current_position_value += current_value
-        entry_position_value += entry_value
-        unrealized_pnl += pnl
-
-    # Total P&L (closed + unrealized)
-    closed_pnl = get_today_gross_pnl()
-    total_pnl = closed_pnl + unrealized_pnl
-
-    # Effective capital = real + all P&L
-    effective_capital = real_capital + total_pnl
 
     # Margin available = extra capital we can use beyond real capital
     margin_available = real_capital * (margin_leverage - 1.0)
@@ -830,6 +864,8 @@ def get_margin_status() -> dict:
         'margin_leverage': margin_leverage,
         'total_available_with_margin': real_capital * margin_leverage,
         'current_position_value': current_position_value,
+        'deployed_in_positions': entry_position_value,
+        'entry_position_value': entry_position_value,
         'unrealized_pnl': unrealized_pnl,
         'effective_capital': effective_capital,
         'margin_used': margin_used,
@@ -837,35 +873,6 @@ def get_margin_status() -> dict:
         'remaining_margin': remaining_margin,
         'is_over_leveraged': is_over_leveraged,
     }
-
-
-
-    """
-    Exits positions when war room changes its mind.
-    Triggered if:
-      - Stock direction → AVOID in latest briefing
-      - Market bias → BEARISH
-    """
-    briefing = load_briefing()
-    if not briefing:
-        return
-
-    avoid_list  = briefing.get("avoid_list", [])
-    market_bias = briefing.get("market_bias", "NEUTRAL")
-
-    for position in get_open_positions():
-        symbol  = position["symbol"]
-        current = live_prices.get(symbol, position["entry_price"])
-
-        if symbol in avoid_list:
-            logger.warning(f"⚔️ WAR ROOM FLIP | {symbol} → AVOID → Exiting")
-            place_sell_order(symbol, current, "WAR_ROOM_FLIP")
-
-        elif market_bias == "BEARISH":
-            logger.warning(f"🐻 BEARISH BIAS | {symbol} → Exiting")
-            place_sell_order(symbol, current, "BEARISH_BIAS")
-
-
 def update_trailing_stop_losses(live_prices: dict[str, float]):
     """
     Moves SL up as price rises. Never moves SL down.
@@ -1055,12 +1062,24 @@ def _send_kotak_order(
         logger.error(f"Token health: {health}")
         return None
 
+    normalized_order_type = str(order_type).upper()
+    order_price = round(float(price or 0), 2)
+    if normalized_order_type in ("MKT", "MARKET"):
+        order_price = _broker_safe_limit_price(price, transaction)
+        normalized_order_type = "L"
+        logger.warning(
+            "Converted market %s order for %s to broker-safe limit @ %s",
+            transaction,
+            order_symbol,
+            order_price,
+        )
+
     # STEP 2: Build Order Payload
     order_kwargs = dict(
         exchange_segment   = "nse_cm",  # ✅ Valid: "nse_cm" is accepted by NeoAPI 2.x
         product            = product,
-        price              = str(round(price, 2)),
-        order_type         = order_type,
+        price              = str(order_price),
+        order_type         = normalized_order_type,
         quantity           = str(quantity),
         validity           = "DAY",
         trading_symbol     = order_symbol,  # 🔥 USE SYMBOL WITH -EQ SUFFIX
@@ -1234,11 +1253,12 @@ def _send_kotak_sl_order(
     logger.debug(f"📋 SL-M order symbol: {order_symbol}")
     logger.info(f"🔄 [SL-M] Starting SL order placement | Symbol: {order_symbol} | Qty: {quantity} | Trigger: ₹{trigger_price}")
     
+    stop_limit_price = _broker_safe_limit_price(trigger_price, "S")
     sl_kwargs = dict(
         exchange_segment   = "nse_cm",
         product            = product,
-        price              = "0",
-        order_type         = "SL-M",
+        price              = str(stop_limit_price),
+        order_type         = "SL",
         quantity           = str(quantity),
         validity           = "DAY",
         trading_symbol     = order_symbol,  # 🔥 USE SYMBOL WITH -EQ SUFFIX
@@ -1354,15 +1374,16 @@ def _modify_sl_order(
         # 🔐 CRITICAL: Ensure Trade token is set before modifying order
         client = ensure_trade_token_on_client()
         
+        stop_limit_price = _broker_safe_limit_price(new_trigger, "S")
         response = call_broker_api(
             client.modify_order,
             order_id           = order_id,
-            price              = "0",
+            price              = str(stop_limit_price),
             quantity           = str(quantity),
             disclosed_quantity = "0",
             trigger_price      = str(round(new_trigger, 2)),
             validity           = "DAY",
-            order_type         = "SL-M",
+            order_type         = "SL",
         )
         if response is None or (isinstance(response, dict) and response.get("error")):
             logger.error("SL-M modify failed: %s", response)

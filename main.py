@@ -86,7 +86,6 @@ from core.state_manager import initialize_db, recover_state, load_briefing, save
 from core.data_fetcher import start_live_feed, stop_live_feed
 from core.strategy import run_strategy_loop
 from screener.morning_screener import run_morning_screener
-# from war_room.orchestrator import run_war_room  # DEPRECATED: Code preserved for reference
 from reflection.reflection_loop import run_reflection_loop
 from reflection.observation_loop import observation_loop_main
 
@@ -262,7 +261,10 @@ async def run_observation_cycle():
 # ════════════════════════════════════════════════════════════
 
 def setup_scheduler() -> AsyncIOScheduler:
+    from core.trading_settings import get as cfg
+
     scheduler = AsyncIOScheduler()
+    cognition_interval = int(cfg("scheduling", "cognition_cycle_interval_minutes", 15))
 
     # Morning screener — 8:45 AM daily
     scheduler.add_job(
@@ -279,25 +281,11 @@ def setup_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(
         run_observation_cycle,
         trigger="interval",
-        minutes=15,
+        minutes=cognition_interval,
         id="observation",
         name="Market Observation Loop",
         max_instances=1,
     )
-
-    # War room — every N minutes during market hours
-    # DEPRECATED: War Room phased out in favor of Cognition Loop architecture.
-    # Code preserved in war_room/ for reference. Can be re-enabled by uncommenting below.
-    # from core.trading_settings import get as cfg
-    # war_room_interval = int(cfg("scheduling", "war_room_interval_minutes", 30))
-    # scheduler.add_job(
-    #     run_war_room,
-    #     trigger="interval",
-    #     minutes=war_room_interval,
-    #     id="war_room",
-    #     name="AlcoSoft War Room",
-    #     max_instances=1,
-    # )
 
     # Reflection loop — 3:35 PM daily
     scheduler.add_job(
@@ -313,7 +301,7 @@ def setup_scheduler() -> AsyncIOScheduler:
     logger.info(
         f"Scheduler started:\n"
         f"   Morning screener  : 08:45 AM daily\n"
-        f"   Observation loop  : Every 15 minutes\n"
+        f"   Observation loop  : Every {cognition_interval} minutes\n"
         f"   Reflection loop   : 03:35 PM daily"
     )
     return scheduler

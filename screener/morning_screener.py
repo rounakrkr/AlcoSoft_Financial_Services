@@ -3,12 +3,12 @@
 #   screener/morning_screener.py — 8:45 AM Stock Picker
 #
 #   UPGRADE: Now picks 25 stocks for math-only watchlist
-#   AND top 4 for AI War Room debate.
+#   AND top cognition picks for AI-assisted screening.
 #
 #   BRIEFING STRUCTURE:
 #   {
 #     "market_bias":     "BULLISH/BEARISH/NEUTRAL",
-#     "approved_stocks": [4 stocks → War Room debated, full 2% risk],
+#     "approved_stocks": [cognition picks, full risk],
 #     "watchlist":       [25 stocks → math only, half 1% risk]
 #   }
 # ============================================================
@@ -46,8 +46,32 @@ NIFTY_50 = [
 
 def _screener_counts():
     total = int(cfg("screener", "screener_total_stocks", 25))
-    picks = int(cfg("screener", "war_room_picks", 4))
+    picks = _cognition_pick_count()
     return total, picks, max(0, total - picks)
+
+
+def _cognition_pick_count() -> int:
+    picks = cfg("screener", "cognition_picks", 4)
+    return max(1, int(picks))
+
+
+def _score_to_confidence(score) -> int:
+    try:
+        return int(max(0, min(100, round(float(score) * 10))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_pick_confidence(raw, fallback_score) -> int:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 0
+    if value <= 0:
+        value = _score_to_confidence(fallback_score)
+    if 0 < value <= 1:
+        value *= 100
+    return int(max(0, min(100, round(value))))
 
 
 # ════════════════════════════════════════════════════════════
@@ -60,7 +84,7 @@ def run_morning_screener():
 
     Step 1: Fetch indicators for all available stocks (NIFTY_50 list).
     Step 2: Score every stock mathematically.
-    Step 3: Gemini picks N best from ALL stocks (N = war_room_picks setting, configurable).
+    Step 3: Gemini picks N best from ALL stocks (N = cognition_picks setting, configurable).
     Step 4: From remaining stocks, pick best (screener_total - N) by math score.
     Step 5: Total = N (AI) + (screener_total - N) (Math) = screener_total stocks for trading.
     Step 6: Write briefing JSON.
@@ -83,7 +107,7 @@ def run_morning_screener():
     total_stocks = len(scored)
     logger.info(f"Scored {total_stocks} stocks")
 
-    screener_total, war_room_count, _ = _screener_counts()
+    screener_total, cognition_count, _ = _screener_counts()
 
     # ── Step 1: Gemini picks N best from ALL available stocks ──
     # (Don't limit to top screener_total — let Gemini scan all for true best picks)
@@ -91,21 +115,21 @@ def run_morning_screener():
     allowed_symbols = {s["symbol"] for s in all_candidates}
 
     # Gemini analyzes independently - NO global market bias influence
-    ai_war_room_picks = _gemini_pick_stocks(all_candidates)
-    ai_war_room_picks = _validate_screener_picks(
-        ai_war_room_picks, allowed_symbols, all_candidates
+    ai_cognition_picks = _gemini_pick_stocks(all_candidates)
+    ai_cognition_picks = _validate_screener_picks(
+        ai_cognition_picks, allowed_symbols, all_candidates
     )
-    if not ai_war_room_picks:
-        logger.warning(f"Gemini screener failed. Using math fallback for top {war_room_count}.")
-        ai_war_room_picks = _fallback_picks(scored[:war_room_count])
+    if not ai_cognition_picks:
+        logger.warning(f"Gemini screener failed. Using math fallback for top {cognition_count}.")
+        ai_cognition_picks = _fallback_picks(scored[:cognition_count])
 
-    logger.info(f"War Room picks (by AI from all {total_stocks} stocks): {[p['ticker'] for p in ai_war_room_picks]}")
+    logger.info(f"Cognition picks (by AI from all {total_stocks} stocks): {[p['ticker'] for p in ai_cognition_picks]}")
 
     # ── Step 2: From remaining stocks, pick best (total - N) by math ──
-    ai_picked_symbols = {s.get("symbol", s.get("ticker")) for s in ai_war_room_picks}
+    ai_picked_symbols = {s.get("symbol", s.get("ticker")) for s in ai_cognition_picks}
     remaining_stocks = [s for s in scored if s["symbol"] not in ai_picked_symbols]
     
-    math_watchlist_count = screener_total - len(ai_war_room_picks)
+    math_watchlist_count = screener_total - len(ai_cognition_picks)
     watchlist_candidates = remaining_stocks[:math_watchlist_count]
 
     # Add per-stock market bias to watchlist
@@ -113,8 +137,9 @@ def run_morning_screener():
         "ticker":         s["symbol"],
         "trading_symbol": s["symbol"],
         "direction":      "WATCH",
-        "confidence":     0,
-        "math_score":     s["score"],
+        "confidence":     _score_to_confidence(s["score"]),
+        "math_score":     _score_to_confidence(s["score"]),
+        "math_score_raw": s["score"],
         "market_bias":    _get_stock_market_bias(s["symbol"]),
         "entry_price":    0.0,
         "stop_loss":      0.0,
@@ -126,8 +151,8 @@ def run_morning_screener():
         f"{[s['ticker'] for s in watchlist]}"
     )
 
-    # Add per-stock market bias to war room stocks
-    for stock in ai_war_room_picks:
+    # Add per-stock market bias to cognition stocks
+    for stock in ai_cognition_picks:
         stock["market_bias"] = _get_stock_market_bias(stock.get("ticker", stock.get("symbol", "")))
 
     # ── Write briefing ────────────────────────────────────────
@@ -135,7 +160,7 @@ def run_morning_screener():
         "generated_at":    datetime.now().isoformat(),
         "session_type":    "MORNING_SCREENER",
         "market_bias":     market_bias,
-        "approved_stocks": ai_war_room_picks,   # N — picked by AI from all available stocks
+        "approved_stocks": ai_cognition_picks,
         "watchlist":       watchlist,           # (screener_total-N) — best remaining by math
         "avoid_list":      [],
     }
@@ -143,9 +168,9 @@ def run_morning_screener():
     save_briefing(briefing)
     logger.info(
         f"Morning screener done (AI from all {total_stocks} stocks, Math from remaining).\n"
-        f"  War Room  ({len(ai_war_room_picks)}): {[p['ticker'] for p in ai_war_room_picks]}\n"
+        f"  Cognition ({len(ai_cognition_picks)}): {[p['ticker'] for p in ai_cognition_picks]}\n"
         f"  Watchlist ({len(watchlist)}): {[s['ticker'] for s in watchlist]}\n"
-        f"  Total trading stocks: {len(ai_war_room_picks) + len(watchlist)}"
+        f"  Total trading stocks: {len(ai_cognition_picks) + len(watchlist)}"
     )
 
 
@@ -300,7 +325,7 @@ def _get_stock_market_bias(symbol: str) -> str:
 def _gemini_pick_stocks(candidates: list[dict]) -> list[dict]:
     """
     Gemini analyzes ALL candidate stocks by NEWS/CATALYSTS independently.
-    Picks N best (configurable via war_room_picks setting).
+    Picks N best (configurable via cognition_picks setting).
     No global bias - AI makes unbiased decisions based on merit.
     """
     try:
@@ -324,7 +349,7 @@ def _gemini_pick_stocks(candidates: list[dict]) -> list[dict]:
         data  = json.loads(raw[start:end])
         picks = data.get("picks", [])
 
-        n = int(cfg("screener", "war_room_picks", 4))
+        n = _cognition_pick_count()
         formatted = []
         for pick in picks[:n]:
             sym = (pick.get("symbol") or "").strip().upper()
@@ -334,7 +359,7 @@ def _gemini_pick_stocks(candidates: list[dict]) -> list[dict]:
                 "ticker":             sym,
                 "trading_symbol":     sym,
                 "direction":          "BUY_ONLY",
-                "confidence":         0,
+                "confidence":         _coerce_pick_confidence(pick.get("confidence"), 0),
                 "entry_price":        0.0,
                 "stop_loss":          0.0,
                 "execution_strategy": "TBD",
@@ -356,7 +381,7 @@ def _validate_screener_picks(
     """Drop symbols not in math shortlist; pad from math rank if needed."""
     allowed_up = {s.upper() for s in allowed}
     by_sym = {s["symbol"].upper(): s for s in scored_candidates}
-    n = int(cfg("screener", "war_room_picks", 4))
+    n = _cognition_pick_count()
 
     valid = []
     seen = set()
@@ -369,7 +394,9 @@ def _validate_screener_picks(
             continue
         seen.add(sym)
         sc = by_sym.get(sym, {})
-        p["math_score"] = sc.get("score", 0)
+        p["math_score"] = _score_to_confidence(sc.get("score", 0))
+        p["math_score_raw"] = sc.get("score", 0)
+        p["confidence"] = _coerce_pick_confidence(p.get("confidence"), sc.get("score", 0))
         valid.append(p)
 
     if len(valid) < n:
@@ -381,12 +408,13 @@ def _validate_screener_picks(
                 "ticker":             sym,
                 "trading_symbol":     sym,
                 "direction":          "BUY_ONLY",
-                "confidence":         0,
+                "confidence":         _score_to_confidence(s.get("score", 0)),
                 "entry_price":        0.0,
                 "stop_loss":          0.0,
                 "execution_strategy": "TBD",
                 "reason":             f"Math pad | Score: {s.get('score', 0)}",
-                "math_score":         s.get("score", 0),
+                "math_score":         _score_to_confidence(s.get("score", 0)),
+                "math_score_raw":     s.get("score", 0),
             })
             seen.add(sym)
             if len(valid) >= n:
@@ -396,7 +424,7 @@ def _validate_screener_picks(
 
 
 def _screener_system_prompt() -> str:
-    n = int(cfg("screener", "war_room_picks", 4))
+    n = _cognition_pick_count()
     return f"""
 INTRADAY STOCK SCREENER - Pick {n} stocks for live AI war room debate.
 
@@ -417,12 +445,12 @@ c) AVOID - Negative news, upcoming earnings uncertainty, government penalties, s
 CONSTRAINT: Pick exactly {n} from the allowed list ONLY. Do NOT add other symbols.
 
 OUTPUT JSON ONLY:
-{{"picks":[{{"symbol":"NAME","reason":"Catalyst: [news summary] | Tech: RSI+Vol | Risk: [if any]"}}]}}
+{{"picks":[{{"symbol":"NAME","confidence":75,"reason":"Catalyst: [news summary] | Tech: RSI+Vol | Risk: [if any]"}}]}}
 """.strip()
 
 
 def _build_screener_message(candidates: list[dict]) -> str:
-    n = int(cfg("screener", "war_room_picks", 4))
+    n = _cognition_pick_count()
     symbols = ", ".join(s["symbol"] for s in candidates)
     lines = [
         f"TODAY'S CANDIDATES ({len(candidates)}): {symbols}",
@@ -458,12 +486,14 @@ def _fallback_picks(top_scored: list[dict]) -> list[dict]:
         "ticker":             s["symbol"],
         "trading_symbol":     s["symbol"],
         "direction":          "BUY_ONLY",
-        "confidence":         0,
+        "confidence":         _score_to_confidence(s["score"]),
         "entry_price":        0.0,
         "stop_loss":          0.0,
         "execution_strategy": "TBD",
         "reason":             f"Math fallback | Score: {s['score']}",
-    } for s in top_scored[: int(cfg("screener", "war_room_picks", 4))]]
+        "math_score":         _score_to_confidence(s["score"]),
+        "math_score_raw":     s["score"],
+    } for s in top_scored[: _cognition_pick_count()]]
 
 
 # ════════════════════════════════════════════════════════════
@@ -481,7 +511,7 @@ if __name__ == "__main__":
         briefing = json.load(f)
 
     print(f"\nMarket bias: {briefing.get('market_bias')}")
-    print(f"\nWar Room picks ({len(briefing.get('approved_stocks', []))}):")
+    print(f"\nCognition picks ({len(briefing.get('approved_stocks', []))}):")
     for s in briefing.get("approved_stocks", []):
         print(f"  {s['ticker']} — {s['reason']}")
 
