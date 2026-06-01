@@ -28,6 +28,7 @@ from core.trading_settings import (
 )
 from core.strategy_sets import load_strategy_sets, normalize_set_key
 from core.safe_io import safe_read_json
+from core.state_manager import load_briefing
 
 app = Flask(
     __name__,
@@ -189,13 +190,17 @@ def api_status():
         FROM trades ORDER BY id DESC LIMIT 10
     """)
 
-    briefing = safe_read_json(
-        BRIEFING_PATH,
-        {},
-        expected_type=dict,
-        label="dashboard briefing",
-        log=app.logger,
-    )
+    # Load briefing using centralized state_manager (uses validation)
+    briefing = load_briefing() or {}
+    
+    # Add validation status for dashboard display
+    if briefing:
+        from core.state_manager import validate_briefing
+        is_valid, reason = validate_briefing(briefing)
+        briefing["_validation_status"] = "VALID" if is_valid else f"INVALID: {reason}"
+    else:
+        briefing = {}
+        briefing["_validation_status"] = "MISSING"
 
     agent_decisions = _db_query("""
         SELECT agent, symbol, verdict, confidence,

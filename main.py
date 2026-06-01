@@ -82,7 +82,7 @@ logger = logging.getLogger("AlcoSoft")
 
 # ── Imports (after logging setup) ─────────────────────────────
 from core.kotak_client import get_client, logout
-from core.state_manager import initialize_db, recover_state, load_briefing, save_briefing
+from core.state_manager import initialize_db, recover_state, load_briefing, save_briefing, ensure_briefing_exists, validate_briefing, is_briefing_safe_for_trading
 from core.data_fetcher import start_live_feed, stop_live_feed
 from core.strategy import run_strategy_loop
 from screener.morning_screener import run_morning_screener
@@ -130,6 +130,21 @@ async def startup():
     # STEP 0 — Database must exist before health checks touch state tables.
     logger.info("[0/6] Initializing database...")
     initialize_db()
+
+    # STEP 0b — Ensure briefing file exists (prevents errors if missing)
+    logger.info("[0b/6] Ensuring session briefing file exists...")
+    ensure_briefing_exists()
+    
+    # CLEANUP: Reject TEST briefings from previous runs
+    logger.info("[0c/6] Cleanup: Checking for test briefings...")
+    test_briefing = load_briefing()
+    if test_briefing:
+        session_type = test_briefing.get("session_type", "")
+        if isinstance(session_type, str) and session_type.startswith("TEST"):
+            logger.warning(f"[BRIEFING] Cleanup: Found test briefing ({session_type}) - marking for regeneration")
+            test_briefing["do_not_use_for_trading"] = True
+            test_briefing["session_type"] = "CLEANUP_TEST_REJECTED"
+            save_briefing(test_briefing)
 
     # STEP 1 — Preflight Checks (before any trading)
     logger.info("[1/6] Running preflight health checks...")
@@ -185,105 +200,101 @@ async def startup():
     except Exception as e:
         logger.error(f"Capital allocation validation error: {e}")
 
-    # Step 4 — Morning Screener (if pre-market OR briefing missing)
+    # Step 4 — Morning Screener (if pre-market OR briefing missing/invalid)
     now = datetime.now().time()
     screener_success = False
     
+    # VALIDATION GATE 1: Check if briefing exists and is valid
+    logger.info("[4/6] Validating briefing status...")
+    briefing_status = load_briefing()
+    is_valid, validity_reason = validate_briefing(briefing_status)
+    
     # RUN SCREENER IF:
     # 1. It's before market open (normal 8:45 AM case), OR
-    # 2. Briefing is missing/empty (recovery case - system started late)
-    briefing_status = load_briefing()
-    briefing_stocks = 0
-    if briefing_status:
-        briefing_stocks = len(briefing_status.get("approved_stocks", [])) + len(briefing_status.get("watchlist", []))
-    
-    should_run_screener = (now < MARKET_OPEN) or (briefing_stocks == 0)
+    # 2. Briefing is invalid/missing/empty (recovery case)
+    should_run_screener = (now < MARKET_OPEN) or (not is_valid)
     
     if should_run_screener:
         if now < MARKET_OPEN:
             logger.info("[4/6] Pre-market: Running morning screener...")
         else:
-            logger.info("[4/6] Briefing empty: Running screener recovery...")
+            logger.warning(f"[4/6] Briefing invalid ({validity_reason}): Running screener recovery...")
         try:
             screener_success = run_morning_screener()
             if screener_success:
-                logger.info("✅ Screener completed successfully")
+                logger.info("[BRIEFING] Generated Screener Briefing ✅")
             else:
-                logger.warning("⚠️  Screener encountered errors")
+                logger.warning("[BRIEFING] Screener encountered errors")
         except Exception as e:
-            logger.error(f"Screener exception: {e}")
-            logger.warning("Will verify existing briefing or attempt regeneration.")
+            logger.error(f"[BRIEFING] Screener exception: {e}")
+            logger.warning("[BRIEFING] Will verify existing briefing or attempt regeneration.")
     else:
-        logger.info("[4/6] Market already open & briefing present. Skipping screener.")
+        logger.info("[4/6] Market already open & briefing valid. Skipping screener.")
 
-    # Step 5 — Load briefing and start data feed
-    logger.info("[5/6] Loading briefing and starting live feed...")
+    # Step 5 — Load briefing and VALIDATE FOR TRADING
+    logger.info("[5/6] Loading and validating briefing for trading...")
     briefing = load_briefing()
     
-    # VERIFICATION: If briefing is missing or invalid, attempt regeneration ONCE
-    briefing_stocks_count = 0
-    if briefing:
-        approved = briefing.get("approved_stocks", [])
-        watchlist = briefing.get("watchlist", [])
-        briefing_stocks_count = len(approved) + len(watchlist)
-        logger.info(f"Briefing status: {len(approved)} approved + {len(watchlist)} watchlist")
+    # VALIDATION GATE 2: Comprehensive validation
+    is_safe, safety_reason = is_briefing_safe_for_trading(briefing)
     
-    # Only attempt regeneration if screener hadn't run yet (time-based check)
-    already_ran_screener = should_run_screener and screener_success
-    
-    if (not briefing or briefing_stocks_count == 0) and not already_ran_screener:
-        logger.warning("⚠️  Briefing invalid or missing. Attempting regeneration...")
-        logger.info("   Triggering screener regeneration (attempt 1)...")
-        try:
-            regen_success = run_morning_screener()
-            if regen_success:
-                briefing = load_briefing()
-                if briefing:
-                    approved = briefing.get("approved_stocks", [])
-                    watchlist = briefing.get("watchlist", [])
-                    briefing_stocks_count = len(approved) + len(watchlist)
-                    logger.info(f"✅ Regeneration successful: {len(approved)} approved + {len(watchlist)} watchlist")
+    # If validation failed, attempt regeneration ONCE
+    if not is_safe:
+        already_ran_screener = should_run_screener and screener_success
+        if not already_ran_screener:
+            logger.warning(f"[BRIEFING] Validation failed: {safety_reason}")
+            logger.warning("[BRIEFING] Attempting screener regeneration (attempt 1)...")
+            try:
+                regen_success = run_morning_screener()
+                if regen_success:
+                    briefing = load_briefing()
+                    is_safe, safety_reason = is_briefing_safe_for_trading(briefing)
+                    if is_safe:
+                        logger.info("[BRIEFING] Validated ✅")
+                    else:
+                        logger.error(f"[BRIEFING] Regeneration failed validation: {safety_reason}")
                 else:
-                    logger.error("❌ Screener claimed success but briefing still missing")
-            else:
-                logger.error("❌ Screener regeneration failed")
-        except Exception as e:
-            logger.error(f"Screener regeneration exception: {e}")
-    elif briefing_stocks_count > 0:
-        logger.info("✅ Briefing valid and populated - ready for trading")
-
-    if briefing and briefing_stocks_count > 0:
-        approved  = [s["ticker"] for s in briefing.get("approved_stocks", [])]
-        watchlist = [s["ticker"] for s in briefing.get("watchlist", [])]
-        all_stocks = list(dict.fromkeys(approved + watchlist))
-
-        if all_stocks:
-            from core.data_fetcher import purge_invalid_token_cache
-            purge_invalid_token_cache()
-            logger.info(
-                f"Subscribing live feed: {len(all_stocks)} symbols "
-                f"({len(approved)} legacy + {len(watchlist)} math/technical)"
-            )
-            start_live_feed(all_stocks)
-
-            # ✅ AB trading symbol fix karo (cache ready)
-            from core.data_fetcher import fix_briefing_trading_symbols
-            fix_briefing_trading_symbols(briefing)
-            save_briefing(briefing)
-
-            logger.info(f"Live feed active for {len(all_stocks)} symbols.")
-            if approved:
-                logger.info(f"  Legacy stocks : {approved}")
-            logger.info(f"  Math watchlist: {watchlist}")
+                    logger.error("[BRIEFING] Screener regeneration failed")
+            except Exception as e:
+                logger.error(f"[BRIEFING] Regeneration exception: {e}")
         else:
-            logger.warning("Briefing found but no stocks to trade. Waiting for updates...")
+            logger.error(f"[BRIEFING] Validation failed: {safety_reason} (screener already ran)")
     else:
-        logger.error("❌ BRIEFING UNAVAILABLE: Cannot enable trading")
-        if not briefing:
-            logger.error("   Reason: Briefing file does not exist or could not be loaded")
-        elif briefing_stocks_count == 0:
-            logger.error("   Reason: Briefing is empty (no approved_stocks or watchlist)")
-        logger.critical("Cannot proceed to trading without valid briefing. Exiting.")
+        logger.info("[BRIEFING] Validated ✅")
+
+    # SAFETY CHECK: Only proceed if briefing is safe
+    if not is_safe:
+        logger.error("[BRIEFING] Rejected")
+        logger.critical(f"Cannot proceed to trading. Reason: {safety_reason}")
+        sys.exit(1)
+
+    # Extract stock lists for feed subscription
+    approved  = [s["ticker"] for s in briefing.get("approved_stocks", [])]
+    watchlist = [s["ticker"] for s in briefing.get("watchlist", [])]
+    all_stocks = list(dict.fromkeys(approved + watchlist))
+
+    if all_stocks:
+        from core.data_fetcher import purge_invalid_token_cache
+        purge_invalid_token_cache()
+        logger.info(
+            f"[BRIEFING] Subscribing live feed: {len(all_stocks)} symbols "
+            f"({len(approved)} cognition + {len(watchlist)} watchlist)"
+        )
+        start_live_feed(all_stocks)
+
+        # Fix trading symbols in briefing
+        from core.data_fetcher import fix_briefing_trading_symbols
+        fix_briefing_trading_symbols(briefing)
+        save_briefing(briefing)
+
+        logger.info(f"[BRIEFING] Saved")
+        logger.info(f"Live feed active for {len(all_stocks)} symbols.")
+        if approved:
+            logger.info(f"  Cognition picks : {approved}")
+        logger.info(f"  Math watchlist : {watchlist}")
+    else:
+        logger.error("[BRIEFING] Rejected: No stocks available for trading")
+        logger.critical("Cannot proceed to trading without stocks. Exiting.")
         sys.exit(1)
 
     # Step 6 — Post-startup feed check (brief wait for WS connect + first ticks)

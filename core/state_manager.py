@@ -501,53 +501,190 @@ def load_agent_decisions_today(limit: int = 10) -> list[dict]:
         return []
 
 
+def validate_briefing(briefing: dict | None) -> tuple[bool, str]:
+    """
+    COMPREHENSIVE BRIEFING VALIDATION
+    
+    Validates briefing structure, content, and safety markers.
+    Returns (is_valid: bool, reason: str).
+    
+    Rejects:
+    - None or non-dict
+    - Empty (no approved_stocks AND no watchlist)
+    - TEST_* session types (test briefings)
+    - Malformed stock lists
+    - Marked as placeholder
+    
+    [BRIEFING] logs all validation decisions.
+    """
+    if briefing is None:
+        logger.warning("[BRIEFING] Validation REJECTED: Briefing is None")
+        return False, "Briefing is None"
+    
+    if not isinstance(briefing, dict):
+        logger.warning(f"[BRIEFING] Validation REJECTED: Invalid type {type(briefing).__name__}")
+        return False, f"Invalid briefing type: {type(briefing).__name__}"
+    
+    # Reject placeholder markers
+    if briefing.get("do_not_use_for_trading") is True:
+        session_type = briefing.get("session_type", "UNKNOWN")
+        logger.warning(f"[BRIEFING] Validation REJECTED: Placeholder briefing ({session_type})")
+        return False, f"Briefing marked as placeholder ({session_type})"
+    
+    # Reject test briefings
+    session_type = briefing.get("session_type", "")
+    if isinstance(session_type, str) and session_type.startswith("TEST"):
+        logger.warning(f"[BRIEFING] Validation REJECTED: Test briefing ({session_type})")
+        return False, f"Test briefing found ({session_type}) - must regenerate"
+    
+    # Validate structure
+    approved = briefing.get("approved_stocks", [])
+    watchlist = briefing.get("watchlist", [])
+    
+    if not isinstance(approved, list):
+        logger.warning(f"[BRIEFING] Validation REJECTED: approved_stocks is not a list")
+        return False, "approved_stocks must be a list"
+    
+    if not isinstance(watchlist, list):
+        logger.warning(f"[BRIEFING] Validation REJECTED: watchlist is not a list")
+        return False, "watchlist must be a list"
+    
+    # Reject empty briefings
+    total_stocks = len(approved) + len(watchlist)
+    if total_stocks == 0:
+        logger.warning(f"[BRIEFING] Validation REJECTED: Empty briefing (0 approved + 0 watchlist)")
+        return False, "Briefing is empty (no stocks)"
+    
+    # Validate stock structure (sample check on first few)
+    for i, stock in enumerate(approved[:2]):
+        if not isinstance(stock, dict):
+            logger.warning(f"[BRIEFING] Validation REJECTED: approved_stocks[{i}] is not a dict")
+            return False, f"Stock {i} in approved_stocks must be dict"
+    
+    for i, stock in enumerate(watchlist[:2]):
+        if not isinstance(stock, dict):
+            logger.warning(f"[BRIEFING] Validation REJECTED: watchlist[{i}] is not a dict")
+            return False, f"Stock {i} in watchlist must be dict"
+    
+    logger.info(f"[BRIEFING] Validation PASSED: {len(approved)} approved + {len(watchlist)} watchlist ({session_type})")
+    return True, f"Valid briefing ({len(approved)} approved + {len(watchlist)} watchlist)"
+
+
+def is_briefing_safe_for_trading(briefing: dict | None) -> tuple[bool, str]:
+    """
+    FINAL SAFETY GATE FOR TRADING
+    
+    Comprehensive check before allowing trading to start.
+    Returns (safe: bool, reason: str).
+    
+    Uses validate_briefing() plus additional safety checks.
+    """
+    is_valid, reason = validate_briefing(briefing)
+    if not is_valid:
+        logger.error(f"[BRIEFING] Trading blocked: {reason}")
+        return False, reason
+    
+    # Additional safety gate: must have stocks for trading
+    if briefing is None:
+        logger.error("[BRIEFING] Trading blocked: Safety gate - briefing is None after validation")
+        return False, "Briefing is None"
+    
+    approved = len(briefing.get("approved_stocks", []))
+    watchlist = len(briefing.get("watchlist", []))
+    
+    if approved == 0 and watchlist == 0:
+        logger.error("[BRIEFING] Trading blocked: Safety gate - no stocks available")
+        return False, "No stocks available for trading"
+    
+    logger.info(f"[BRIEFING] Safety gate PASSED: Ready for trading")
+    return True, "Safe for trading"
+
+
 def save_briefing(briefing: dict) -> bool:
     if not isinstance(briefing, dict):
-        logger.error("❌ BRIEFING SAVE FAILED: Invalid briefing type %s (expected dict)", type(briefing).__name__)
+        logger.error("[BRIEFING] Save FAILED: Invalid type %s (expected dict)", type(briefing).__name__)
         return False
     
     # Write to disk
-    logger.info(f"Saving briefing to {BRIEFING_PATH}...")
+    logger.info(f"[BRIEFING] Saving to {BRIEFING_PATH}...")
     ok = atomic_write_json(BRIEFING_PATH, briefing, label="session briefing", log=logger)
     
     if not ok:
-        logger.error(f"❌ BRIEFING SAVE FAILED: atomic_write_json() returned False")
+        logger.error(f"[BRIEFING] Save FAILED: atomic_write_json() returned False")
         return False
     
     # POST-WRITE VERIFICATION: Verify file actually exists
     if not os.path.exists(BRIEFING_PATH):
-        logger.error(f"❌ BRIEFING SAVE FAILED: File does not exist after write: {BRIEFING_PATH}")
+        logger.error(f"[BRIEFING] Save FAILED: File does not exist after write")
         return False
     
     # POST-READ VERIFICATION: Verify we can read it back
     try:
         with open(BRIEFING_PATH, 'r') as f:
             saved_briefing = json.load(f)
-        logger.info(f"✅ Briefing saved and verified: {BRIEFING_PATH}")
-        logger.info(f"   - Approved stocks: {len(saved_briefing.get('approved_stocks', []))}")
-        logger.info(f"   - Watchlist: {len(saved_briefing.get('watchlist', []))}")
+        logger.info(f"[BRIEFING] Saved and verified: {BRIEFING_PATH}")
+        logger.info(f"[BRIEFING]   - Approved: {len(saved_briefing.get('approved_stocks', []))}")
+        logger.info(f"[BRIEFING]   - Watchlist: {len(saved_briefing.get('watchlist', []))}")
         
         # Invalidate strategy cache so new briefing is used immediately
         try:
             from core import strategy
             strategy._briefing_cache = None
             strategy._briefing_cache_time = 0.0
-            logger.debug("Strategy briefing cache invalidated for immediate update")
+            logger.debug("[BRIEFING] Strategy cache invalidated for immediate update")
         except Exception:
             pass  # Strategy not loaded yet (e.g., during startup)
         
         return True
     except Exception as e:
-        logger.error(f"❌ BRIEFING SAVE FAILED: Could not read back saved file: {e}")
+        logger.error(f"[BRIEFING] Save FAILED: Could not read back saved file: {e}")
         return False
+
+
+def ensure_briefing_exists() -> dict:
+    """
+    STARTUP: Ensure session_briefing.json exists.
+    
+    If missing: Create placeholder (marked as DO NOT USE FOR TRADING).
+    Returns the briefing object.
+    
+    Placeholder is clearly marked so validation functions reject it.
+    Screener must be run to replace placeholder with valid briefing.
+    
+    [BRIEFING] logs creation with explicit warning.
+    """
+    if not os.path.exists(BRIEFING_PATH):
+        logger.warning(f"[BRIEFING] File missing at startup - creating placeholder...")
+        placeholder_briefing = {
+            "generated_at": datetime.now().isoformat(),
+            "session_type": "PLACEHOLDER_AWAITING_SCREENER",
+            "market_bias": "NEUTRAL",
+            "approved_stocks": [],
+            "watchlist": [],
+            "avoid_list": [],
+            "do_not_use_for_trading": True,  # EXPLICIT MARKER
+        }
+        try:
+            atomic_write_json(BRIEFING_PATH, placeholder_briefing)
+            logger.warning(f"[BRIEFING] Created Placeholder: {BRIEFING_PATH}")
+            logger.warning(f"[BRIEFING]   ⚠️  PLACEHOLDER BRIEFING - SCREENER MUST RUN")
+            return placeholder_briefing
+        except Exception as e:
+            logger.error(f"[BRIEFING] Failed to create placeholder: {e}")
+            fallback = dict(FALLBACK_BRIEFING)
+            fallback["do_not_use_for_trading"] = True
+            fallback["session_type"] = "FALLBACK_ERROR"
+            return fallback
+    
+    return load_briefing() or dict(FALLBACK_BRIEFING)
 
 
 def load_briefing() -> dict | None:
     if not os.path.exists(BRIEFING_PATH):
-        logger.debug(f"Briefing not found at {BRIEFING_PATH}")
+        logger.warning(f"[BRIEFING] File not found - cannot load")
         return None
     
-    logger.info(f"Loading briefing from {BRIEFING_PATH}...")
+    logger.info(f"[BRIEFING] Loading from {BRIEFING_PATH}...")
     briefing = safe_read_json(
         BRIEFING_PATH,
         dict(FALLBACK_BRIEFING),
@@ -570,7 +707,12 @@ def load_briefing() -> dict | None:
     watchlist_count = len(briefing.get("watchlist", []))
     total_count = approved_count + watchlist_count
     session_type = briefing.get("session_type", "UNKNOWN")
-    logger.info(f"✅ Briefing loaded: {approved_count} approved + {watchlist_count} watchlist ({session_type})")
+    is_placeholder = briefing.get("do_not_use_for_trading", False)
+    
+    if is_placeholder:
+        logger.warning(f"[BRIEFING] Loaded Placeholder ({session_type}) - NOT for trading")
+    else:
+        logger.info(f"[BRIEFING] Loaded Valid: {approved_count} approved + {watchlist_count} watchlist ({session_type})")
     
     return briefing
 

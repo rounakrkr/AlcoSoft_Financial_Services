@@ -89,22 +89,22 @@ def check_database() -> Tuple[bool, str]:
 def check_briefing() -> Tuple[bool, str]:
     """Verify trading briefing is loaded and valid."""
     try:
-        from core.state_manager import load_briefing
+        from core.state_manager import load_briefing, validate_briefing
         
         briefing = load_briefing()
-        if not briefing:
-            return False, "Briefing file does not exist"
+        
+        # Use comprehensive validation
+        is_valid, reason = validate_briefing(briefing)
+        if not is_valid:
+            return False, f"Briefing invalid: {reason}"
         
         approved = len(briefing.get("approved_stocks", []))
         watchlist = len(briefing.get("watchlist", []))
         total = approved + watchlist
         
-        if total == 0:
-            return False, "Briefing exists but contains no stocks (both approved_stocks and watchlist are empty)"
-        
         return True, f"Briefing OK ({approved} cognition, {watchlist} watchlist, {total} total)"
     except Exception as e:
-        return False, f"Error loading briefing: {str(e)[:80]}"
+        return False, f"Error validating briefing: {str(e)[:80]}"
 
 
 def check_live_feed(strict: bool = False) -> Tuple[bool, str]:

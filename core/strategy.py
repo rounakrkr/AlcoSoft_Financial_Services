@@ -77,12 +77,27 @@ BRIEFING_CACHE_SECONDS = 60  # Reload from disk every 60 seconds
 
 
 def _get_briefing_cached():
-    """Get briefing from cache, reload from disk every 60 seconds max."""
+    """Get briefing from cache, reload from disk every 60 seconds max.
+    
+    Also validates cached briefing for TEST_* sessions and resets
+    cache if a test briefing is detected.
+    """
     global _briefing_cache, _briefing_cache_time
     now = time.time()
+    
+    # Check if cache is still fresh
     if _briefing_cache is not None and (now - _briefing_cache_time) < BRIEFING_CACHE_SECONDS:
-        return _briefing_cache
-    _briefing_cache = load_briefing()  # This logs once every 60 seconds, not every 5
+        # Validate cached content - reject TEST briefings
+        session_type = _briefing_cache.get("session_type", "")
+        if isinstance(session_type, str) and session_type.startswith("TEST"):
+            logger.warning(f"[BRIEFING] Cache contains TEST briefing ({session_type}). Clearing cache.")
+            _briefing_cache = None
+            _briefing_cache_time = 0.0
+        else:
+            return _briefing_cache
+    
+    # Load or reload from disk
+    _briefing_cache = load_briefing()
     _briefing_cache_time = now
     return _briefing_cache
 
