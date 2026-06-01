@@ -41,6 +41,7 @@ app.jinja_env.auto_reload = True
 DB_PATH         = os.path.join(_ROOT, "data", "alcosoft.db")
 REFLECTION_DB_PATH = os.path.join(_ROOT, "data", "reflection.db")
 BRIEFING_PATH   = os.path.join(_ROOT, "data", "session_briefing.json")
+FEED_STATS_PATH = os.path.join(_ROOT, "data", "feed_stats.json")
 REFLECTIONS_DIR = os.path.join(_ROOT, "data", "reflections")
 
 # Adaptive Learning System
@@ -178,7 +179,7 @@ def api_status():
         SELECT symbol, entry_price, stop_loss, trailing_sl,
                target_price, quantity, strategy, confidence,
                kotak_sl_order_id, entry_time, trading_mode
-        FROM trades WHERE status = 'OPEN'
+        FROM trades WHERE status = 'OPEN' AND quantity > 0
         ORDER BY id DESC
     """)
 
@@ -268,11 +269,19 @@ def api_status():
         order_verify = get_verification_report()
     except Exception:
         pass
-    try:
-        from core.data_fetcher import get_feed_stats
-        feed_stats = get_feed_stats()
-    except Exception:
-        pass
+    feed_stats = safe_read_json(
+        FEED_STATS_PATH,
+        {},
+        expected_type=dict,
+        label="feed stats",
+        log=app.logger,
+    )
+    if not feed_stats:
+        try:
+            from core.data_fetcher import get_feed_stats
+            feed_stats = get_feed_stats()
+        except Exception:
+            pass
 
     return jsonify({
         "timestamp":    datetime.now().strftime("%H:%M:%S"),
@@ -296,7 +305,8 @@ def api_status():
             "order_verify":    order_verify,
             "feed": {
                 "subscribed": len(feed_stats.get("subscribed", [])),
-                "tick_total": sum(feed_stats.get("tick_counts", {}).values()),
+                "tick_total": feed_stats.get("tick_total", sum(feed_stats.get("tick_counts", {}).values())),
+                "updated_at": feed_stats.get("updated_at"),
             },
         },
     })

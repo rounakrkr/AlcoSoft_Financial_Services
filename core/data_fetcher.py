@@ -31,14 +31,13 @@ def _candle_bucket_minutes(now: datetime) -> int:
     return (now.minute // mins) * mins
 BRIEFING_PATH           = "data/session_briefing.json"
 TOKENS_CACHE_PATH       = "data/instrument_tokens.json"
-KEEPALIVE_INTERVAL = 210           # 3.5 minutes (< Kotak's ~4-min idle disconnect)
+FEED_STATS_PATH         = "data/feed_stats.json"
 _subscribed_symbols = []           # currently subscribed stock list
 _reconnect_attempts = 0            # retry counter
 _max_reconnect = 10                # max retries
 _reconnect_delay = 5               # initial delay seconds
 _reconnect_lock = threading.RLock() # avoid simultaneous reconnect/deadlock
 _reconnect_timer = None
-_keepalive_timer  = None          # proactive ping before Kotak 4-min timeout
 
 
 # ── In-Memory Storage ────────────────────────────────────────
@@ -63,20 +62,39 @@ _lock = threading.Lock()
 # Tick stats — surfaced in logs / health checks
 _tick_counts: dict[str, int] = defaultdict(int)
 _last_tick_log: float = 0.0
+_last_stats_publish: float = 0.0
+
+
+def _feed_stats_snapshot_locked() -> dict:
+    tick_counts = dict(_tick_counts)
+    return {
+        "updated_at": datetime.now().isoformat(),
+        "subscribed": list(_subscribed_symbols),
+        "symbols_with_ticks": list(_latest_tick.keys()),
+        "tick_counts": tick_counts,
+        "tick_total": sum(tick_counts.values()),
+        "candle_counts": {
+            s: len(_candle_history[s]) + (1 if s in _current_candle else 0)
+            for s in _subscribed_symbols
+        },
+    }
+
+
+def _publish_feed_stats(force: bool = False):
+    global _last_stats_publish
+    now = time.time()
+    if not force and now - _last_stats_publish < 5:
+        return
+    with _lock:
+        snapshot = _feed_stats_snapshot_locked()
+    if atomic_write_json(FEED_STATS_PATH, snapshot, label="feed stats", log=logger):
+        _last_stats_publish = now
 
 
 def get_feed_stats() -> dict:
     """Returns live-feed health: symbols, tick counts, candle counts."""
     with _lock:
-        return {
-            "subscribed": list(_subscribed_symbols),
-            "symbols_with_ticks": list(_latest_tick.keys()),
-            "tick_counts": dict(_tick_counts),
-            "candle_counts": {
-                s: len(_candle_history[s]) + (1 if s in _current_candle else 0)
-                for s in _subscribed_symbols
-            },
-        }
+        return _feed_stats_snapshot_locked()
 
 
 # ── WebSocket Callbacks ──────────────────────────────────────
@@ -196,6 +214,8 @@ def _process_tick(tick: dict):
         tick_open = _parse_float(tick.get("op") or tick.get("open"))
         _build_candle(symbol, ltp, volume, now, tick_open, tick_high, tick_low)
 
+    _publish_feed_stats()
+
 
 def _build_candle(
     symbol: str,
@@ -257,42 +277,26 @@ def _new_candle(bucket_key: str, ltp: float, volume: float) -> dict:
 
 # ── WebSocket Keepalive — prevents Kotak 4-min idle disconnect ────────────────
 # Kotak closes WebSocket after ~4 minutes of silence.
-# We fire a proactive re-subscribe at 3.5 minutes to reset the timer.
+# We track last tick timestamp; if >3 min silent, we DO NOT send anything (avoid double-subscribe bug)
+# Instead, we let Kotak's natural keepalive handle it. If it still dies, reconnect.
+
+_last_tick_timestamp = 0.0  # Track last tick time
 
 
 def _reset_keepalive():
-    """Cancels existing keepalive timer and starts a fresh one."""
-    global _keepalive_timer
-    if _keepalive_timer:
-        _keepalive_timer.cancel()
-    if not _subscribed_symbols:
-        return
-    _keepalive_timer = threading.Timer(KEEPALIVE_INTERVAL, _send_keepalive)
-    _keepalive_timer.daemon = True
-    _keepalive_timer.start()
+    """Update last tick timestamp. Don't send explicit keepalive pings."""
+    global _last_tick_timestamp
+    _last_tick_timestamp = time.time()
+    # Removed the Timer-based ping — let Kotak's native keepalive work
 
 
 def _send_keepalive():
-    """Re-subscribes to reset Kotak's idle timer. Called every 3.5 min."""
-    global _active_client
-    if not _active_client or not _subscribed_symbols:
-        return
-    try:
-        instrument_tokens = resolve_instrument_tokens(_subscribed_symbols)
-        if instrument_tokens:
-            _active_client.subscribe(
-                instrument_tokens = instrument_tokens,
-                isIndex           = False,
-                isDepth           = False,
-            )
-        _reset_keepalive()   # schedule next ping
-    except Exception as e:
-        logger.warning(f"Keepalive failed: {e}. WebSocket may reconnect naturally.")
+    """DEPRECATED — no longer used. Kept for backward compatibility."""
+    pass
 
 
 def _on_open(message):
     logger.info("✅ WebSocket connection opened.")
-    _reset_keepalive()
 
 
 def _on_close(message):
@@ -631,10 +635,12 @@ def start_live_feed(symbols: list[str]):
 
     _subscribed_symbols = symbols.copy()
     _reconnect_attempts = 0
+    _publish_feed_stats(force=True)
 
     instrument_tokens = resolve_instrument_tokens(symbols)
     if not instrument_tokens:
         logger.error("No instrument tokens resolved. Cannot start feed.")
+        _publish_feed_stats(force=True)
         return
 
     logger.info(f"Subscribing to {len(instrument_tokens)} instruments...")
@@ -646,6 +652,8 @@ def start_live_feed(symbols: list[str]):
         )
         logger.info(f"✅ Subscribed to live feed: {[t['instrument_token'] for t in instrument_tokens]}")
         
+        _publish_feed_stats(force=True)
+
         # Keep the connection alive with keepalive ping
         _reset_keepalive()
         
@@ -665,14 +673,12 @@ def start_live_feed(symbols: list[str]):
 
 
 def stop_live_feed(symbols: list[str]):
-    global _active_client, _subscribed_symbols, _reconnect_timer, _keepalive_timer
+    global _active_client, _subscribed_symbols, _reconnect_timer
     if _reconnect_timer:
         _reconnect_timer.cancel()
         _reconnect_timer = None
-    if _keepalive_timer:
-        _keepalive_timer.cancel()
-        _keepalive_timer = None
     _subscribed_symbols = []
+    _publish_feed_stats(force=True)
 
     if _active_client is None:        
         logger.warning("No active client to unsubscribe from.")

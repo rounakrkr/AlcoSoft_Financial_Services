@@ -54,6 +54,345 @@ _order_lock = threading.RLock()
 # ── Squareoff flag — prevents repeated calls after 3:15 ──────
 _squareoff_done = False
 
+# ── Configuration validation ──────────────────────────────────
+_config_validated = False
+_config_warnings = []
+
+
+def validate_allocation_config() -> list:
+    """
+    Validate capital allocation configuration.
+    Returns list of warnings/errors found.
+    Should be called at startup and when settings change.
+    """
+    global _config_validated, _config_warnings
+    warnings = []
+    
+    from core.strategy import MAX_POSITIONS
+    
+    try:
+        # Read settings
+        allow_margin = cfg("risk", "allow_margin", False)
+        margin_leverage = safe_float(cfg("risk", "margin_leverage", 2.0), 2.0)
+        position_size_margin = safe_float(cfg("risk", "position_size_margin", 0.75), 0.75)
+        risk_pct = safe_float(cfg("risk", "max_risk_per_trade", 0.02), 0.02)
+        max_open = MAX_POSITIONS
+        paper_capital = safe_float(cfg("risk", "paper_capital", 10000), 10000)
+        
+        # Margin validation
+        if allow_margin:
+            if margin_leverage < 1.0 or margin_leverage > 5.0:
+                warnings.append(
+                    f"⚠️ margin_leverage={margin_leverage} out of range [1.0-5.0], will be clamped"
+                )
+            
+            if position_size_margin < 0.10 or position_size_margin > 1.0:
+                warnings.append(
+                    f"⚠️ position_size_margin={position_size_margin} out of range [0.10-1.0], will be clamped"
+                )
+            
+            # Check if allocation is realistic
+            per_position_budget = (paper_capital * margin_leverage * position_size_margin) / max_open
+            if per_position_budget < paper_capital * 0.01:  # Less than 1% per position
+                warnings.append(
+                    f"⚠️ Per-position budget (₹{per_position_budget:.0f}) is very small; "
+                    f"only {max_open} positions × 1% minimum = {max_open}% portfolio usage"
+                )
+        
+        # Position count validation
+        if max_open < 1 or max_open > 10:
+            warnings.append(
+                f"⚠️ max_open_positions={max_open} out of range [1-10]"
+            )
+        
+        # Risk validation
+        if risk_pct < 0.005 or risk_pct > 0.10:
+            warnings.append(
+                f"⚠️ risk_pct={risk_pct*100:.2f}% out of typical range [0.5%-10%]"
+            )
+        
+        # Capital validation
+        if paper_capital < 5000:
+            warnings.append(
+                f"⚠️ paper_capital=₹{paper_capital} is very small, may not support {max_open} positions"
+            )
+        
+        # Combined validation
+        if allow_margin and max_open > 1:
+            total_allocation_pct = position_size_margin * 100
+            if total_allocation_pct < 50:
+                warnings.append(
+                    f"⚠️ position_size_margin={position_size_margin*100:.0f}% means less than "
+                    f"{total_allocation_pct:.0f}% of margin is used across all {max_open} positions"
+                )
+        
+        _config_warnings = warnings
+        _config_validated = True
+        
+        if warnings:
+            logger.warning(f"⚠️ Configuration warnings ({len(warnings)}):")
+            for w in warnings:
+                logger.warning(w)
+        else:
+            logger.info("✅ Allocation configuration valid")
+        
+        return warnings
+        
+    except Exception as e:
+        error_msg = f"❌ Configuration validation failed: {e}"
+        logger.error(error_msg, exc_info=True)
+        return [error_msg]
+
+
+# NOTE: Validation is now called explicitly via validate_allocation_config() 
+# when needed (startup, pre-market check, etc.), NOT at module load time.
+# This avoids circular import issues with core.strategy during initialization.
+
+
+
+# ════════════════════════════════════════════════════════════
+#   CAPITAL ALLOCATION HELPERS (NEW - Multi-Constraint Model)
+# ════════════════════════════════════════════════════════════
+
+def calculate_total_buying_power() -> dict:
+    """
+    Calculate total buying power considering margin.
+    Returns dict with detailed breakdown.
+    
+    Returns: {
+        'real_capital': float,           # Actual capital available
+        'margin_leverage': float,        # 1.0 (no margin) to 5.0x
+        'total_buying_power': float,     # real_capital × margin_leverage
+        'position_size_margin': float,   # % of portfolio for positions (10-100%)
+        'allow_margin': bool,            # Is margin enabled?
+    }
+    """
+    real_capital = _capital_base_for_sizing()
+    allow_margin = cfg("risk", "allow_margin", False)
+    
+    if allow_margin:
+        margin_leverage = safe_float(cfg("risk", "margin_leverage", 2.0), 2.0)
+        margin_leverage = max(1.0, min(5.0, margin_leverage))
+    else:
+        margin_leverage = 1.0
+    
+    position_size_margin = safe_float(cfg("risk", "position_size_margin", 0.75), 0.75)
+    position_size_margin = max(0.10, min(1.0, position_size_margin))
+    
+    total_buying_power = real_capital * margin_leverage
+    
+    return {
+        'real_capital': real_capital,
+        'margin_leverage': margin_leverage,
+        'total_buying_power': total_buying_power,
+        'position_size_margin': position_size_margin,
+        'allow_margin': allow_margin,
+    }
+
+
+def _capital_base_for_sizing() -> float:
+    """
+    Account capital base for sizing.
+
+    Open positions are handled by the deployment/leverage constraint. In PAPER
+    mode, using cash-after-open-positions here collapses buying power to zero
+    as soon as a margin-sized position exists.
+    """
+    if TRADING_MODE == "PAPER":
+        initial = max(0.0, safe_float(cfg("risk", "paper_capital", 10000), 10000.0))
+        closed_pnl = safe_float(get_today_gross_pnl(), 0.0)
+        return max(0.0, initial + closed_pnl)
+
+    return max(0.0, safe_float(_get_available_capital(), 0.0))
+
+
+def calculate_per_position_budget(buying_power_info: dict, max_open_positions: int = 4) -> dict:
+    """
+    Calculate per-position budget allocation.
+    Divides total buying power among max_open_positions.
+    
+    Budget = (total_buying_power × position_size_margin) / max_open_positions
+    
+    Returns: {
+        'total_buying_power': float,        # From input
+        'position_size_margin': float,      # From input
+        'max_open_positions': int,          # From input
+        'portfolio_allocation_pct': float,  # Used by all positions
+        'per_position_budget': float,       # Budget for each position
+    }
+    """
+    max_open_positions = max(1, min(10, safe_int(max_open_positions, 4)))
+    
+    total_buying_power = safe_float(buying_power_info.get('total_buying_power', 0.0), 0.0)
+    position_size_margin = safe_float(buying_power_info.get('position_size_margin', 0.75), 0.75)
+    
+    portfolio_allocation_pct = position_size_margin * 100  # What % of total to use
+    allocated_capital = total_buying_power * position_size_margin
+    per_position_budget = allocated_capital / max_open_positions
+    
+    return {
+        'total_buying_power': total_buying_power,
+        'position_size_margin': position_size_margin,
+        'max_open_positions': max_open_positions,
+        'portfolio_allocation_pct': portfolio_allocation_pct,
+        'per_position_budget': per_position_budget,
+    }
+
+
+def analyze_quantity_constraints(
+    price: float,
+    stop_loss: float,
+    risk_pct: float,
+    real_capital: float,
+    per_position_budget: float,
+    deployed_now: float = 0.0,
+    total_buying_power: float = None,
+) -> dict:
+    """
+    Analyze binding constraints on quantity (2026-06-01 REVISED):
+    
+    THREE CONSTRAINTS (capital constraint removed to honor margin configuration):
+    1. Risk constraint (max_loss / stop_dist)
+    2. Allocation constraint (per_position_budget / price)
+    3. Leverage constraint (total_buying_power availability)
+    
+    Over-leverage validation is performed separately as a safety net.
+    
+    Returns: {
+        'risk_qty': float,              # From risk tolerance
+        'allocation_qty': float,        # From per-position budget
+        'leverage_qty': float,          # From leverage limit
+        'final_qty': int,               # MIN of 3 constraints (as integer)
+        'limiting_constraint': str,     # Which constraint was tightest
+        'all_constraints': dict,        # Debug info for all values
+    }
+    """
+    price = safe_float(price, 0.0)
+    stop_loss = safe_float(stop_loss, 0.0)
+    risk_pct = max(0.0, safe_float(risk_pct, 0.0))
+    real_capital = max(0.0, safe_float(real_capital, 0.0))
+    per_position_budget = max(0.0, safe_float(per_position_budget, 0.0))
+    deployed_now = max(0.0, safe_float(deployed_now, 0.0))
+    
+    # CONSTRAINT 1: Risk constraint
+    max_loss = real_capital * risk_pct
+    stop_dist = abs(price - stop_loss)
+    if stop_dist <= 0:
+        stop_dist = max(1.0, price * 0.01)
+    risk_qty = max_loss / stop_dist if stop_dist > 0 else 0
+    
+    # CONSTRAINT 2: Allocation constraint
+    allocation_qty = per_position_budget / price if price > 0 else 0
+    
+    # CONSTRAINT 3: Leverage constraint (can't deploy more than total buying power)
+    if total_buying_power is None:
+        total_buying_power = real_capital  # Fallback (no margin)
+    total_buying_power = max(0.0, safe_float(total_buying_power, 0.0))
+    available_to_deploy = max(0.0, total_buying_power - deployed_now)
+    leverage_qty = available_to_deploy / price if price > 0 else 0
+    
+    # Take minimum of 3 binding constraints
+    quantities = {
+        'risk': risk_qty,
+        'allocation': allocation_qty,
+        'leverage': leverage_qty,
+    }
+    
+    final_qty = max(0, int(min(quantities.values())))
+    
+    # Identify which constraint was limiting
+    if final_qty <= 0:
+        limiting_constraint = 'insufficient_all'
+    else:
+        # Find which constraint produced the minimum
+        min_qty = final_qty
+        limiting_constraint = 'unknown'
+        for constraint_name, constraint_qty in quantities.items():
+            if int(constraint_qty) == min_qty:
+                limiting_constraint = constraint_name
+                break
+    
+    return {
+        'risk_qty': risk_qty,
+        'allocation_qty': allocation_qty,
+        'leverage_qty': leverage_qty,
+        'final_qty': final_qty,
+        'limiting_constraint': limiting_constraint,
+        'all_constraints': quantities,
+    }
+
+
+def get_allocation_metrics() -> dict:
+    """
+    Get current allocation metrics for dashboard.
+    Shows real-time deployment and constraints.
+    
+    Returns: {
+        'real_capital': float,
+        'total_buying_power': float,
+        'margin_leverage': float,
+        'deployed_capital': float,
+        'available_for_new_position': float,
+        'available_real_capital': float,
+        'position_count': int,
+        'max_open_positions': int,
+        'per_position_budget': float,
+        'portfolio_allocation_pct': float,
+        'current_leverage_ratio': float,
+        'margin_usage_pct': float,
+        'can_open_new_position': bool,
+        'reason_if_cannot': str,
+    }
+    """
+    from core.strategy import MAX_POSITIONS
+    
+    bp_info = calculate_total_buying_power()
+    budget_info = calculate_per_position_budget(bp_info, MAX_POSITIONS)
+    margin_status = get_margin_status()
+    
+    real_capital = bp_info['real_capital']
+    total_buying_power = bp_info['total_buying_power']
+    margin_leverage = bp_info['margin_leverage']
+    
+    deployed_capital = safe_float(margin_status.get('deployed_in_positions'), 0.0)
+    available_for_new = total_buying_power - deployed_capital
+    
+    # Calculate real capital usage
+    deployed_entry_value = safe_float(margin_status.get('entry_position_value'), 0.0)
+    available_real_capital = max(0, real_capital - deployed_entry_value)
+    
+    position_count = len(get_open_positions())
+    per_position_budget = budget_info['per_position_budget']
+    portfolio_allocation_pct = budget_info['portfolio_allocation_pct']
+    
+    current_leverage = (deployed_capital / real_capital) if real_capital > 0 else 1.0
+    current_leverage = max(1.0, current_leverage)
+    margin_usage_pct = max(0, (current_leverage - 1.0) * 100)
+    
+    can_open = position_count < MAX_POSITIONS and available_for_new > 0
+    reason = ""
+    if position_count >= MAX_POSITIONS:
+        reason = f"Max positions reached ({MAX_POSITIONS})"
+    elif available_for_new <= 0:
+        reason = "No buying power available"
+    
+    return {
+        'real_capital': real_capital,
+        'total_buying_power': total_buying_power,
+        'margin_leverage': margin_leverage,
+        'deployed_capital': deployed_capital,
+        'available_for_new_position': available_for_new,
+        'available_real_capital': available_real_capital,
+        'position_count': position_count,
+        'max_open_positions': MAX_POSITIONS,
+        'per_position_budget': per_position_budget,
+        'portfolio_allocation_pct': portfolio_allocation_pct,
+        'current_leverage_ratio': current_leverage,
+        'margin_usage_pct': margin_usage_pct,
+        'can_open_new_position': can_open,
+        'reason_if_cannot': reason,
+    }
+
 
 # ════════════════════════════════════════════════════════════
 #   POSITION SIZING
@@ -61,120 +400,130 @@ _squareoff_done = False
 
 def calculate_quantity(price: float, stop_loss: float, risk_pct: float = None) -> int:
     """
-    🚀 IMPROVED: Now supports forced_buy flag for margin-powered bulk buying.
-    Instead of just blocking when qty=0, this now calculates maximum buyable quantity
-    using full available margin.
+    🚀 REDESIGNED (2026-06-01 REVISED): Multi-constraint quantity model
+    
+    BINDING CONSTRAINTS (Three-constraint model):
+    1. Risk constraint (max_loss / stop_dist)
+    2. Allocation constraint (per_position_budget / price)
+    3. Leverage constraint (total_buying_power limit)
+    
+    Capital constraint REMOVED to honor margin configuration intent.
+    Over-leverage validation performed separately as safety net.
+    
+    Whichever constraint is tightest determines final quantity.
+    All constraints are logged explicitly.
+    
+    Returns: int quantity (MIN of 3 binding constraints)
     """
     price = safe_float(price, 0.0)
     stop_loss = safe_float(stop_loss, 0.0)
+    
     if price <= 0:
         logger.error("Quantity rejected: invalid price %r", price)
         return 0
-
-    capital   = max(0.0, safe_float(_get_available_capital(), 0.0))
+    
+    # ─────────────────────────────────────────────────────────
+    # STEP 1: Get risk setting
+    # ─────────────────────────────────────────────────────────
     if risk_pct is None:
         risk_pct = safe_float(cfg("risk", "max_risk_per_trade", 0.02), 0.02)
     risk_pct = max(0.0, min(1.0, safe_float(risk_pct, 0.02)))
     
     # ─────────────────────────────────────────────────────────
-    # MARGIN-AWARE CAPITAL CALCULATION
+    # STEP 2: Calculate total buying power and per-position budget
     # ─────────────────────────────────────────────────────────
-    allow_margin = cfg("risk", "allow_margin", False)
-    forced_buy = cfg("risk", "forced_buy_margin", False)  # 🔥 NEW: Force buying with margin
+    from core.strategy import MAX_POSITIONS
     
-    if allow_margin:
-        margin_leverage = safe_float(cfg("risk", "margin_leverage", 2.0), 2.0)
-        if margin_leverage < 1.0:
-            logger.warning("⚠️ margin_leverage below 1.0, clamping to 1.0")
-            margin_leverage = 1.0
-        elif margin_leverage > 5.0:
-            logger.warning("⚠️ margin_leverage above 5.0, clamping to 5.0")
-            margin_leverage = 5.0
-
-        position_size_pct = safe_float(cfg("risk", "position_size_margin", 0.75), 0.75)
-        if position_size_pct < 0.10:
-            logger.warning("⚠️ position_size_margin below 10%, clamping to 10%")
-            position_size_pct = 0.10
-        elif position_size_pct > 1.0:
-            logger.warning("⚠️ position_size_margin above 100%, clamping to 100%")
-            position_size_pct = 1.0
-
-        capital_available = capital * margin_leverage
-        
-        if forced_buy:
-            # 🔥 FORCED BUY MODE: Use 100% of available margin for more aggressive sizing
-            position_size_pct = 1.0
-            logger.debug(
-                f"🔴 FORCED BUY ENABLED | Capital: ₹{capital} × {margin_leverage}x leverage "
-                f"= ₹{capital_available:.0f} available | Using 100% margin deployment"
-            )
-        else:
-            logger.debug(
-                f"💰 MARGIN ENABLED | Capital: ₹{capital} × {margin_leverage}x leverage "
-                f"= ₹{capital_available:.0f} available | Position size: {position_size_pct*100:.0f}%"
-            )
-    else:
-        capital_available = capital
-        position_size_pct = 0.20  # Conservative: only 20% per position without margin
-        if forced_buy:
-            logger.warning("⚠️ forced_buy_margin enabled but allow_margin=False! Margin disabled.")
+    bp_info = calculate_total_buying_power()
+    real_capital = bp_info['real_capital']
+    total_buying_power = bp_info['total_buying_power']
+    margin_leverage = bp_info['margin_leverage']
+    allow_margin = bp_info['allow_margin']
+    
+    budget_info = calculate_per_position_budget(bp_info, MAX_POSITIONS)
+    per_position_budget = budget_info['per_position_budget']
+    portfolio_allocation_pct = budget_info['portfolio_allocation_pct']
     
     # ─────────────────────────────────────────────────────────
-    # QUANTITY CALCULATION
+    # STEP 3: Get current deployment
     # ─────────────────────────────────────────────────────────
-    max_loss  = capital * risk_pct  # Risk is always based on REAL capital, not margin!
-    stop_dist = abs(price - stop_loss)
-    if stop_dist == 0:
-        stop_dist = price * safe_float(cfg("risk", "stop_loss_percent", 0.01), 0.01) if price > 0 else 1.0
-        if stop_dist == 0:
-            stop_dist = 1.0
-        logger.warning(f"stop_dist was 0 for {price=}, {stop_loss=}, using {stop_dist}")
+    margin_status = get_margin_status()
+    deployed_now = safe_float(margin_status.get('deployed_in_positions'), 0.0)
     
-    ideal_qty      = max_loss / stop_dist  # Based on risk tolerance
-    affordable_qty = (capital_available * position_size_pct) / price  # Based on available capital
+    # ─────────────────────────────────────────────────────────
+    # STEP 4: Analyze all constraints
+    # ─────────────────────────────────────────────────────────
+    constraint_analysis = analyze_quantity_constraints(
+        price=price,
+        stop_loss=stop_loss,
+        risk_pct=risk_pct,
+        real_capital=real_capital,
+        per_position_budget=per_position_budget,
+        deployed_now=deployed_now,
+        total_buying_power=total_buying_power,
+    )
     
-    qty = int(min(ideal_qty, affordable_qty))
+    qty = max(0, safe_int(constraint_analysis['final_qty'], 0))
+    limiting_constraint = constraint_analysis['limiting_constraint']
     
-    if qty == 0 and forced_buy and allow_margin:
-        # 🔥 FORCED BUY FALLBACK: Can't meet risk tolerance? Buy what we can afford!
-        qty = int(affordable_qty)
-        if qty == 0:
-            logger.error(
-                f"❌ FORCED BUY FAILED | Price: ₹{price} | Real Capital: ₹{capital} | "
-                f"Margin Available: ₹{capital_available:.0f} ({margin_leverage}x leverage) | "
-                f"Even forced buy can't afford even 1 share!"
+    # ─────────────────────────────────────────────────────────
+    # STEP 5: Handle forced_buy (if configured)
+    # ─────────────────────────────────────────────────────────
+    forced_buy = cfg("risk", "forced_buy_margin", False)
+    if qty <= 0 and forced_buy and allow_margin:
+        # Try to buy at least something if allocation allows
+        allocation_qty = int(constraint_analysis['allocation_qty'])
+        if allocation_qty > 0:
+            qty = allocation_qty
+            limiting_constraint = "forced_buy_override"
+            logger.warning(
+                f"⚠️ FORCED BUY OVERRIDE | Risk says {int(constraint_analysis['risk_qty'])} shares, "
+                f"but buying {qty} using allocation budget (margin-enabled override)"
             )
-            return 0
-        logger.warning(
-            f"⚠️ FORCED BUY: Risk calc says 0 qty, but buying {qty} @ ₹{price} "
-            f"(exceeds ideal risk but within margin budget)"
+    
+    # ─────────────────────────────────────────────────────────
+    # STEP 6: Validation and logging
+    # ─────────────────────────────────────────────────────────
+    if qty <= 0:
+        logger.error(
+            f"❌ INSUFFICIENT BUYING POWER | Price: ₹{price} | SL: ₹{stop_loss} | "
+            f"Real Capital: ₹{real_capital:.0f} | Total Buying Power: ₹{total_buying_power:.0f} | "
+            f"Per-Position Budget: ₹{per_position_budget:.0f} | Already Deployed: ₹{deployed_now:.0f} | "
+            f"Risk-based qty: {int(constraint_analysis['risk_qty'])} | "
+            f"Allocation-based qty: {int(constraint_analysis['allocation_qty'])} | "
+            f"Leverage limit qty: {int(constraint_analysis['leverage_qty'])}"
         )
-    
-    if qty == 0:
-        if allow_margin:
-            logger.error(
-                f"❌ INSUFFICIENT MARGIN | Price: ₹{price} | Real Capital: ₹{capital} | "
-                f"Margin Available: ₹{capital_available:.0f} ({margin_leverage}x leverage) | "
-                f"Affordable: {affordable_qty:.2f} shares | Set 'forced_buy_margin' to force buying"
-            )
-        else:
-            logger.error(
-                f"❌ INSUFFICIENT CAPITAL | Price: ₹{price} | Capital: ₹{capital} | "
-                f"Affordable: {affordable_qty:.2f} shares | Margin disabled (set 'allow_margin' to enable)"
-            )
         return 0
     
-    capital_deployed = qty * price
-    if allow_margin:
-        margin_used = max(0, capital_deployed - capital)
-        logger.info(
-            f"✅ Quantity calculated (MARGIN) | Price: ₹{price} | Qty: {qty} | "
-            f"Deployed: ₹{capital_deployed:.0f} | Real capital: ₹{capital} | "
-            f"Margin used: ₹{margin_used:.0f} | "
-            f"{'🔥 FORCED' if forced_buy and qty == int(affordable_qty) else ''}"
-        )
-    else:
-        logger.info(f"✅ Quantity calculated | Price: ₹{price} | Qty: {qty} | Capital used: ₹{capital_deployed:.2f} of ₹{capital}")
+    capital_deployed_if_buy = qty * price
+    
+    # ─────────────────────────────────────────────────────────
+    # STEP 7: Log comprehensive constraint analysis
+    # ─────────────────────────────────────────────────────────
+    margin_used = max(0, capital_deployed_if_buy - real_capital)
+    
+    constraint_labels = {
+        'risk': 'Risk-limited',
+        'allocation': 'Allocation-limited',
+        'leverage': 'Leverage-limited',
+        'capital': 'Capital-limited',
+        'forced_buy_override': 'Forced-buy override',
+        'insufficient_all': 'Insufficient (all constraints)',
+        'unknown': 'Unknown constraint',
+    }
+    
+    limiting_label = constraint_labels.get(limiting_constraint, 'Unknown')
+    
+    logger.info(
+        f"✅ Quantity calculated | "
+        f"Price: ₹{price} | Qty: {qty} | Deployed: ₹{capital_deployed_if_buy:.0f} | "
+        f"Limiting: {limiting_label} | "
+        f"Risk: {int(constraint_analysis['risk_qty'])}sh | "
+        f"Alloc: {int(constraint_analysis['allocation_qty'])}sh | "
+        f"Lever: {int(constraint_analysis['leverage_qty'])}sh | "
+        f"Buying Power: ₹{total_buying_power:.0f} | "
+        f"Margin Used: ₹{margin_used:.0f}"
+    )
     
     return qty
 
@@ -304,12 +653,21 @@ def _broker_safe_limit_price(ltp: float, transaction: str) -> float:
     """
     Convert a desired market-style order into a limit order inside Kotak's
     protection band. Retail algo market orders are not allowed.
+    
+    NSE requires prices to be multiples of 0.05. This function ensures compliance.
     """
     ltp = max(safe_float(ltp, 0.0), 0.05)
     pct = _market_protection_pct(ltp)
+    
     if str(transaction).upper() == "B":
-        return round(ltp * (1 + pct), 2)
-    return max(0.05, round(ltp * (1 - pct), 2))
+        adjusted = ltp * (1 + pct)
+    else:
+        adjusted = ltp * (1 - pct)
+    
+    # Round to nearest 0.05 multiple (NSE requirement)
+    # e.g., 1198.97 → 1199.00, 1198.94 → 1198.95
+    rounded = round(adjusted * 20) / 20
+    return max(0.05, rounded)
 
 
 def _current_position_valuation() -> dict:
@@ -325,6 +683,13 @@ def _current_position_valuation() -> dict:
     for p in get_open_positions():
         symbol = p.get("symbol", "")
         qty = safe_float(p.get("quantity", 0), 0.0)
+        if qty <= 0:
+            logger.warning(
+                "Ignoring invalid open position valuation | symbol=%s qty=%r",
+                symbol,
+                p.get("quantity"),
+            )
+            continue
         entry_price = safe_float(p.get("entry_price", 0), 0.0)
 
         current_price = entry_price
@@ -447,15 +812,16 @@ def _place_buy_order_impl(
         return {}
 
     quantity     = calculate_quantity(entry_price, stop_loss, risk_pct)
-    
-    # 🚨 CRITICAL: Reject if insufficient capital
-    if quantity == 0:
+    if quantity <= 0:
         logger.error(
-            f"❌ BUY REJECTED for {symbol} — Insufficient capital | "
-            f"Price: ₹{entry_price} | Available: ₹{_get_available_capital()}"
+            "BUY rejected for %s: invalid/insufficient quantity %r | price=%s | available=%s",
+            symbol,
+            quantity,
+            entry_price,
+            _get_available_capital(),
         )
         return {}
-    
+
     # 🔥 MARGIN SAFETY: Check if this order would over-leverage
     margin_status = get_margin_status()
     capital_deployed_if_buy = quantity * entry_price
@@ -841,7 +1207,7 @@ def _calculate_paper_capital_available() -> float:
     # Sum deployment in all open positions
     positions = get_open_positions()
     deployed = sum(
-        safe_float(p.get("quantity", 0), 0.0) * safe_float(p.get("entry_price", 0), 0.0)
+        max(0.0, safe_float(p.get("quantity", 0), 0.0)) * safe_float(p.get("entry_price", 0), 0.0)
         for p in positions
     )
 
@@ -928,8 +1294,9 @@ def get_margin_status() -> dict:
 
     # Margin percentage = current leverage ratio as percentage
     # Example: if deployed ₹20,000 and real capital ₹10,000, leverage = 2.0x = 200%
-    current_leverage = (current_position_value / real_capital) if real_capital > 0 else 1.0
-    margin_pct = (current_leverage - 1.0) * 100  # Shows extra leverage beyond 1x as percentage
+    current_leverage = (current_position_value / real_capital) if real_capital > 0 else 0.0
+    current_leverage = max(0.0, current_leverage)
+    margin_pct = max(0.0, (current_leverage - 1.0) * 100)  # extra leverage beyond 1x
 
     remaining_margin = max(0, margin_available - margin_used)
     is_over_leveraged = margin_used > margin_available
@@ -983,11 +1350,19 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
 
 
 def check_max_daily_loss() -> bool:
-    """Daily loss check based on actual available capital."""
-    gross_pnl      = get_today_gross_pnl()
-    # Use dynamic capital (live balance) for limit calculation
-    live_capital = max(0.0, safe_float(_get_available_capital(), 0.0))
-    max_daily_loss = -(live_capital * max(0.0, min(1.0, safe_float(cfg("risk", "max_daily_loss_percent", 0.05), 0.05))))
+    """Daily loss check based on initial trading capital (not available after position deployment)."""
+    gross_pnl = get_today_gross_pnl()
+    
+    # Use INITIAL capital for loss limit calculation, not available capital
+    # (available capital gets reduced when positions are deployed, which incorrectly constrains the loss limit)
+    if TRADING_MODE == "PAPER":
+        initial_capital = safe_float(cfg("risk", "paper_capital", 100000), 100000.0)
+    else:
+        # In LIVE mode, use the real capital
+        initial_capital = max(1.0, safe_float(_get_available_capital(force_refresh=True), 100000.0))
+    
+    max_daily_loss_pct = max(0.0, min(1.0, safe_float(cfg("risk", "max_daily_loss_percent", 0.05), 0.05)))
+    max_daily_loss = -(initial_capital * max_daily_loss_pct)
 
     if gross_pnl <= max_daily_loss:
         logger.warning(

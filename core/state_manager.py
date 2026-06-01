@@ -78,6 +78,25 @@ def _migrate_agent_decision_log(conn):
         logger.warning("Legacy agent decision migration skipped: %s", exc)
 
 
+def _repair_invalid_open_positions(conn) -> int:
+    now = datetime.now().isoformat()
+    cursor = conn.execute("""
+        UPDATE trades
+        SET status = 'INVALID',
+            exit_time = COALESCE(exit_time, ?),
+            notes = CASE
+                WHEN notes IS NULL OR notes = ''
+                    THEN 'INVALID_NON_POSITIVE_QUANTITY'
+                ELSE notes || '|INVALID_NON_POSITIVE_QUANTITY'
+            END
+        WHERE status = 'OPEN' AND quantity <= 0
+    """, (now,))
+    repaired = cursor.rowcount or 0
+    if repaired:
+        logger.error("Repaired %d invalid OPEN position(s) with non-positive quantity.", repaired)
+    return repaired
+
+
 def initialize_db():
     with _get_conn() as conn:
         conn.executescript("""
@@ -137,6 +156,7 @@ def initialize_db():
         _add_column_if_missing(conn, "trades", "kotak_sl_order_id", "TEXT")
         _add_column_if_missing(conn, "daily_stats", "agent_decision_calls", "INTEGER DEFAULT 0")
         _migrate_agent_decision_log(conn)
+        _repair_invalid_open_positions(conn)
 
     logger.info("Database initialized.")
 
@@ -161,6 +181,9 @@ def save_open_position(trade_data: dict):
         return
 
     quantity = safe_int(trade_data.get("quantity"), 0)
+    if quantity <= 0:
+        logger.error("Refusing to save invalid open position for %s: quantity=%r", symbol, trade_data.get("quantity"))
+        return
     entry_price = safe_float(trade_data.get("entry_price"), 0.0)
     stop_loss = safe_float(trade_data.get("stop_loss"), 0.0)
     trailing_sl = safe_float(trade_data.get("trailing_sl", stop_loss), stop_loss)
@@ -346,7 +369,7 @@ def update_sl_order_id(symbol: str, sl_order_id: str):
 def get_open_positions() -> list[dict]:
     try:
         with _get_conn() as conn:
-            rows = conn.execute("SELECT * FROM trades WHERE status = 'OPEN'").fetchall()
+            rows = conn.execute("SELECT * FROM trades WHERE status = 'OPEN' AND quantity > 0").fetchall()
             return [_sanitize_position(row) for row in rows]
     except sqlite3.DatabaseError as exc:
         logger.error("Open position read failed: %s", exc)
@@ -480,17 +503,51 @@ def load_agent_decisions_today(limit: int = 10) -> list[dict]:
 
 def save_briefing(briefing: dict) -> bool:
     if not isinstance(briefing, dict):
-        logger.error("Refusing to save invalid briefing: %s", type(briefing).__name__)
+        logger.error("❌ BRIEFING SAVE FAILED: Invalid briefing type %s (expected dict)", type(briefing).__name__)
         return False
+    
+    # Write to disk
+    logger.info(f"Saving briefing to {BRIEFING_PATH}...")
     ok = atomic_write_json(BRIEFING_PATH, briefing, label="session briefing", log=logger)
-    if ok:
-        logger.info("Session briefing updated.")
-    return ok
+    
+    if not ok:
+        logger.error(f"❌ BRIEFING SAVE FAILED: atomic_write_json() returned False")
+        return False
+    
+    # POST-WRITE VERIFICATION: Verify file actually exists
+    if not os.path.exists(BRIEFING_PATH):
+        logger.error(f"❌ BRIEFING SAVE FAILED: File does not exist after write: {BRIEFING_PATH}")
+        return False
+    
+    # POST-READ VERIFICATION: Verify we can read it back
+    try:
+        with open(BRIEFING_PATH, 'r') as f:
+            saved_briefing = json.load(f)
+        logger.info(f"✅ Briefing saved and verified: {BRIEFING_PATH}")
+        logger.info(f"   - Approved stocks: {len(saved_briefing.get('approved_stocks', []))}")
+        logger.info(f"   - Watchlist: {len(saved_briefing.get('watchlist', []))}")
+        
+        # Invalidate strategy cache so new briefing is used immediately
+        try:
+            from core import strategy
+            strategy._briefing_cache = None
+            strategy._briefing_cache_time = 0.0
+            logger.debug("Strategy briefing cache invalidated for immediate update")
+        except Exception:
+            pass  # Strategy not loaded yet (e.g., during startup)
+        
+        return True
+    except Exception as e:
+        logger.error(f"❌ BRIEFING SAVE FAILED: Could not read back saved file: {e}")
+        return False
 
 
 def load_briefing() -> dict | None:
     if not os.path.exists(BRIEFING_PATH):
+        logger.debug(f"Briefing not found at {BRIEFING_PATH}")
         return None
+    
+    logger.info(f"Loading briefing from {BRIEFING_PATH}...")
     briefing = safe_read_json(
         BRIEFING_PATH,
         dict(FALLBACK_BRIEFING),
@@ -498,6 +555,7 @@ def load_briefing() -> dict | None:
         label="session briefing",
         log=logger,
     )
+    
     if not isinstance(briefing.get("approved_stocks"), list):
         briefing["approved_stocks"] = []
     if not isinstance(briefing.get("watchlist"), list):
@@ -506,6 +564,14 @@ def load_briefing() -> dict | None:
         briefing["avoid_list"] = []
     briefing.setdefault("market_bias", "NEUTRAL")
     briefing.setdefault("session_type", "SAFE_FALLBACK")
+    
+    # Log what we loaded
+    approved_count = len(briefing.get("approved_stocks", []))
+    watchlist_count = len(briefing.get("watchlist", []))
+    total_count = approved_count + watchlist_count
+    session_type = briefing.get("session_type", "UNKNOWN")
+    logger.info(f"✅ Briefing loaded: {approved_count} approved + {watchlist_count} watchlist ({session_type})")
+    
     return briefing
 
 

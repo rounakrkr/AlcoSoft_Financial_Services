@@ -90,43 +90,49 @@ def run_morning_screener():
     Step 5: Total = N (AI) + (screener_total - N) (Math) = screener_total stocks for trading.
     Step 6: Write briefing JSON.
     """
-    logger.info("Morning screener starting...")
+    logger.info("🔄 SCREENER STARTED")
 
+    # STEP 1: Fetch stock data from Yahoo Finance
+    logger.info("[1/6] Fetching stock data from Yahoo Finance...")
     summaries = _fetch_all_summaries()
     if not summaries:
-        logger.error("No stock data fetched. Screener failed.")
-        return
+        logger.error("❌ SCREENER FAILED: No stock data fetched from Yahoo Finance. Aborting.")
+        return False
+    logger.info(f"✅ Step 1 complete: {len(summaries)} stocks fetched")
 
-    logger.info(f"Fetched data for {len(summaries)} stocks.")
-
-    # Global market_bias NOT used for Gemini (AI analyzes independently)
-    # It's still calculated for reference/logging only
+    # STEP 2: Score stocks mathematically
+    logger.info("[2/6] Scoring stocks mathematically...")
     market_bias = _get_market_bias()
-
-    # ── Math score ALL available stocks ──────────────────────
     scored = _score_all_stocks(summaries)
     total_stocks = len(scored)
-    logger.info(f"Scored {total_stocks} stocks")
+    logger.info(f"✅ Step 2 complete: {total_stocks} stocks scored")
 
     screener_total, cognition_count, _ = _screener_counts()
+    logger.info(f"   Configuration: cognition_count={cognition_count}, screener_total={screener_total}")
 
-    # ── Step 1: Gemini picks N best from ALL available stocks ──
-    # (Don't limit to top screener_total — let Gemini scan all for true best picks)
+    # STEP 3: Gemini AI picks stocks
+    logger.info("[3/6] Running Gemini AI analysis...")
     all_candidates = scored  # ALL scored stocks
     allowed_symbols = {s["symbol"] for s in all_candidates}
 
-    # Gemini analyzes independently - NO global market bias influence
-    ai_cognition_picks = _gemini_pick_stocks(all_candidates)
-    ai_cognition_picks = _validate_screener_picks(
-        ai_cognition_picks, allowed_symbols, all_candidates
-    )
-    if not ai_cognition_picks:
-        logger.warning(f"Gemini screener failed. Using math fallback for top {cognition_count}.")
+    try:
+        ai_cognition_picks = _gemini_pick_stocks(all_candidates)
+        ai_cognition_picks = _validate_screener_picks(
+            ai_cognition_picks, allowed_symbols, all_candidates
+        )
+        if not ai_cognition_picks:
+            logger.warning(f"⚠️  Gemini returned no valid picks. Using math fallback for top {cognition_count}.")
+            ai_cognition_picks = _fallback_picks(scored[:cognition_count])
+        logger.info(f"✅ Step 3 complete: Gemini picked {len(ai_cognition_picks)} stocks")
+    except Exception as e:
+        logger.error(f"❌ GEMINI API ERROR: {str(e)[:100]}. Using math fallback.")
         ai_cognition_picks = _fallback_picks(scored[:cognition_count])
+        logger.info(f"✅ Step 3 fallback: Math-based picks {len(ai_cognition_picks)} stocks")
 
-    logger.info(f"Cognition picks (by AI from all {total_stocks} stocks): {[p['ticker'] for p in ai_cognition_picks]}")
+    logger.info(f"   AI cognition picks: {[p['ticker'] for p in ai_cognition_picks]}")
 
-    # ── Step 2: From remaining stocks, pick best (total - N) by math ──
+    # STEP 4: Build math watchlist from remaining stocks
+    logger.info("[4/6] Building math watchlist from remaining stocks...")
     ai_picked_symbols = {s.get("symbol", s.get("ticker")) for s in ai_cognition_picks}
     remaining_stocks = [s for s in scored if s["symbol"] not in ai_picked_symbols]
     
@@ -147,16 +153,16 @@ def run_morning_screener():
         "reason":         f"Math score: {s['score']} | RSI: {s['rsi']} | Vol: {s['vol_ratio']}x",
     } for s in watchlist_candidates]
 
-    logger.info(
-        f"Math watchlist ({len(watchlist)} stocks from remaining {len(remaining_stocks)}): "
-        f"{[s['ticker'] for s in watchlist]}"
-    )
+    logger.info(f"✅ Step 4 complete: {len(watchlist)} math watchlist stocks from {len(remaining_stocks)} remaining")
 
-    # Add per-stock market bias to cognition stocks
+    # STEP 5: Add market bias to cognition stocks
+    logger.info("[5/6] Adding market bias to cognition stocks...")
     for stock in ai_cognition_picks:
         stock["market_bias"] = _get_stock_market_bias(stock.get("ticker", stock.get("symbol", "")))
+    logger.info(f"✅ Step 5 complete: Market bias added")
 
-    # ── Write briefing ────────────────────────────────────────
+    # STEP 6: Create briefing dict and save
+    logger.info("[6/6] Creating and saving briefing...")
     briefing = {
         "generated_at":    datetime.now().isoformat(),
         "session_type":    "MORNING_SCREENER",
@@ -166,13 +172,31 @@ def run_morning_screener():
         "avoid_list":      [],
     }
 
-    save_briefing(briefing)
+    # Validate briefing before saving
+    if not isinstance(briefing.get("approved_stocks"), list):
+        logger.error("❌ SCREENER FAILED: Invalid briefing structure (approved_stocks not a list)")
+        return False
+    if not isinstance(briefing.get("watchlist"), list):
+        logger.error("❌ SCREENER FAILED: Invalid briefing structure (watchlist not a list)")
+        return False
+    
+    total_stocks_in_briefing = len(ai_cognition_picks) + len(watchlist)
+    if total_stocks_in_briefing == 0:
+        logger.error("❌ SCREENER FAILED: Briefing contains no stocks (both cognition and watchlist empty)")
+        return False
+
+    save_result = save_briefing(briefing)
+    if not save_result:
+        logger.error("❌ SCREENER FAILED: Could not save briefing to disk")
+        return False
+    
     logger.info(
-        f"Morning screener done (AI from all {total_stocks} stocks, Math from remaining).\n"
+        f"✅ SCREENER COMPLETED SUCCESSFULLY\n"
         f"  Cognition ({len(ai_cognition_picks)}): {[p['ticker'] for p in ai_cognition_picks]}\n"
         f"  Watchlist ({len(watchlist)}): {[s['ticker'] for s in watchlist]}\n"
-        f"  Total trading stocks: {len(ai_cognition_picks) + len(watchlist)}"
+        f"  Total trading stocks: {total_stocks_in_briefing}"
     )
+    return True
 
 
 # ════════════════════════════════════════════════════════════
@@ -236,6 +260,8 @@ def _score_all_stocks(summaries: list[dict]) -> list[dict]:
 def _fetch_all_summaries() -> list[dict]:
     """Fetches prev day OHLCV + indicators for all stocks in NIFTY_50 list."""
     summaries = []
+    failed_symbols = []
+    logger.info(f"Fetching Yahoo Finance data for {len(NIFTY_50)} NIFTY_50 stocks...")
 
     for symbol in NIFTY_50:
         try:
@@ -243,6 +269,7 @@ def _fetch_all_summaries() -> list[dict]:
             hist   = ticker.history(period="30d", interval="1d")
 
             if hist.empty or len(hist) < 15:
+                logger.debug(f"  {symbol}: Insufficient history ({len(hist)} bars)")
                 continue
 
             close  = hist["Close"]
@@ -273,8 +300,12 @@ def _fetch_all_summaries() -> list[dict]:
             })
 
         except Exception as e:
-            continue
+            failed_symbols.append(f"{symbol}({str(e)[:30]})")
 
+    logger.info(f"✅ Yahoo Finance: {len(summaries)}/{len(NIFTY_50)} stocks fetched successfully")
+    if failed_symbols:
+        logger.warning(f"⚠️  Yahoo Finance failures ({len(failed_symbols)}): {failed_symbols[:5]}{'...' if len(failed_symbols) > 5 else ''}")
+    
     return summaries
 
 

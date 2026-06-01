@@ -71,7 +71,20 @@ _failed_order_cooldown: dict[str, float] = {}
 _last_scan_log: float = 0.0
 FAILED_ORDER_COOLDOWN_SEC = 300
 _yfinance_cache: dict[str, list] = {}
+_briefing_cache: dict = None
+_briefing_cache_time: float = 0.0
+BRIEFING_CACHE_SECONDS = 60  # Reload from disk every 60 seconds
 
+
+def _get_briefing_cached():
+    """Get briefing from cache, reload from disk every 60 seconds max."""
+    global _briefing_cache, _briefing_cache_time
+    now = time.time()
+    if _briefing_cache is not None and (now - _briefing_cache_time) < BRIEFING_CACHE_SECONDS:
+        return _briefing_cache
+    _briefing_cache = load_briefing()  # This logs once every 60 seconds, not every 5
+    _briefing_cache_time = now
+    return _briefing_cache
 
 def _apply_trading_settings():
     """Reload tunables from config/trading_settings.json (dashboard-editable)."""
@@ -1711,7 +1724,7 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
                 await asyncio.sleep(30)
                 continue
 
-            briefing = load_briefing()
+            briefing = _get_briefing_cached()
             if not briefing:
                 logger.warning("No briefing. Waiting for screener or cognition picks...")
                 await asyncio.sleep(LOOP_INTERVAL)
@@ -1752,6 +1765,8 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
                 continue
 
             for stock in briefing.get("approved_stocks", []):
+                if open_count >= MAX_POSITIONS:
+                    break
                 if not _can_open_new_position(stock):
                     continue
                 signal = _evaluate_buy_signal(stock, briefing)

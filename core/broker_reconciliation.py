@@ -39,13 +39,23 @@ def _rows_from_response(response: Any) -> list[dict]:
 
 
 def _extract_qty(row: dict) -> int:
+    # Try exact field matches first
     for key in ("netQty", "net_qty", "flNetQty", "qty", "netQuantity", "cfBuyQty"):
         if key in row and row[key] not in (None, ""):
             qty = safe_int(row[key], 0)
             if qty:
                 return qty
+    
+    # Fallback: Calculate net from buy/sell quantities (Kotak format)
+    # Try standard field names first
     buy_q = safe_float(row.get("buyQty") or row.get("cfBuyQty"), 0.0)
     sell_q = safe_float(row.get("sellQty") or row.get("cfSellQty"), 0.0)
+    
+    # If no data, try Kotak's specific format (fl = futures/live)
+    if buy_q == 0 and sell_q == 0:
+        buy_q = safe_float(row.get("flBuyQty"), 0.0)
+        sell_q = safe_float(row.get("flSellQty"), 0.0)
+    
     return int(buy_q - sell_q)
 
 
@@ -62,6 +72,14 @@ def _extract_entry_price(row: dict) -> float:
         price = safe_float(row.get(key), 0.0)
         if price > 0:
             return price
+    
+    # Kotak format: calculate from amount / quantity
+    # buyAmt / flBuyQty = average price
+    buy_amt = safe_float(row.get("buyAmt"), 0.0)
+    buy_qty = safe_float(row.get("flBuyQty"), 0.0)
+    if buy_amt > 0 and buy_qty > 0:
+        return buy_amt / buy_qty
+    
     return 0.0
 
 
@@ -176,7 +194,18 @@ def _fetch_broker_positions() -> dict[str, dict]:
     raw = call_broker_api(client.positions)
     if raw is None:
         raise RuntimeError("broker positions returned no data")
-    return _parse_broker_position_rows(raw)
+    
+    # Log the RAW response structure
+    logger.warning("🔍 BROKER POSITIONS RAW RESPONSE: %s", raw)
+    if isinstance(raw, dict) and raw.get("data"):
+        logger.warning("   Data structure: %s", type(raw.get("data")))
+        if isinstance(raw.get("data"), list) and len(raw.get("data", [])) > 0:
+            logger.warning("   First row keys: %s", list(raw["data"][0].keys()))
+    
+    result = _parse_broker_position_rows(raw)
+    logger.warning("   Parsed positions: %d | Details: %s", len(result), {k: v.get("quantity") for k, v in result.items()})
+    
+    return result
 
 
 def _fetch_order_report_rows() -> list[dict]:
@@ -417,6 +446,20 @@ def reconcile_broker_vs_local() -> dict:
 
     local_by_symbol = {_normalize_symbol(p.get("symbol")): p for p in local}
     broker_long = {sym: details for sym, details in broker.items() if details["quantity"] > 0}
+
+    # SAFETY CHECK: If broker API returned NO positions but we have local positions open,
+    # do NOT auto-close them. The API may have failed or is in an inconsistent state.
+    if len(local) > 0 and len(broker_long) == 0:
+        logger.error(
+            "🚨 SAFETY BLOCK: Broker API returned NO positions but %d local position(s) exist: %s | "
+            "Will NOT auto-close. Verify broker connection or manually close positions.",
+            len(local),
+            [p.get("symbol") for p in local],
+        )
+        summary["ok"] = False
+        summary["error"] = "Broker API returned zero positions while local positions exist"
+        summary["local_only"] = list(local_by_symbol.keys())
+        return summary
 
     for symbol, position in local_by_symbol.items():
         broker_details = broker_long.get(symbol)
