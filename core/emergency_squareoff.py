@@ -7,6 +7,7 @@ import logging
 import os
 from datetime import datetime
 from dotenv import load_dotenv
+from core.safe_io import safe_float, safe_int
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -49,8 +50,18 @@ async def emergency_square_off_all() -> dict:
 
     for pos in positions:
         symbol = pos.get("symbol", "")
-        qty = int(pos.get("quantity", 0))
-        entry_price = float(pos.get("entry_price", 0))
+        qty = safe_int(pos.get("quantity", 0), 0)
+        entry_price = safe_float(pos.get("entry_price", 0), 0.0)
+        if qty <= 0:
+            logger.error(f"  ❌ Invalid quantity for {symbol}: {pos.get('quantity')}")
+            failed.append({
+                'symbol': symbol,
+                'qty': qty,
+                'exit_price': 0,
+                'status': 'FAILED',
+                'error': 'Invalid quantity'
+            })
+            continue
 
         try:
             logger.warning(f"Closing {symbol} {qty} shares (entry: Rs{entry_price})")
@@ -58,7 +69,7 @@ async def emergency_square_off_all() -> dict:
             # Get current price
             tick = get_latest_tick(symbol)
             if tick:
-                exit_price = float(tick.get("ltp", entry_price))
+                exit_price = safe_float(tick.get("ltp", entry_price), entry_price)
             else:
                 exit_price = entry_price
                 logger.warning(f"  No tick for {symbol}, using entry price Rs{exit_price}")

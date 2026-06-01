@@ -16,6 +16,9 @@
 import json
 import logging
 import os
+import signal
+import threading
+import asyncio
 from datetime import datetime
 import yfinance as yf
 import pandas as pd
@@ -258,20 +261,50 @@ def _score_all_stocks(summaries: list[dict]) -> list[dict]:
 # ════════════════════════════════════════════════════════════
 
 def _fetch_all_summaries() -> list[dict]:
-    """Fetches prev day OHLCV + indicators for all stocks in NIFTY_50 list."""
+    """
+    Fetches prev day OHLCV + indicators for all stocks in NIFTY_50 list.
+    
+    CRITICAL FIX: Added per-stock timeout (5 seconds) to prevent Yahoo Finance
+    hangs from blocking the entire screener. If a stock times out, skip it and
+    continue with the rest.
+    """
     summaries = []
     failed_symbols = []
-    logger.info(f"Fetching Yahoo Finance data for {len(NIFTY_50)} NIFTY_50 stocks...")
+    timeout_symbols = []
+    logger.info(f"Fetching Yahoo Finance data for {len(NIFTY_50)} NIFTY_50 stocks (5s timeout per stock)...")
 
     for symbol in NIFTY_50:
+        result_container = {"data": None}
+        
+        def fetch_with_timeout():
+            try:
+                ticker = yf.Ticker(f"{symbol}.NS")
+                hist = ticker.history(period="30d", interval="1d")
+                result_container["data"] = hist
+            except Exception as e:
+                result_container["error"] = str(e)
+        
+        # Run fetch in a thread with timeout
+        thread = threading.Thread(target=fetch_with_timeout, daemon=True)
+        thread.start()
+        thread.join(timeout=5.0)  # Max 5 seconds per stock
+        
+        if thread.is_alive():
+            # Timeout occurred
+            timeout_symbols.append(symbol)
+            logger.debug(f"  {symbol}: TIMEOUT (>5s) - skipped")
+            continue
+        
+        if result_container.get("error"):
+            failed_symbols.append(f"{symbol}({result_container['error'][:30]})")
+            continue
+        
+        hist = result_container.get("data")
+        if hist is None or hist.empty or len(hist) < 15:
+            logger.debug(f"  {symbol}: Insufficient history ({len(hist) if hist is not None else 0} bars)")
+            continue
+
         try:
-            ticker = yf.Ticker(f"{symbol}.NS")
-            hist   = ticker.history(period="30d", interval="1d")
-
-            if hist.empty or len(hist) < 15:
-                logger.debug(f"  {symbol}: Insufficient history ({len(hist)} bars)")
-                continue
-
             close  = hist["Close"]
             volume = hist["Volume"]
 
@@ -298,67 +331,99 @@ def _fetch_all_summaries() -> list[dict]:
                 "above_ema20": above_ema,
                 "headline":    headline[:80],
             })
-
         except Exception as e:
             failed_symbols.append(f"{symbol}({str(e)[:30]})")
 
-    logger.info(f"✅ Yahoo Finance: {len(summaries)}/{len(NIFTY_50)} stocks fetched successfully")
+    logger.info(
+        f"✅ Yahoo Finance: {len(summaries)}/{len(NIFTY_50)} stocks fetched successfully"
+    )
+    if timeout_symbols:
+        logger.warning(f"⚠️  Timeout ({len(timeout_symbols)}): {timeout_symbols[:5]}{'...' if len(timeout_symbols) > 5 else ''}")
     if failed_symbols:
-        logger.warning(f"⚠️  Yahoo Finance failures ({len(failed_symbols)}): {failed_symbols[:5]}{'...' if len(failed_symbols) > 5 else ''}")
+        logger.warning(f"⚠️  Failures ({len(failed_symbols)}): {failed_symbols[:5]}{'...' if len(failed_symbols) > 5 else ''}")
     
     return summaries
 
 
 def _get_market_bias() -> str:
-    """NIFTY 50 index trend → BULLISH / BEARISH / NEUTRAL."""
-    try:
-        nifty  = yf.Ticker("^NSEI")
-        hist   = nifty.history(period="5d", interval="1d")
-        if hist.empty:
-            return "NEUTRAL"
+    """
+    NIFTY 50 index trend → BULLISH / BEARISH / NEUTRAL.
+    With 3-second timeout to prevent hangs.
+    """
+    result_container = {"bias": "NEUTRAL"}
+    
+    def fetch_nifty():
+        try:
+            nifty  = yf.Ticker("^NSEI")
+            hist   = nifty.history(period="5d", interval="1d")
+            if hist.empty:
+                result_container["bias"] = "NEUTRAL"
+                return
 
-        closes    = hist["Close"].tail(3).tolist()
-        up_days   = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i-1])
-        down_days = len(closes) - 1 - up_days
+            closes    = hist["Close"].tail(3).tolist()
+            up_days   = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i-1])
+            down_days = len(closes) - 1 - up_days
 
-        if up_days >= 2:    return "BULLISH"
-        if down_days >= 2:  return "BEARISH"
-        return "NEUTRAL"
-
-    except Exception as e:
-        logger.warning(f"Market bias check failed: {e}")
-        return "NEUTRAL"
+            if up_days >= 2:    
+                result_container["bias"] = "BULLISH"
+            elif down_days >= 2:  
+                result_container["bias"] = "BEARISH"
+            else:
+                result_container["bias"] = "NEUTRAL"
+        except Exception as e:
+            logger.debug(f"Market bias check failed: {e}")
+            result_container["bias"] = "NEUTRAL"
+    
+    thread = threading.Thread(target=fetch_nifty, daemon=True)
+    thread.start()
+    thread.join(timeout=3.0)
+    
+    return result_container.get("bias", "NEUTRAL")
 
 
 def _get_stock_market_bias(symbol: str) -> str:
     """
     Per-stock market bias based on that stock's last 5 days trend.
     Independent of NIFTY — allows trading strong stocks in weak markets.
+    With 2-second timeout per stock.
     """
-    try:
-        ticker = yf.Ticker(f"{symbol}.NS")
-        hist = ticker.history(period="5d", interval="1d")
-        if hist.empty or len(hist) < 3:
-            return "NEUTRAL"
+    result_container = {"bias": "NEUTRAL"}
+    
+    def fetch_stock_bias():
+        try:
+            ticker = yf.Ticker(f"{symbol}.NS")
+            hist = ticker.history(period="5d", interval="1d")
+            if hist.empty or len(hist) < 3:
+                result_container["bias"] = "NEUTRAL"
+                return
 
-        closes = hist["Close"].tail(3).tolist()
-        up_days = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i-1])
-        down_days = len(closes) - 1 - up_days
+            closes = hist["Close"].tail(3).tolist()
+            up_days = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i-1])
+            down_days = len(closes) - 1 - up_days
 
-        if up_days >= 2:
-            return "BULLISH"
-        if down_days >= 2:
-            return "BEARISH"
-        return "NEUTRAL"
+            if up_days >= 2:
+                result_container["bias"] = "BULLISH"
+            elif down_days >= 2:
+                result_container["bias"] = "BEARISH"
+            else:
+                result_container["bias"] = "NEUTRAL"
+        except Exception as e:
+            logger.debug(f"Stock bias {symbol}: {str(e)[:30]}")
+            result_container["bias"] = "NEUTRAL"
+    
+    thread = threading.Thread(target=fetch_stock_bias, daemon=True)
+    thread.start()
+    thread.join(timeout=2.0)
+    
+    return result_container.get("bias", "NEUTRAL")
 
-    except Exception:
-        return "NEUTRAL"
 
 def _gemini_pick_stocks(candidates: list[dict]) -> list[dict]:
     """
     Gemini analyzes ALL candidate stocks by NEWS/CATALYSTS independently.
     Picks N best (configurable via cognition_picks setting).
-    No global bias - AI makes unbiased decisions based on merit.
+    
+    TIMEOUT FIX: 30-second timeout to prevent Gemini hangs from blocking screener.
     """
     try:
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -368,8 +433,31 @@ def _gemini_pick_stocks(candidates: list[dict]) -> list[dict]:
         )
 
         user_message = _build_screener_message(candidates)
-        # No timeout set — let Gemini take as long as needed for analysis
-        response = model.generate_content(user_message)
+        
+        # Run Gemini call in thread with 30-second timeout
+        result_container = {"response": None, "error": None}
+        
+        def call_gemini():
+            try:
+                result_container["response"] = model.generate_content(user_message)
+            except Exception as e:
+                result_container["error"] = str(e)
+        
+        thread = threading.Thread(target=call_gemini, daemon=True)
+        thread.start()
+        thread.join(timeout=30.0)  # Max 30 seconds for Gemini response
+        
+        if thread.is_alive():
+            logger.warning("⚠️  Gemini API timeout (>30s). Using math fallback.")
+            return []
+        
+        if result_container.get("error"):
+            raise Exception(result_container["error"])
+        
+        response = result_container.get("response")
+        if not response:
+            raise Exception("No response from Gemini")
+        
         raw          = response.text.strip()
 
         raw = raw.replace("```json", "").replace("```", "").strip()

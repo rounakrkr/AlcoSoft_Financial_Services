@@ -352,7 +352,7 @@ def _get_indicator_df(symbol: str) -> pd.DataFrame | None:
 
 def _get_pattern_df(symbol: str) -> pd.DataFrame | None:
     """Candlestick patterns — WebSocket-built candles only (real-time)."""
-    ws_candles = get_candle_history(symbol)
+    ws_candles = get_candle_history(symbol, include_current=False)
     if len(ws_candles) < MIN_WS_CANDLES_FOR_PATTERNS:
         return None
     return pd.DataFrame(ws_candles).astype({
@@ -1438,11 +1438,17 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
     if stock.get("market_bias") == "BEARISH":
         return {"action": "WAIT", "reason": "Stock market bias: BEARISH"}
 
+    ws_count = len(get_candle_history(symbol, include_current=False))
+    if ws_count < MIN_WS_CANDLES_FOR_PATTERNS:
+        return {
+            "action": "WAIT",
+            "reason": f"Need {MIN_WS_CANDLES_FOR_PATTERNS} completed live WS candles (have {ws_count})",
+        }
+
     df = _get_indicator_df(symbol)
     if df is None:
         return {"action": "WAIT", "reason": "Insufficient indicator history (yfinance+WS)"}
 
-    ws_count   = len(get_candle_history(symbol))
     pattern_df = _get_pattern_df(symbol)
     ctx = StrategyEvaluationContext(
         side="buy",
@@ -1505,11 +1511,17 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
     if stock.get("direction") == "AVOID":
         return {"action": "WAIT", "reason": "Marked AVOID"}
 
+    ws_count = len(get_candle_history(symbol, include_current=False))
+    if ws_count < MIN_WS_CANDLES_FOR_PATTERNS:
+        return {
+            "action": "WAIT",
+            "reason": f"Need {MIN_WS_CANDLES_FOR_PATTERNS} completed live WS candles (have {ws_count})",
+        }
+
     df = _get_indicator_df(symbol)
     if df is None:
         return {"action": "WAIT", "reason": "Insufficient indicator history"}
 
-    ws_count   = len(get_candle_history(symbol))
     pattern_df = _get_pattern_df(symbol)
     ctx = StrategyEvaluationContext(
         side="buy",
@@ -1711,7 +1723,7 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
         f"Lookback: {LOOKBACK} candles | "
         f"Buy sets: {buy_set_count} | "
         f"Sell sets: {sell_set_count} | "
-        f"Pattern candles: {MIN_WS_CANDLES_FOR_PATTERNS}+ live WS | "
+        f"Buy gate: {MIN_WS_CANDLES_FOR_PATTERNS}+ completed live WS candles | "
         f"Config: strategy_sets.json"
     )
 

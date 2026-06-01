@@ -53,10 +53,22 @@ _order_lock = threading.RLock()
 
 # ── Squareoff flag — prevents repeated calls after 3:15 ──────
 _squareoff_done = False
+RISK_REDUCING_SELL_REASONS = {
+    "STOPLOSS",
+    "TRAILING_SL",
+    "TARGET",
+    "SQUAREOFF",
+    "EMERGENCY_SQUAREOFF",
+    "MANUAL_SQUAREOFF",
+}
 
 # ── Configuration validation ──────────────────────────────────
 _config_validated = False
 _config_warnings = []
+
+
+def _is_risk_reducing_sell(reason: str) -> bool:
+    return str(reason or "").strip().upper() in RISK_REDUCING_SELL_REASONS
 
 
 def validate_allocation_config() -> list:
@@ -962,16 +974,31 @@ def place_sell_order(
     reason:     str = "SIGNAL",
     product:    str = "MIS",
 ) -> bool:
-    """Place SELL — protected by order circuit breaker."""
+    """Place SELL. Risk-reducing exits bypass an open order circuit."""
     breaker = get_breaker("order")
     symbol = str(symbol or "").strip().upper()
     exit_price = safe_float(exit_price, 0.0)
-    if breaker.is_open():
+    risk_reducing = _is_risk_reducing_sell(reason)
+    circuit_open = breaker.is_open()
+    if circuit_open and not risk_reducing:
         logger.error("🔴 Order circuit OPEN — blocking SELL for %s", symbol)
         return False
+    if circuit_open and risk_reducing:
+        logger.warning(
+            "Order circuit OPEN, but allowing risk-reducing SELL for %s (%s)",
+            symbol,
+            reason,
+        )
 
     try:
         with _order_lock:
+            if risk_reducing:
+                return _place_sell_order_impl(
+                    symbol=symbol,
+                    exit_price=exit_price,
+                    reason=reason,
+                    product=product,
+                )
             return breaker.call(
                 _place_sell_order_impl,
                 symbol=symbol,
@@ -1403,10 +1430,29 @@ def squareoff_all_intraday(live_prices: dict[str, float]):
         f"⏰ 3:15 PM — Squaring off {len(open_positions)} position(s)."
     )
 
+    failures = []
     for position in open_positions:
         symbol  = position["symbol"]
-        current = live_prices.get(symbol, position["entry_price"])
-        place_sell_order(symbol, current, "SQUAREOFF")
+        current = safe_float(live_prices.get(symbol), 0.0)
+        if current <= 0:
+            current = safe_float(position.get("entry_price"), 0.0)
+            logger.warning(
+                "Squareoff using entry-price fallback for %s because live tick is missing",
+                symbol,
+            )
+
+        if current <= 0 or not place_sell_order(symbol, current, "SQUAREOFF"):
+            failures.append(symbol)
+
+    remaining = get_open_positions()
+    if failures or remaining:
+        logger.error(
+            "Squareoff incomplete. Failed=%s Remaining=%s. Will retry on next loop.",
+            failures,
+            [p.get("symbol") for p in remaining],
+        )
+        _squareoff_done = False
+        return
 
     _squareoff_done = True
 

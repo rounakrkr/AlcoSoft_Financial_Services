@@ -127,8 +127,12 @@ async def startup():
                 f"Strategy: {os.getenv('STRATEGY_TYPE', 'INTRADAY')}")
     logger.info("=" * 55)
 
-    # STEP 0 — Preflight Checks (before any trading)
-    logger.info("[0/6] Running preflight health checks...")
+    # STEP 0 — Database must exist before health checks touch state tables.
+    logger.info("[0/6] Initializing database...")
+    initialize_db()
+
+    # STEP 1 — Preflight Checks (before any trading)
+    logger.info("[1/6] Running preflight health checks...")
     from core.health_monitor import run_preflight_checks
     health = run_preflight_checks()
     
@@ -139,10 +143,6 @@ async def startup():
     
     if not health.passed():
         logger.warning("⚠️  Some checks failed but continuing (PAPER MODE)")
-
-    # Step 1 — Database
-    logger.info("[1/6] Initializing database...")
-    initialize_db()
 
     # Step 2 — Crash Recovery
     logger.info("[2/6] Checking for previous state...")
@@ -185,23 +185,36 @@ async def startup():
     except Exception as e:
         logger.error(f"Capital allocation validation error: {e}")
 
-    # Step 4 — Morning Screener (if pre-market)
+    # Step 4 — Morning Screener (if pre-market OR briefing missing)
     now = datetime.now().time()
     screener_success = False
     
-    if now < MARKET_OPEN:
-        logger.info("[4/6] Pre-market: Running morning screener...")
+    # RUN SCREENER IF:
+    # 1. It's before market open (normal 8:45 AM case), OR
+    # 2. Briefing is missing/empty (recovery case - system started late)
+    briefing_status = load_briefing()
+    briefing_stocks = 0
+    if briefing_status:
+        briefing_stocks = len(briefing_status.get("approved_stocks", [])) + len(briefing_status.get("watchlist", []))
+    
+    should_run_screener = (now < MARKET_OPEN) or (briefing_stocks == 0)
+    
+    if should_run_screener:
+        if now < MARKET_OPEN:
+            logger.info("[4/6] Pre-market: Running morning screener...")
+        else:
+            logger.info("[4/6] Briefing empty: Running screener recovery...")
         try:
             screener_success = run_morning_screener()
             if screener_success:
-                logger.info("✅ Pre-market screener completed successfully")
+                logger.info("✅ Screener completed successfully")
             else:
-                logger.warning("⚠️  Pre-market screener encountered errors")
+                logger.warning("⚠️  Screener encountered errors")
         except Exception as e:
-            logger.error(f"Morning screener exception: {e}")
+            logger.error(f"Screener exception: {e}")
             logger.warning("Will verify existing briefing or attempt regeneration.")
     else:
-        logger.info("[4/6] Market already open. Skipping pre-market screener.")
+        logger.info("[4/6] Market already open & briefing present. Skipping screener.")
 
     # Step 5 — Load briefing and start data feed
     logger.info("[5/6] Loading briefing and starting live feed...")
@@ -215,7 +228,10 @@ async def startup():
         briefing_stocks_count = len(approved) + len(watchlist)
         logger.info(f"Briefing status: {len(approved)} approved + {len(watchlist)} watchlist")
     
-    if not briefing or briefing_stocks_count == 0:
+    # Only attempt regeneration if screener hadn't run yet (time-based check)
+    already_ran_screener = should_run_screener and screener_success
+    
+    if (not briefing or briefing_stocks_count == 0) and not already_ran_screener:
         logger.warning("⚠️  Briefing invalid or missing. Attempting regeneration...")
         logger.info("   Triggering screener regeneration (attempt 1)...")
         try:
@@ -233,6 +249,8 @@ async def startup():
                 logger.error("❌ Screener regeneration failed")
         except Exception as e:
             logger.error(f"Screener regeneration exception: {e}")
+    elif briefing_stocks_count > 0:
+        logger.info("✅ Briefing valid and populated - ready for trading")
 
     if briefing and briefing_stocks_count > 0:
         approved  = [s["ticker"] for s in briefing.get("approved_stocks", [])]

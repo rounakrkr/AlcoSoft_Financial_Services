@@ -8,7 +8,7 @@
 import time
 import logging
 import threading
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from collections import defaultdict, deque
 import os
 
@@ -299,6 +299,35 @@ def _on_open(message):
     logger.info("✅ WebSocket connection opened.")
 
 
+def _seconds_until_next_market_open(now: datetime | None = None) -> float:
+    from core.market_calendar import MARKET_OPEN, is_trading_day
+
+    now = now or datetime.now()
+    candidate = now.date()
+    if is_trading_day(candidate) and now.time() < MARKET_OPEN:
+        next_open = datetime.combine(candidate, MARKET_OPEN)
+    else:
+        while True:
+            candidate = candidate + timedelta(days=1)
+            if is_trading_day(candidate):
+                next_open = datetime.combine(candidate, MARKET_OPEN)
+                break
+
+    return max(30.0, (next_open - now).total_seconds() + 5)
+
+
+def _schedule_reconnect_after_market_open():
+    global _reconnect_timer
+    delay = _seconds_until_next_market_open()
+    logger.info(f"Market not open. Scheduling reconnect at next market open (in {delay:.0f}s)")
+    with _reconnect_lock:
+        if _reconnect_timer:
+            _reconnect_timer.cancel()
+        _reconnect_timer = threading.Timer(delay, _do_reconnect)
+        _reconnect_timer.daemon = True
+        _reconnect_timer.start()
+
+
 def _on_close(message):
     global _subscribed_symbols, _reconnect_attempts, _reconnect_timer
     logger.warning(f"⚠️ WebSocket closed: {message}")
@@ -307,21 +336,8 @@ def _on_close(message):
         logger.info("No symbols to re-subscribe. Skipping reconnect.")
         return
 
-    # Market open nahi hai? To market open hone tak wait karo
     if not _is_market_open():
-        now = datetime.now()
-        market_open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-        if now > market_open_time:
-            delay = 30
-        else:
-            delay = (market_open_time - now).total_seconds() + 5
-        logger.info(f"Market not open. Scheduling reconnect at 9:15 AM (in {delay:.0f}s)")
-        with _reconnect_lock:
-            if _reconnect_timer:                    # ← cancel existing
-                _reconnect_timer.cancel()
-            _reconnect_timer = threading.Timer(delay, _do_reconnect)
-            _reconnect_timer.daemon = True
-            _reconnect_timer.start()
+        _schedule_reconnect_after_market_open()
         return
 
     # Market open hai → immediate reconnect attempt
@@ -348,6 +364,10 @@ def _is_market_open():
 
 def _schedule_reconnect():
     global _reconnect_timer, _reconnect_attempts
+    if not _is_market_open():
+        _schedule_reconnect_after_market_open()
+        return
+
     with _reconnect_lock:
         if _reconnect_timer:
             _reconnect_timer.cancel()               # ← yeh add karo
@@ -385,7 +405,7 @@ def get_latest_tick(symbol: str) -> dict | None:
         return _latest_tick.get(symbol)
 
 
-def get_candle_history(symbol: str) -> list[dict]:
+def get_candle_history(symbol: str, include_current: bool = True) -> list[dict]:
     """
     Returns list of completed OHLCV candles (oldest → newest).
     strategy.py uses this for RSI/MACD calculations.
@@ -393,8 +413,9 @@ def get_candle_history(symbol: str) -> list[dict]:
     """
     with _lock:
         history = list(_candle_history[symbol])
-        # Append current (incomplete) candle as the latest data point
-        if symbol in _current_candle:
+        # Current candle is still forming; callers that need closed candles only
+        # should pass include_current=False.
+        if include_current and symbol in _current_candle:
             history.append(_current_candle[symbol])
         return history
 
@@ -405,13 +426,13 @@ def get_all_symbols() -> list[str]:
         return list(_latest_tick.keys())
 
 
-def has_enough_history(symbol: str, min_candles: int = 26) -> bool:
+def has_enough_history(symbol: str, min_candles: int = 26, include_current: bool = True) -> bool:
     """
     Returns True if we have enough candle history for indicators.
     MACD needs 26 candles minimum. RSI needs 14.
     Don't trade until this returns True.
     """
-    return len(get_candle_history(symbol)) >= min_candles
+    return len(get_candle_history(symbol, include_current=include_current)) >= min_candles
 
 
 # ── Instrument Token Resolver ─────────────────────────────────
