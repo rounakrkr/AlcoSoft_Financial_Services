@@ -177,27 +177,27 @@ def run_morning_screener():
 
     # Validate briefing before saving
     if not isinstance(briefing.get("approved_stocks"), list):
-        logger.error("[BRIEFING] Rejected: Invalid briefing structure (approved_stocks not a list)")
+        logger.error("❌ SCREENER FAILED: Invalid briefing structure (approved_stocks not a list)")
         return False
     if not isinstance(briefing.get("watchlist"), list):
-        logger.error("[BRIEFING] Rejected: Invalid briefing structure (watchlist not a list)")
+        logger.error("❌ SCREENER FAILED: Invalid briefing structure (watchlist not a list)")
         return False
     
     total_stocks_in_briefing = len(ai_cognition_picks) + len(watchlist)
     if total_stocks_in_briefing == 0:
-        logger.error("[BRIEFING] Rejected: Briefing contains no stocks (both cognition and watchlist empty)")
+        logger.error("❌ SCREENER FAILED: Briefing contains no stocks (both cognition and watchlist empty)")
         return False
 
     save_result = save_briefing(briefing)
     if not save_result:
-        logger.error("[BRIEFING] Rejected: Could not save briefing to disk")
+        logger.error("❌ SCREENER FAILED: Could not save briefing to disk")
         return False
     
     logger.info(
-        f"[BRIEFING] Generated Screener Briefing ✅\n"
-        f"[BRIEFING]   Cognition ({len(ai_cognition_picks)}): {[p['ticker'] for p in ai_cognition_picks]}\n"
-        f"[BRIEFING]   Watchlist ({len(watchlist)}): {[s['ticker'] for s in watchlist]}\n"
-        f"[BRIEFING]   Total trading stocks: {total_stocks_in_briefing}"
+        f"✅ SCREENER COMPLETED SUCCESSFULLY\n"
+        f"  Cognition ({len(ai_cognition_picks)}): {[p['ticker'] for p in ai_cognition_picks]}\n"
+        f"  Watchlist ({len(watchlist)}): {[s['ticker'] for s in watchlist]}\n"
+        f"  Total trading stocks: {total_stocks_in_briefing}"
     )
     return True
 
