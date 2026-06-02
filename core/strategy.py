@@ -1546,9 +1546,6 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
     if stock.get("direction") == "AVOID":
         return {"action": "WAIT", "reason": "Stock explicitly marked AVOID"}
 
-    if stock.get("market_bias") == "BEARISH":
-        return {"action": "WAIT", "reason": "Stock market bias: BEARISH"}
-
     ws_count = len(get_candle_history(symbol, include_current=False))
     if ws_count < MIN_WS_CANDLES_FOR_PATTERNS:
         return {
@@ -1615,12 +1612,9 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
     """
     Math-only evaluation for watchlist stocks.
     Math watchlist — same BUY gate (candle pattern required).
-    Only in BULLISH market.
+    Uses the same execution philosophy as screener-approved BUY candidates.
     """
     symbol = stock["ticker"]
-
-    if stock.get("market_bias") not in ("BULLISH", "NEUTRAL"):
-        return {"action": "WAIT", "reason": f"Stock market bias: {stock.get('market_bias', 'UNKNOWN')}"}
 
     if stock.get("direction") == "AVOID":
         return {"action": "WAIT", "reason": "Marked AVOID"}
