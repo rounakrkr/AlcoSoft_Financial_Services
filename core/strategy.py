@@ -1855,3 +1855,33 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
 
 if __name__ == "__main__":
     pass
+
+
+# ─────────────────────────────────────────────────────────────
+# HELPER FUNCTIONS (Added for robustness)
+# ─────────────────────────────────────────────────────────────
+
+def _calculate_final_confidence(
+    base: float,
+    signal_mult: float = 1.0,
+    time_mult: float = 1.0,
+    market_mult: float = 1.0,
+    cognition_mult: float = 1.0
+) -> float:
+    """Calculate final confidence score with all multipliers."""
+    final = base * signal_mult * time_mult * market_mult * cognition_mult
+    return min(100.0, max(0.0, final))  # Clamp to [0, 100]
+
+def _detect_market_regime() -> str:
+    """Detect current market regime."""
+    # Simple implementation - returns NEUTRAL for paper trading
+    return "NEUTRAL"
+
+def _format_strategy_set_reason(
+    triggered_set: dict,
+    price_src: str,
+    confidence: float,
+    confidence_trace: dict
+) -> str:
+    """Format reason for strategy set triggering."""
+    return f"{triggered_set.get('name', 'SIGNAL')} @ {confidence:.1f}%"

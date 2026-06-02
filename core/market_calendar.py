@@ -66,3 +66,25 @@ def market_status_message(now: datetime | None = None) -> tuple[bool, str]:
         return True, "Pre-market (screener will run soon)"
 
     return False, f"Market closed (open 9:15-15:30, now {t.strftime('%H:%M')})"
+
+
+def is_market_open():
+    """Check if Indian stock market is open."""
+    from datetime import datetime, time as dt_time
+    now = datetime.now()
+    market_open = dt_time(9, 15)
+    market_close = dt_time(15, 30)
+    
+    # Check if today is trading day (Mon-Fri)
+    if now.weekday() >= 5:  # Sat=5, Sun=6
+        return False
+    
+    return market_open <= now.time() <= market_close
+
+def get_market_hours():
+    """Get market opening and closing times."""
+    from datetime import time as dt_time
+    return {
+        "open": dt_time(9, 15),
+        "close": dt_time(15, 30)
+    }

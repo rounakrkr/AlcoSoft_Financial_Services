@@ -294,3 +294,31 @@ if __name__ == "__main__":
     result = run_preflight_checks()
     print(result.report())
     exit(0 if result.passed() else 1)
+
+
+def check_system_health():
+    """Check overall system health status."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        from core.state_manager import get_open_positions
+        from core.trading_settings import get as cfg
+        
+        health = {
+            "status": "OK",
+            "open_positions": len(get_open_positions()),
+            "max_positions": cfg("strategy", "max_open_positions", 2),
+            "capital": cfg("risk", "paper_capital", 100000),
+            "errors": []
+        }
+        
+        # Check if we're approaching position limit
+        if health["open_positions"] >= health["max_positions"]:
+            health["status"] = "WARNING"
+            health["errors"].append("Position limit approaching")
+        
+        return health
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {"status": "ERROR", "errors": [str(e)]}

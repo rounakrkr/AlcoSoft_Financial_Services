@@ -132,3 +132,23 @@ async def emergency_square_off_all() -> dict:
     )
 
     return result
+
+
+def trigger_emergency_squareoff():
+    """Trigger emergency squareoff of all positions."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        from core.order_executor import squareoff_all_intraday
+        from core.state_manager import get_open_positions
+        
+        positions = get_open_positions()
+        if positions:
+            logger.warning(f"🚨 EMERGENCY SQUAREOFF: Closing {len(positions)} positions")
+            squareoff_all_intraday(reason="EMERGENCY_SQUAREOFF")
+            logger.info("✅ Emergency squareoff completed")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Emergency squareoff failed: {e}")
+        return False
