@@ -26,6 +26,9 @@ class StrategySetConfig:
     buy_sets: tuple[StrategySetDefinition, ...]
     sell_sets: tuple[StrategySetDefinition, ...]
 
+    def __len__(self) -> int:
+        return len(self.buy_sets) + len(self.sell_sets)
+
 
 _cache_lock = threading.Lock()
 _cache: dict[Path, tuple[int | None, StrategySetConfig]] = {}

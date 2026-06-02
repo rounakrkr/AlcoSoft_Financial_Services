@@ -641,42 +641,18 @@ def save_briefing(briefing: dict) -> bool:
         return False
 
 
-def ensure_briefing_exists() -> dict:
+def ensure_briefing_exists() -> dict | None:
     """
-    STARTUP: Ensure session_briefing.json exists.
-    
-    If missing: Create placeholder (marked as DO NOT USE FOR TRADING).
-    Returns the briefing object.
-    
-    Placeholder is clearly marked so validation functions reject it.
-    Screener must be run to replace placeholder with valid briefing.
-    
-    [BRIEFING] logs creation with explicit warning.
+    Return the existing briefing if present.
+
+    Missing briefing files are not created here. Startup validation and the
+    morning screener are responsible for generating a fresh tradeable briefing.
     """
     if not os.path.exists(BRIEFING_PATH):
-        logger.warning(f"[BRIEFING] File missing at startup - creating placeholder...")
-        placeholder_briefing = {
-            "generated_at": datetime.now().isoformat(),
-            "session_type": "PLACEHOLDER_AWAITING_SCREENER",
-            "market_bias": "NEUTRAL",
-            "approved_stocks": [],
-            "watchlist": [],
-            "avoid_list": [],
-            "do_not_use_for_trading": True,  # EXPLICIT MARKER
-        }
-        try:
-            atomic_write_json(BRIEFING_PATH, placeholder_briefing)
-            logger.warning(f"[BRIEFING] Created Placeholder: {BRIEFING_PATH}")
-            logger.warning(f"[BRIEFING]   ⚠️  PLACEHOLDER BRIEFING - SCREENER MUST RUN")
-            return placeholder_briefing
-        except Exception as e:
-            logger.error(f"[BRIEFING] Failed to create placeholder: {e}")
-            fallback = dict(FALLBACK_BRIEFING)
-            fallback["do_not_use_for_trading"] = True
-            fallback["session_type"] = "FALLBACK_ERROR"
-            return fallback
+        logger.warning("[BRIEFING] File missing; screener must generate a fresh briefing.")
+        return None
     
-    return load_briefing() or dict(FALLBACK_BRIEFING)
+    return load_briefing()
 
 
 def load_briefing() -> dict | None:
@@ -711,6 +687,8 @@ def load_briefing() -> dict | None:
     
     if is_placeholder:
         logger.warning(f"[BRIEFING] Loaded Placeholder ({session_type}) - NOT for trading")
+    elif total_count == 0:
+        logger.warning(f"[BRIEFING] Loaded empty/non-tradeable briefing ({session_type})")
     else:
         logger.info(f"[BRIEFING] Loaded Valid: {approved_count} approved + {watchlist_count} watchlist ({session_type})")
     

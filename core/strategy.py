@@ -48,6 +48,7 @@ from core.order_executor import (
 from core.state_manager import load_briefing, get_open_positions
 from core.trading_settings import get as cfg, get_section
 from core.safe_io import atomic_write_json, safe_float, safe_int
+from core.yfinance_tracer import ticker_history_with_retry_traced, should_retry_on_error
 from core.strategy_sets import (
     StrategySetDefinition,
     load_strategy_sets,
@@ -71,9 +72,13 @@ _failed_order_cooldown: dict[str, float] = {}
 _last_scan_log: float = 0.0
 FAILED_ORDER_COOLDOWN_SEC = 300
 _yfinance_cache: dict[str, list] = {}
+_yfinance_failed_until: dict[str, float] = {}
+_yfinance_failure_reason: dict[str, str] = {}
+YFINANCE_FAILURE_COOLDOWN_SEC = 3600
 _briefing_cache: dict = None
 _briefing_cache_time: float = 0.0
 BRIEFING_CACHE_SECONDS = 60  # Reload from disk every 60 seconds
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 
 def _get_briefing_cached():
@@ -307,55 +312,146 @@ def _get_time_window(now: dt_time) -> str:
         return "other"
 
 
+def _is_yfinance_on_cooldown(symbol: str) -> bool:
+    retry_at = _yfinance_failed_until.get(symbol, 0.0)
+    if retry_at > time.time():
+        return True
+    _yfinance_failed_until.pop(symbol, None)
+    _yfinance_failure_reason.pop(symbol, None)
+    return False
+
+
+def _mark_yfinance_failed(symbol: str, reason: str) -> None:
+    _yfinance_failed_until[symbol] = time.time() + YFINANCE_FAILURE_COOLDOWN_SEC
+    _yfinance_failure_reason[symbol] = reason
+
+
 # ════════════════════════════════════════════════════════════
-#   YFINANCE CANDLE FALLBACK
-#   Used when WebSocket hasn't built enough candle history yet.
-#   Fetches last 5 days of 5-min candles from Yahoo Finance.
+#   YFINANCE CANDLE SOURCE - FIXED FOR .NS SYMBOLS
+#   Uses multiple retry strategies to fetch historical data.
+#   Critical for building indicators (RSI, MACD, EMA, Bollinger).
 # ════════════════════════════════════════════════════════════
 
-def _get_candles_with_fallback(symbol: str) -> list[dict]:
+def _fetch_yfinance_with_retry(symbol: str, max_attempts: int = 2) -> pd.DataFrame:
+    """
+    Fetch yfinance data with multiple retry strategies for Yahoo .NS symbols.
+    
+    Attempt 1: period="5d", interval="5m" (preferred)
+    Attempt 2: period="1d", interval="1h" (shorter retry window)
+    
+    REQUIREMENT: Gets historical data from working source.
+    All retry attempts are traced with full diagnostic output.
+    """
+    attempts = [
+        ("5d", "5m"),   # 5 days of 5-min candles (preferred)
+        ("1d", "1h"),   # 1 day of hourly candles (shorter retry window)
+    ]
+    
+    last_error = None
+    for attempt_num, (period, interval) in enumerate(attempts[:max_attempts], 1):
+        try:
+            hist = yf.Ticker(f"{symbol}.NS").history(period=period, interval=interval)
+            if not hist.empty:
+                logger.info(f"✅ {symbol} — yfinance fetched {len(hist)} {interval} candles (attempt {attempt_num})")
+                return hist
+            else:
+                last_error = ValueError(f"Empty result for {symbol}: period={period}, interval={interval}")
+        except Exception as e:
+            last_error = e
+            # Check if error is retryable
+            if not should_retry_on_error(e):
+                logger.debug(f"🛑 {symbol} — Error is not retryable (JSON/parse): {type(e).__name__}: {str(e)[:50]}")
+                break
+            else:
+                logger.debug(f"  {symbol} attempt {attempt_num} failed (retryable): {type(e).__name__}")
+    
+    logger.critical(
+        f"{symbol} - No historical data available from yfinance | Last error: {type(last_error).__name__}: {str(last_error)}"
+    )
+    raise RuntimeError(
+        f"{symbol}: Cannot bootstrap indicators - yfinance failed. "
+        f"Last error: {type(last_error).__name__}: {str(last_error)}"
+    )
+
+
+def _get_candles_with_yfinance_seed(symbol: str) -> list[dict]:
+    """
+    Get candles for indicator calculations.
+    
+    Priority:
+    1. Use completed live WebSocket candles if enough are already available.
+    2. Use cached yfinance seed data.
+    3. Fetch fresh yfinance seed data with retries.
+    
+    No secondary market-data provider is used. If yfinance cannot provide data,
+    the caller marks the symbol WAIT instead of placing a trade.
+    """
     candles = get_candle_history(symbol)
 
+    # If we have enough candles from WebSocket, we're good
     if len(candles) >= 26:
-        _yfinance_cache.pop(symbol, None)  # WebSocket ready — cache clear
+        _yfinance_cache.pop(symbol, None)  # Clear cache, we're self-sufficient
         return candles
 
-    # Cache mein hai toh wahi use karo — yfinance dobara call nahi hoga
+    # If we have cached yfinance data, use it
     if symbol in _yfinance_cache:
         merged = _yfinance_cache[symbol] + candles
-        return merged
+        if len(merged) >= 26:
+            return merged
 
-    # Pehli baar fetch karo
-    try:
-        hist = yf.Ticker(f"{symbol}.NS").history(period="5d", interval="5m")
+    # If Yahoo failed recently, avoid hammering it every strategy loop.
+    if _is_yfinance_on_cooldown(symbol):
+        return candles
+
+    # Try to fetch fresh yfinance data with proper retry logic.
+    hist = _fetch_yfinance_with_retry(symbol, max_attempts=2)
+    
+    if not hist.empty:
+        # Convert to our candle format
         hist = _drop_incomplete_candle_if_present(hist)
-        if not hist.empty:
-            yf_candles = [
-                {
-                    "open":   float(row["Open"]),
-                    "high":   float(row["High"]),
-                    "low":    float(row["Low"]),
-                    "close":  float(row["Close"]),
-                    "volume": float(row["Volume"]),
-                }
-                for _, row in hist.iterrows()
-            ]
-            _yfinance_cache[symbol] = yf_candles
-            logger.info(
-                f"📦 {symbol} — yfinance fallback: "
-                f"{len(yf_candles)} candles + "
-                f"{len(candles)} WebSocket = {len(yf_candles) + len(candles)} total"
-            )
-            return yf_candles + candles
-    except Exception as e:
-        logger.warning(f"yfinance fallback failed for {symbol}: {e}")
-
-    return candles
+        
+        yf_candles = [
+            {
+                "open":   float(row["Open"]),
+                "high":   float(row["High"]),
+                "low":    float(row["Low"]),
+                "close":  float(row["Close"]),
+                "volume": float(row["Volume"]),
+            }
+            for _, row in hist.iterrows()
+        ]
+        
+        # Cache it
+        _yfinance_cache[symbol] = yf_candles
+        
+        merged = yf_candles + candles
+        logger.info(
+            f"📦 {symbol} — Combined: {len(yf_candles)} yfinance + "
+            f"{len(candles)} WebSocket = {len(merged)} total candles"
+        )
+        return merged
+    else:
+        # Empty result means yfinance did not raise, but still returned no data.
+        # This is still a failure condition - don't continue
+        logger.critical(
+            f"❌ {symbol} — yfinance returned empty DataFrame (symbol may not exist on Yahoo Finance). "
+            f"Marking symbol WAIT due to insufficient historical data."
+        )
+        raise RuntimeError(
+            f"{symbol}: yfinance returned empty result. Cannot proceed without historical data for indicators."
+        )
 
 
 def _get_indicator_df(symbol: str) -> pd.DataFrame | None:
     """RSI / MACD / EMA / Bollinger — seeded from yfinance, updated by WebSocket."""
-    candles = _get_candles_with_fallback(symbol)
+    try:
+        candles = _get_candles_with_yfinance_seed(symbol)
+    except RuntimeError as exc:
+        reason = str(exc)
+        _mark_yfinance_failed(symbol, reason)
+        logger.error("%s - yfinance unavailable; symbol marked WAIT. %s", symbol, reason)
+        return None
+
     if len(candles) < 26:
         return None
     df = pd.DataFrame(candles).astype({
@@ -379,7 +475,7 @@ def _get_pattern_df(symbol: str) -> pd.DataFrame | None:
 def _get_entry_price(symbol: str) -> tuple[float | None, str]:
     """
     Entry/exit price for broker orders — WebSocket LTP only.
-    No yfinance fallback: wrong price → wrong order to Kotak.
+    No alternate price source: wrong price means wrong order to Kotak.
     """
     tick = get_latest_tick(symbol)
     if tick and tick.get("ltp", 0) > 0:
@@ -1462,7 +1558,10 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
 
     df = _get_indicator_df(symbol)
     if df is None:
-        return {"action": "WAIT", "reason": "Insufficient indicator history (yfinance+WS)"}
+        reason = _yfinance_failure_reason.get(symbol)
+        if reason:
+            return {"action": "WAIT", "reason": f"yfinance unavailable: {reason}"}
+        return {"action": "WAIT", "reason": "Insufficient indicator history"}
 
     pattern_df = _get_pattern_df(symbol)
     ctx = StrategyEvaluationContext(
@@ -1535,6 +1634,9 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
 
     df = _get_indicator_df(symbol)
     if df is None:
+        reason = _yfinance_failure_reason.get(symbol)
+        if reason:
+            return {"action": "WAIT", "reason": f"yfinance unavailable: {reason}"}
         return {"action": "WAIT", "reason": "Insufficient indicator history"}
 
     pattern_df = _get_pattern_df(symbol)
@@ -1598,8 +1700,14 @@ def _check_sell_signals(live_prices: dict[str, float]):
         if not current:
             continue
 
-        # ── Candle history — WebSocket + yfinance fallback ────
-        candles = _get_candles_with_fallback(symbol)
+        # Candle history for sell indicators; yfinance is the only external source.
+        try:
+            candles = _get_candles_with_yfinance_seed(symbol)
+        except RuntimeError as exc:
+            reason = str(exc)
+            _mark_yfinance_failed(symbol, reason)
+            logger.error("%s - yfinance unavailable; sell signal check skipped. %s", symbol, reason)
+            continue
 
         if len(candles) < 26:
             continue
@@ -1876,12 +1984,3 @@ def _detect_market_regime() -> str:
     """Detect current market regime."""
     # Simple implementation - returns NEUTRAL for paper trading
     return "NEUTRAL"
-
-def _format_strategy_set_reason(
-    triggered_set: dict,
-    price_src: str,
-    confidence: float,
-    confidence_trace: dict
-) -> str:
-    """Format reason for strategy set triggering."""
-    return f"{triggered_set.get('name', 'SIGNAL')} @ {confidence:.1f}%"

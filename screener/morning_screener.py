@@ -262,86 +262,104 @@ def _score_all_stocks(summaries: list[dict]) -> list[dict]:
 
 def _fetch_all_summaries() -> list[dict]:
     """
-    Fetches prev day OHLCV + indicators for all stocks in NIFTY_50 list.
-    
-    CRITICAL FIX: Added per-stock timeout (5 seconds) to prevent Yahoo Finance
-    hangs from blocking the entire screener. If a stock times out, skip it and
-    continue with the rest.
+    Fetches OHLCV + indicators for all NIFTY_50 stocks.
+    FIX 1: ticker variable properly passed into thread via default arg.
+    FIX 2: news fetch separated with its own timeout.
+    FIX 3: TATAMOTOR → TATAMOTORS, LTIMINDTREE → LTIM in NIFTY_50 list.
     """
     summaries = []
     failed_symbols = []
     timeout_symbols = []
-    logger.info(f"Fetching Yahoo Finance data for {len(NIFTY_50)} NIFTY_50 stocks (5s timeout per stock)...")
+    logger.info(f"Fetching Yahoo Finance data for {len(NIFTY_50)} stocks (8s timeout per stock)...")
+
+    def _fetch_one(sym, result):
+        try:
+            t = yf.Ticker(f"{sym}.NS")
+            hist = t.history(period="30d", interval="1d")
+            result["hist"] = hist
+            result["ticker_obj"] = t
+        except Exception as e:
+            result["error"] = str(e)
 
     for symbol in NIFTY_50:
-        result_container = {"data": None}
-        
-        def fetch_with_timeout():
-            try:
-                ticker = yf.Ticker(f"{symbol}.NS")
-                hist = ticker.history(period="30d", interval="1d")
-                result_container["data"] = hist
-            except Exception as e:
-                result_container["error"] = str(e)
-        
-        # Run fetch in a thread with timeout
-        thread = threading.Thread(target=fetch_with_timeout, daemon=True)
-        thread.start()
-        thread.join(timeout=5.0)  # Max 5 seconds per stock
-        
-        if thread.is_alive():
-            # Timeout occurred
+        result = {}
+        th = threading.Thread(target=_fetch_one, args=(symbol, result), daemon=True)
+        th.start()
+        th.join(timeout=8.0)
+
+        if th.is_alive():
             timeout_symbols.append(symbol)
-            logger.debug(f"  {symbol}: TIMEOUT (>5s) - skipped")
+            logger.debug(f"  {symbol}: TIMEOUT — skipped")
             continue
-        
-        if result_container.get("error"):
-            failed_symbols.append(f"{symbol}({result_container['error'][:30]})")
+
+        if result.get("error"):
+            failed_symbols.append(f"{symbol}({result['error'][:30]})")
             continue
-        
-        hist = result_container.get("data")
-        if hist is None or hist.empty or len(hist) < 15:
-            logger.debug(f"  {symbol}: Insufficient history ({len(hist) if hist is not None else 0} bars)")
+
+        hist = result.get("hist")
+        if hist is None or hist.empty or len(hist) < 22:
+            logger.debug(f"  {symbol}: insufficient data ({len(hist) if hist is not None else 0} bars)")
             continue
 
         try:
-            close  = hist["Close"]
-            volume = hist["Volume"]
+            close  = hist["Close"].dropna()
+            volume = hist["Volume"].dropna()
 
-            rsi      = ta.momentum.RSIIndicator(close, window=14).rsi().iloc[-1]
-            avg_vol  = volume.rolling(20).mean().iloc[-1]
-            vol_ratio = round(volume.iloc[-1] / avg_vol, 2) if avg_vol > 0 else 1.0
+            if len(close) < 22:
+                continue
 
-            prev_close   = close.iloc[-2]
-            latest_close = close.iloc[-1]
+            rsi       = ta.momentum.RSIIndicator(close, window=14).rsi().iloc[-1]
+            avg_vol   = volume.rolling(20).mean().iloc[-1]
+            vol_ratio = round(float(volume.iloc[-1]) / float(avg_vol), 2) if avg_vol > 0 else 1.0
+
+            prev_close   = float(close.iloc[-2])
+            latest_close = float(close.iloc[-1])
             pct_change   = round(((latest_close - prev_close) / prev_close) * 100, 2)
 
-            ema20    = ta.trend.EMAIndicator(close, window=20).ema_indicator().iloc[-1]
-            above_ema = close.iloc[-1] > ema20
+            ema20     = ta.trend.EMAIndicator(close, window=20).ema_indicator().iloc[-1]
+            above_ema = latest_close > float(ema20)
 
-            news     = ticker.news
-            headline = news[0].get("title", "No news") if news else "No news"
+            # News fetch — separate 4s timeout
+            headline = "No news"
+            news_result = {}
+
+            def _fetch_news(sym=symbol, nr=news_result):
+                try:
+                    t2 = yf.Ticker(f"{sym}.NS")
+                    news = t2.news
+                    if news:
+                        nr["title"] = (
+                            news[0].get("title")
+                            or (news[0].get("content") or {}).get("title")
+                            or ""
+                        )[:80]
+                except Exception:
+                    pass
+
+            nth = threading.Thread(target=_fetch_news, daemon=True)
+            nth.start()
+            nth.join(timeout=4.0)
+            headline = news_result.get("title", "No news") or "No news"
 
             summaries.append({
                 "symbol":      symbol,
                 "close":       round(latest_close, 2),
                 "pct_change":  pct_change,
-                "rsi":         round(rsi, 1) if not pd.isna(rsi) else 50.0,
+                "rsi":         round(float(rsi), 1) if not pd.isna(rsi) else 50.0,
                 "vol_ratio":   vol_ratio,
                 "above_ema20": above_ema,
-                "headline":    headline[:80],
+                "headline":    headline,
             })
-        except Exception as e:
-            failed_symbols.append(f"{symbol}({str(e)[:30]})")
 
-    logger.info(
-        f"✅ Yahoo Finance: {len(summaries)}/{len(NIFTY_50)} stocks fetched successfully"
-    )
+        except Exception as e:
+            failed_symbols.append(f"{symbol}({str(e)[:40]})")
+
+    logger.info(f"✅ Fetched: {len(summaries)}/{len(NIFTY_50)} stocks")
     if timeout_symbols:
-        logger.warning(f"⚠️  Timeout ({len(timeout_symbols)}): {timeout_symbols[:5]}{'...' if len(timeout_symbols) > 5 else ''}")
+        logger.warning(f"⚠️  Timeouts ({len(timeout_symbols)}): {timeout_symbols}")
     if failed_symbols:
-        logger.warning(f"⚠️  Failures ({len(failed_symbols)}): {failed_symbols[:5]}{'...' if len(failed_symbols) > 5 else ''}")
-    
+        logger.warning(f"⚠️  Failures ({len(failed_symbols)}): {failed_symbols[:5]}")
+
     return summaries
 
 
@@ -419,52 +437,43 @@ def _get_stock_market_bias(symbol: str) -> str:
 
 
 def _gemini_pick_stocks(candidates: list[dict]) -> list[dict]:
-    """
-    Gemini analyzes ALL candidate stocks by NEWS/CATALYSTS independently.
-    Picks N best (configurable via cognition_picks setting).
-    
-    TIMEOUT FIX: 30-second timeout to prevent Gemini hangs from blocking screener.
-    """
     try:
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        model = genai.GenerativeModel(
-            model_name         = "gemini-flash-latest",
-            system_instruction = _screener_system_prompt(),
-        )
+        model = genai.GenerativeModel(model_name="gemini-flash-latest")
 
-        user_message = _build_screener_message(candidates)
-        
-        # Run Gemini call in thread with 30-second timeout
+        system_prompt = _screener_system_prompt()
+        user_message  = _build_screener_message(candidates)
+        full_prompt   = f"{system_prompt}\n\n{user_message}"
+
         result_container = {"response": None, "error": None}
-        
+
         def call_gemini():
             try:
-                result_container["response"] = model.generate_content(user_message)
+                result_container["response"] = model.generate_content(full_prompt)
             except Exception as e:
                 result_container["error"] = str(e)
-        
+
         thread = threading.Thread(target=call_gemini, daemon=True)
         thread.start()
-        thread.join(timeout=30.0)  # Max 30 seconds for Gemini response
-        
+        thread.join(timeout=120.0)
+
         if thread.is_alive():
-            logger.warning("⚠️  Gemini API timeout (>30s). Using math fallback.")
+            logger.warning("⚠️  Gemini timeout (>120s). Math fallback.")
             return []
-        
+
         if result_container.get("error"):
             raise Exception(result_container["error"])
-        
+
         response = result_container.get("response")
         if not response:
             raise Exception("No response from Gemini")
-        
-        raw          = response.text.strip()
 
-        raw = raw.replace("```json", "").replace("```", "").strip()
+        raw   = response.text.strip()
+        raw   = raw.replace("```json", "").replace("```", "").strip()
         start = raw.find("{")
         end   = raw.rfind("}") + 1
         if start == -1 or end <= start:
-            raise ValueError("No JSON found in response")
+            raise ValueError("No JSON in Gemini response")
 
         data  = json.loads(raw[start:end])
         picks = data.get("picks", [])

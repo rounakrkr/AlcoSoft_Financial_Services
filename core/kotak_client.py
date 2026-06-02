@@ -9,7 +9,15 @@ import time
 import logging
 from dotenv import load_dotenv
 import os
-from neo_api_client import NeoAPI
+from typing import Any
+
+try:
+    from neo_api_client import NeoAPI
+except ImportError as exc:
+    NeoAPI = None
+    _neo_import_error = exc
+else:
+    _neo_import_error = None
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -19,7 +27,7 @@ _client_instance = None
 consumer_secret = os.getenv("KOTAK_TOTP_SECRET")
 
 
-def get_client() -> NeoAPI:
+def get_client() -> Any:
     """
     Returns the active Kotak session.
     If not logged in yet, performs full auto-login.
@@ -34,7 +42,7 @@ def get_client() -> NeoAPI:
     return _client_instance
 
 
-def force_reconnect() -> NeoAPI:
+def force_reconnect() -> Any:
     """
     Call this if you get an auth error mid-session.
     Destroys old session and creates a fresh one.
@@ -55,7 +63,7 @@ def force_reconnect() -> NeoAPI:
 
 
 # ── Internal: create session + full 2FA login ───────────────
-def _create_and_login() -> NeoAPI:
+def _create_and_login() -> Any:
     """
     Full zero-touch login sequence:
     Step 1 → Init NeoAPI with consumer_key
@@ -63,6 +71,12 @@ def _create_and_login() -> NeoAPI:
     Step 3 → totp_login (gets view token + session id)
     Step 4 → totp_validate with MPIN (gets trade token)
     """
+    if NeoAPI is None:
+        raise RuntimeError(
+            "Kotak Neo API package is not installed. Install it with: "
+            "pip install \"git+https://github.com/Kotak-Neo/Kotak-neo-api-v2.git@v2.0.1#egg=neo_api_client\""
+        ) from _neo_import_error
+
     consumer_key   = os.getenv("KOTAK_CONSUMER_KEY")
     mobile_number  = os.getenv("KOTAK_MOBILE_NUMBER")
     ucc            = os.getenv("KOTAK_UCC")

@@ -79,10 +79,14 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger("AlcoSoft")
 
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("requests").setLevel(logging.WARNING)
+logging.getLogger("websocket").setLevel(logging.WARNING)
+
 
 # ── Imports (after logging setup) ─────────────────────────────
 from core.kotak_client import get_client, logout
-from core.state_manager import initialize_db, recover_state, load_briefing, save_briefing, ensure_briefing_exists, validate_briefing, is_briefing_safe_for_trading
+from core.state_manager import initialize_db, recover_state, load_briefing, save_briefing, validate_briefing, is_briefing_safe_for_trading
 from core.data_fetcher import start_live_feed, stop_live_feed
 from core.strategy import run_strategy_loop
 from screener.morning_screener import run_morning_screener
@@ -95,6 +99,48 @@ SCREENER_TIME   = dt_time(8, 45)
 MARKET_OPEN     = dt_time(9, 15)
 MARKET_CLOSE    = dt_time(15, 30)
 REFLECTION_TIME = dt_time(15, 35)
+
+
+def _briefing_generated_date(briefing: dict | None):
+    if not isinstance(briefing, dict):
+        return None
+
+    generated_at = briefing.get("generated_at")
+    if not generated_at:
+        return None
+
+    text = str(generated_at).strip()
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        try:
+            return datetime.strptime(text[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+
+def _today_morning_screener_status(briefing: dict | None) -> tuple[bool, str]:
+    is_valid, validity_reason = validate_briefing(briefing)
+    if not is_valid:
+        return False, f"briefing invalid: {validity_reason}"
+
+    session_type = briefing.get("session_type")
+    if session_type != "MORNING_SCREENER":
+        return False, f"session_type is {session_type!r}, expected 'MORNING_SCREENER'"
+
+    generated_date = _briefing_generated_date(briefing)
+    today = datetime.now().date()
+    if generated_date is None:
+        return False, "generated_at is missing or invalid"
+    if generated_date != today:
+        return False, f"briefing date is {generated_date.isoformat()}, expected {today.isoformat()}"
+
+    approved = len(briefing.get("approved_stocks", []))
+    watchlist = len(briefing.get("watchlist", []))
+    return True, (
+        f"today's MORNING_SCREENER briefing exists "
+        f"({approved} approved + {watchlist} watchlist)"
+    )
 
 # ─────────────────────────────────────────────────────────────
 # FIX 2: PROPER ASYNC SHUTDOWN
@@ -130,21 +176,6 @@ async def startup():
     # STEP 0 — Database must exist before health checks touch state tables.
     logger.info("[0/6] Initializing database...")
     initialize_db()
-
-    # STEP 0b — Ensure briefing file exists (prevents errors if missing)
-    logger.info("[0b/6] Ensuring session briefing file exists...")
-    ensure_briefing_exists()
-    
-    # CLEANUP: Reject TEST briefings from previous runs
-    logger.info("[0c/6] Cleanup: Checking for test briefings...")
-    test_briefing = load_briefing()
-    if test_briefing:
-        session_type = test_briefing.get("session_type", "")
-        if isinstance(session_type, str) and session_type.startswith("TEST"):
-            logger.warning(f"[BRIEFING] Cleanup: Found test briefing ({session_type}) - marking for regeneration")
-            test_briefing["do_not_use_for_trading"] = True
-            test_briefing["session_type"] = "CLEANUP_TEST_REJECTED"
-            save_briefing(test_briefing)
 
     # STEP 1 — Preflight Checks (before any trading)
     logger.info("[1/6] Running preflight health checks...")
@@ -200,25 +231,24 @@ async def startup():
     except Exception as e:
         logger.error(f"Capital allocation validation error: {e}")
 
-    # Step 4 — Morning Screener (if pre-market OR briefing missing/invalid)
-    now = datetime.now().time()
+    # Step 4 — Morning Screener
+    # Must run on every startup unless today's valid MORNING_SCREENER briefing
+    # already exists in data/session_briefing.json.
     screener_success = False
     
-    # VALIDATION GATE 1: Check if briefing exists and is valid
-    logger.info("[4/6] Validating briefing status...")
+    # VALIDATION GATE 1: Check if today's morning screener record exists.
+    logger.info("[4/6] Checking today's morning screener briefing...")
     briefing_status = load_briefing()
-    is_valid, validity_reason = validate_briefing(briefing_status)
+    has_today_screener, screener_skip_reason = _today_morning_screener_status(briefing_status)
     
-    # RUN SCREENER IF:
-    # 1. It's before market open (normal 8:45 AM case), OR
-    # 2. Briefing is invalid/missing/empty (recovery case)
-    should_run_screener = (now < MARKET_OPEN) or (not is_valid)
+    # RUN SCREENER IF today's valid MORNING_SCREENER briefing is absent.
+    should_run_screener = not has_today_screener
     
     if should_run_screener:
-        if now < MARKET_OPEN:
-            logger.info("[4/6] Pre-market: Running morning screener...")
-        else:
-            logger.warning(f"[4/6] Briefing invalid ({validity_reason}): Running screener recovery...")
+        logger.warning(
+            "[4/6] Running morning screener because %s.",
+            screener_skip_reason,
+        )
         try:
             screener_success = run_morning_screener()
             if screener_success:
@@ -229,14 +259,19 @@ async def startup():
             logger.error(f"[BRIEFING] Screener exception: {e}")
             logger.warning("[BRIEFING] Will verify existing briefing or attempt regeneration.")
     else:
-        logger.info("[4/6] Market already open & briefing valid. Skipping screener.")
+        logger.info("[4/6] Skipping screener: %s.", screener_skip_reason)
 
     # Step 5 — Load briefing and VALIDATE FOR TRADING
     logger.info("[5/6] Loading and validating briefing for trading...")
     briefing = load_briefing()
     
-    # VALIDATION GATE 2: Comprehensive validation
+    # VALIDATION GATE 2: Comprehensive validation + current-date screener gate
     is_safe, safety_reason = is_briefing_safe_for_trading(briefing)
+    if is_safe:
+        has_today_screener, today_reason = _today_morning_screener_status(briefing)
+        if not has_today_screener:
+            is_safe = False
+            safety_reason = f"Current-date morning screener briefing required: {today_reason}"
     
     # If validation failed, attempt regeneration ONCE
     if not is_safe:
@@ -249,6 +284,14 @@ async def startup():
                 if regen_success:
                     briefing = load_briefing()
                     is_safe, safety_reason = is_briefing_safe_for_trading(briefing)
+                    if is_safe:
+                        has_today_screener, today_reason = _today_morning_screener_status(briefing)
+                        if not has_today_screener:
+                            is_safe = False
+                            safety_reason = (
+                                "Current-date morning screener briefing required: "
+                                f"{today_reason}"
+                            )
                     if is_safe:
                         logger.info("[BRIEFING] Validated ✅")
                     else:
@@ -347,7 +390,7 @@ async def run_emergency_squareoff():
         logger.info("="*60)
         
         from core.order_executor import squareoff_all_intraday
-        from core.state_manager import get_open_positions, get_today_gross_pnl
+        from core.state_manager import get_open_positions, get_today_gross_pnl, validate_briefing
         
         # BEFORE STATE
         positions_before = get_open_positions() or []
@@ -399,6 +442,72 @@ async def run_emergency_squareoff():
 #   END-OF-DAY REPORT (15:30 PM)
 # ════════════════════════════════════════════════════════════
 
+def _read_today_trade_audit() -> dict:
+    """Read today's trade/order facts from SQLite for end-of-day reporting."""
+    import os
+    import sqlite3
+    from core.state_manager import DB_PATH
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    fallback = {
+        "trade_rows": 0,
+        "buy_rows": 0,
+        "closed_rows": 0,
+        "open_rows": 0,
+        "broker_order_rows": 0,
+        "sl_order_rows": 0,
+        "open_positions_missing_sl": 0,
+    }
+    if not os.path.exists(DB_PATH):
+        return fallback
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS trade_rows,
+                    SUM(CASE WHEN action = 'BUY' THEN 1 ELSE 0 END) AS buy_rows,
+                    SUM(CASE WHEN status IN ('CLOSED', 'STOPPED') THEN 1 ELSE 0 END) AS closed_rows,
+                    SUM(CASE WHEN status = 'OPEN' AND quantity > 0 THEN 1 ELSE 0 END) AS open_rows,
+                    SUM(CASE WHEN COALESCE(kotak_order_id, '') <> '' THEN 1 ELSE 0 END) AS broker_order_rows,
+                    SUM(CASE WHEN COALESCE(kotak_sl_order_id, '') <> '' THEN 1 ELSE 0 END) AS sl_order_rows,
+                    SUM(
+                        CASE
+                            WHEN status = 'OPEN'
+                                 AND quantity > 0
+                                 AND COALESCE(kotak_sl_order_id, '') = ''
+                            THEN 1 ELSE 0
+                        END
+                    ) AS open_positions_missing_sl
+                FROM trades
+                WHERE date = ?
+                """,
+                (today,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as exc:
+        logger.error("EOD trade audit read failed: %s", exc)
+        return fallback
+
+    return {key: int(row[key] or 0) for key in fallback}
+
+
+def _count_today_critical_logs(log_path) -> int:
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        return sum(
+            1
+            for line in log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            if line.startswith(today) and "[CRITICAL]" in line
+        )
+    except OSError:
+        return 0
+
+
 async def run_end_of_day_report():
     """
     Scheduled job: Generate final market close report
@@ -432,30 +541,37 @@ async def run_end_of_day_report():
         capital = float(cfg("capital", "paper", 100000))
         positions_count = len(positions)
         
-        # Check components
-        screener_ran = Path("data/feed_stats.json").exists()
+        # Check components from actual files and database state.
+        briefing = load_briefing()
         briefing_exists = Path("data/session_briefing.json").exists()
-        orders_count = positions_count + 10  # Placeholder - would check audit log
-        sl_attached = True  # Placeholder - would check positions
+        briefing_valid, briefing_reason = validate_briefing(briefing)
+        generated_at = str((briefing or {}).get("generated_at") or "")
+        screener_ran = (
+            briefing_valid
+            and (briefing or {}).get("session_type") == "MORNING_SCREENER"
+            and generated_at.startswith(datetime.now().strftime("%Y-%m-%d"))
+        )
+        trade_audit = _read_today_trade_audit()
+        orders_count = trade_audit["buy_rows"]
+        sl_attached = (
+            trade_audit["buy_rows"] > 0
+            and trade_audit["open_positions_missing_sl"] == 0
+        )
         squareoff_worked = positions_count == 0
         
         # Check for crashes in log
-        try:
-            log_content = Path("data/alcosoft.log").read_text(encoding="utf-8", errors="ignore")
-            crash_count = log_content.count("CRITICAL")
-            no_crashes = crash_count < 5
-        except:
-            no_crashes = True
+        critical_count = _count_today_critical_logs(Path("data/alcosoft.log"))
+        no_crashes = critical_count == 0
         
         # System components
         logger.info("")
         logger.info("SYSTEM COMPONENTS (What matters):")
         logger.info(f"  {'✅' if screener_ran else '❌'} Screener Ran")
         logger.info(f"  {'✅' if briefing_exists else '❌'} Briefing Generated")
-        logger.info(f"  {'✅' if orders_count > 0 else '❌'} Orders Placed")
+        logger.info(f"  {'✅' if orders_count > 0 else '❌'} Orders Placed ({orders_count})")
         logger.info(f"  {'✅' if sl_attached else '❌'} SL Attached")
         logger.info(f"  {'✅' if squareoff_worked else '❌'} Squareoff Worked (Positions: {positions_count})")
-        logger.info(f"  {'✅' if no_crashes else '❌'} No Crashes")
+        logger.info(f"  {'✅' if no_crashes else '❌'} No Crashes (CRITICAL today: {critical_count})")
         
         # Determine success
         all_components_ok = (
@@ -481,16 +597,20 @@ async def run_end_of_day_report():
             "components": {
                 "screener_ran": screener_ran,
                 "briefing_generated": briefing_exists,
+                "briefing_valid": briefing_valid,
+                "briefing_reason": briefing_reason,
                 "orders_placed": orders_count > 0,
                 "sl_attached": sl_attached,
                 "squareoff_worked": squareoff_worked,
-                "no_crashes": no_crashes
+                "no_crashes": no_crashes,
+                "critical_log_count_today": critical_count
             },
             "metrics": {
                 "positions_open": positions_count,
                 "final_pnl": pnl,
                 "pnl_percentage": round(100 * pnl / capital, 2) if capital else 0,
-                "capital": capital
+                "capital": capital,
+                "trade_audit": trade_audit
             },
             "status": "SUCCESSFUL" if all_components_ok else "PARTIAL"
         }
@@ -508,7 +628,8 @@ async def run_end_of_day_report():
         else:
             failed = []
             if not screener_ran: failed.append("Screener")
-            if not briefing_exists: failed.append("Briefing")
+            if not briefing_exists or not briefing_valid: failed.append("Briefing")
+            if orders_count > 0 and not sl_attached: failed.append("SL attachment")
             if not squareoff_worked: failed.append("Squareoff")
             if not no_crashes: failed.append("Crashes detected")
             logger.warning(f"⚠️  TODAY HAD ISSUES: {', '.join(failed)}")
