@@ -8,7 +8,7 @@
     "max_risk_per_trade": 0.01,
     "math_risk_per_trade": 0.01,
     "max_daily_loss_percent": 0.05,
-    "paper_capital": 100000,
+    "paper_capital": 20000,
     "allow_margin": true,
     "forced_buy_margin": false,
     "adaptive_safety_blocks_execution": false,
@@ -68,7 +68,7 @@
   },
   "_meta": {
     "version": 1,
-    "updated_at": "2026-06-05T23:48:55.596885",
+    "updated_at": "2026-06-06T00:06:04.828091",
     "updated_via": "dashboard"
   }
 }
