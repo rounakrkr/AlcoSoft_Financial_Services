@@ -158,6 +158,9 @@ def initialize_db():
         _add_column_if_missing(conn, "trades", "kotak_sl_order_id", "TEXT")
         _add_column_if_missing(conn, "trades", "exit_price_source", "TEXT")
         _add_column_if_missing(conn, "trades", "reconciliation_status", "TEXT")
+        _add_column_if_missing(conn, "trades", "tsl_activated", "BOOLEAN DEFAULT 0")
+        _add_column_if_missing(conn, "trades", "tsl_activation_price", "REAL")
+        _add_column_if_missing(conn, "trades", "tsl_mode", "TEXT DEFAULT 'trailing'")
         _add_column_if_missing(conn, "daily_stats", "agent_decision_calls", "INTEGER DEFAULT 0")
         _migrate_agent_decision_log(conn)
         _repair_invalid_open_positions(conn)
@@ -513,6 +516,54 @@ def update_sl_order_id(symbol: str, sl_order_id: str):
         """, (sl_order_id or "", str(symbol or "").strip().upper()))
 
     _update_positions_json()
+
+
+def update_tsl_activation_state(symbol: str, is_activated: bool, activation_price: float, tsl_mode: str):
+    """Update TSL activation state and mode for a position."""
+    with _get_conn() as conn:
+        conn.execute("""
+            UPDATE trades
+            SET tsl_activated = ?, tsl_activation_price = ?, tsl_mode = ?
+            WHERE symbol = ? AND status = 'OPEN'
+        """, (
+            int(is_activated),
+            safe_float(activation_price, 0.0),
+            str(tsl_mode or "trailing").lower(),
+            str(symbol or "").strip().upper()
+        ))
+
+    _update_positions_json()
+
+
+def get_tsl_activation_state(symbol: str) -> dict:
+    """Get TSL activation state for a position."""
+    try:
+        with _get_conn() as conn:
+            row = conn.execute("""
+                SELECT tsl_activated, tsl_activation_price, tsl_mode
+                FROM trades
+                WHERE symbol = ? AND status = 'OPEN'
+            """, (str(symbol or "").strip().upper(),)).fetchone()
+            
+            if not row:
+                return {
+                    "tsl_activated": False,
+                    "tsl_activation_price": 0.0,
+                    "tsl_mode": "trailing"
+                }
+            
+            return {
+                "tsl_activated": bool(row[0]),
+                "tsl_activation_price": safe_float(row[1], 0.0),
+                "tsl_mode": str(row[2] or "trailing").lower()
+            }
+    except sqlite3.DatabaseError as exc:
+        logger.error("TSL activation state read failed for %s: %s", symbol, exc)
+        return {
+            "tsl_activated": False,
+            "tsl_activation_price": 0.0,
+            "tsl_mode": "trailing"
+        }
 
 
 def get_open_positions() -> list[dict]:

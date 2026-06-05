@@ -1,7 +1,9 @@
 {
   "risk": {
     "stop_loss_percent": 0.005,
-    "trailing_sl_percent": 0.01,
+    "trailing_sl_percent": 0.005,
+    "tsl_activation_ratio": 1.4,
+    "tsl_mode_after_activation": true,
     "target_rr_ratio": 2.0,
     "max_risk_per_trade": 0.01,
     "math_risk_per_trade": 0.01,
@@ -66,7 +68,7 @@
   },
   "_meta": {
     "version": 1,
-    "updated_at": "2026-06-05T13:26:06.663084",
+    "updated_at": "2026-06-05T23:48:55.596885",
     "updated_via": "dashboard"
   }
 }

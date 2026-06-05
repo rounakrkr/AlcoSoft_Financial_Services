@@ -28,6 +28,8 @@ DEFAULTS: dict = {
     "risk": {
         "stop_loss_percent": 0.01,
         "trailing_sl_percent": 0.008,
+        "tsl_activation_ratio": 1.4,
+        "tsl_mode_after_activation": True,
         "target_rr_ratio": 2.0,
         "max_risk_per_trade": 0.02,
         "math_risk_per_trade": 0.05,
@@ -76,14 +78,17 @@ DEFAULTS: dict = {
 BASE_FIELD_SCHEMA: list[dict] = [
     {"section": "risk", "key": "stop_loss_percent", "label": "Stop loss (%)", "type": "percent", "min": 0.1, "max": 10, "step": 0.1, "hint": "Hard SL distance below entry (e.g. 1 = 1%)"},
     {"section": "risk", "key": "trailing_sl_percent", "label": "Trailing SL (%)", "type": "percent", "min": 0.1, "max": 5, "step": 0.1, "hint": "Trail distance from peak price"},
+    
     {"section": "risk", "key": "target_rr_ratio", "label": "Profit target (R:R)", "type": "float", "min": 1, "max": 5, "step": 0.1, "hint": "Target = risk × this ratio"},
+    {"section": "risk", "key": "max_daily_loss_percent", "label": "Max daily loss (%)", "type": "percent", "min": 1, "max": 20, "step": 0.5, "hint": "Circuit breaker — stops ALL trading if daily P&L falls below this"},
     {"section": "risk", "key": "max_risk_per_trade", "label": "AI agent risk / trade (%)", "type": "percent", "min": 0.5, "max": 10, "step": 0.5, "hint": "Max capital % risked per AI agent trade (cognitive signals)"},
     {"section": "risk", "key": "math_risk_per_trade", "label": "Math watchlist risk / trade (%)", "type": "percent", "min": 0.5, "max": 10, "step": 0.5, "hint": "Max capital % risked per math/technical trade (slower orders)"},
-    {"section": "risk", "key": "max_daily_loss_percent", "label": "Max daily loss (%)", "type": "percent", "min": 1, "max": 20, "step": 0.5, "hint": "Circuit breaker — stops ALL trading if daily P&L falls below this"},
+    {"section": "risk", "key": "tsl_activation_ratio", "label": "TSL activation ratio", "type": "float", "min": 1.0, "max": 2.0, "step": 0.1, "hint": "TSL activates when profit reaches SL% × this ratio. Example: SL 0.5% + ratio 1.4 = activate at 0.7% profit"},
     {"section": "risk", "key": "paper_capital", "label": "Paper capital (₹)", "type": "int", "min": 1000, "max": 10000000, "step": 1000, "hint": "Total bankroll available for trading (used for position sizing)"},
+    {"section": "risk", "key": "tsl_mode_after_activation", "label": "TSL trailing mode (ON=Trailing, OFF=Locked)", "type": "bool", "hint": "ON: TSL moves up with price (trailing). OFF: TSL stays fixed at activation price (locked)."},
+    {"section": "risk", "key": "adaptive_safety_blocks_execution", "label": "Adaptive safety blocks execution", "type": "bool", "hint": "ON lets adaptive safety suppress flagged strategy sets. OFF keeps alerts visible only, without blocking BUY/SELL execution."},
     {"section": "risk", "key": "allow_margin", "label": "🔴 Allow margin", "type": "bool", "hint": "⚠️ Turn this ON to use broker margin. Turn it OFF to trade with real capital only (recommended for safe mode)."},
     {"section": "risk", "key": "forced_buy_margin", "label": "🔥 Force buy with margin", "type": "bool", "hint": "⚠️ AGGRESSIVE: If enabled + Allow margin ON, buys maximum with 100% margin even if risk calc says 0."},
-    {"section": "risk", "key": "adaptive_safety_blocks_execution", "label": "Adaptive safety blocks execution", "type": "bool", "hint": "ON lets adaptive safety suppress flagged strategy sets. OFF keeps alerts visible only, without blocking BUY/SELL execution."},
     {"section": "risk", "key": "margin_leverage", "label": "Margin leverage / buying power", "type": "float", "min": 1.0, "max": 5.0, "step": 0.5, "hint": "Choose how much extra buying power to unlock. 2.0 = 2x capital, 3.0 = 3x capital. Values above 5.0 are rejected."},
     {"section": "risk", "key": "position_size_margin", "label": "Margin position size (%)", "type": "percent", "min": 10, "max": 100, "step": 5, "hint": "Choose what percentage of the margin buying power is used per trade. 100% uses all available margin power. Values above 100% are rejected."},
     {"section": "strategy", "key": "max_open_positions", "label": "Max open positions", "type": "int", "min": 1, "max": 10, "step": 1, "hint": "Max simultaneous open positions (affects capital allocation)."},

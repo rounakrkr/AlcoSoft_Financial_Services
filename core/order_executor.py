@@ -21,6 +21,7 @@ from core.token_validator import (
 from core.state_manager import (
     save_open_position, close_position, get_open_positions,
     update_trailing_sl, update_sl_order_id,
+    update_tsl_activation_state, get_tsl_activation_state,
     get_today_gross_pnl,
     entries_are_enabled,
     lock_entries,
@@ -1486,36 +1487,84 @@ def get_capital_snapshot() -> dict:
 
 def update_trailing_stop_losses(live_prices: dict[str, float]):
     """
-    Moves SL up as price rises. Never moves SL down.
-    In LIVE mode: modifies Kotak SL order too.
+    Delayed TSL with configurable activation & mode.
+    
+    1. TSL only activates when profit reaches SL% × activation_ratio
+    2. After activation, applies TSL mode (trailing or locked)
+    3. Trailing mode: SL moves up as price rises, never down
+    4. Locked mode: SL stays fixed at activation price
     """
+    tsl_activation_ratio = max(1.0, min(2.0, safe_float(cfg("risk", "tsl_activation_ratio", 1.4), 1.4)))
+    tsl_mode_is_trailing = bool(cfg("risk", "tsl_mode_after_activation", True))
+    tsl_mode = "trailing" if tsl_mode_is_trailing else "locked"
+    
     for position in get_open_positions():
         symbol      = position["symbol"]
+        entry_price = safe_float(position.get("entry_price"), 0.0)
+        initial_sl  = safe_float(position.get("stop_loss"), 0.0)
         current     = safe_float(live_prices.get(symbol), 0.0)
-        current_tsl = safe_float(position.get("trailing_sl") or position.get("stop_loss", 0), 0.0)
+        current_tsl = safe_float(position.get("trailing_sl") or initial_sl, 0.0)
 
-        if not current:
+        if not current or not entry_price or not initial_sl:
             continue
 
-        tsl_pct = max(0.0001, min(0.20, safe_float(cfg("risk", "trailing_sl_percent", 0.008), 0.008)))
-        new_tsl = round(current * (1 - tsl_pct), 2)
-
-        if new_tsl > current_tsl:
-            update_trailing_sl(symbol, new_tsl)
-            logger.info(
-                f"📈 TRAILING SL | {symbol} | "
-                f"₹{current_tsl} → ₹{new_tsl}"
-            )
-
-            # Modify Kotak's SL order in LIVE mode
-            if TRADING_MODE == "LIVE":
-                sl_order_id = position.get("kotak_sl_order_id")
-                if sl_order_id:
-                    _modify_sl_order(
-                        sl_order_id,
-                        new_tsl,
-                        position["quantity"]
+        # Get current TSL activation state
+        tsl_state = get_tsl_activation_state(symbol)
+        is_tsl_activated = tsl_state["tsl_activated"]
+        
+        # ─────────────────────────────────────────────────────────
+        # PHASE 1: Check if TSL should be activated (not yet active)
+        # ─────────────────────────────────────────────────────────
+        if not is_tsl_activated:
+            # Calculate activation threshold
+            sl_percent = abs(entry_price - initial_sl) / entry_price
+            activation_threshold = entry_price + (entry_price * sl_percent * tsl_activation_ratio)
+            
+            # Check if price reached activation threshold
+            if current >= activation_threshold:
+                # TSL activates!
+                update_tsl_activation_state(symbol, True, current, tsl_mode)
+                profit_pct = round(((current - entry_price) / entry_price) * 100, 2)
+                logger.info(
+                    f"🎯 TSL ACTIVATED | {symbol} | "
+                    f"Price ₹{current} | Entry ₹{entry_price} | "
+                    f"Profit +{profit_pct}% | "
+                    f"Mode: {tsl_mode.upper()}"
+                )
+                is_tsl_activated = True
+        
+        # ─────────────────────────────────────────────────────────
+        # PHASE 2: Apply TSL based on current mode
+        # ─────────────────────────────────────────────────────────
+        if is_tsl_activated:
+            tsl_pct = max(0.0001, min(0.20, safe_float(cfg("risk", "trailing_sl_percent", 0.008), 0.008)))
+            
+            if tsl_mode == "trailing":
+                # Trailing mode: SL moves up with price, never down
+                new_tsl = round(current * (1 - tsl_pct), 2)
+                
+                if new_tsl > current_tsl:
+                    update_trailing_sl(symbol, new_tsl)
+                    logger.info(
+                        f"📈 TRAILING SL | {symbol} | "
+                        f"₹{current_tsl} → ₹{new_tsl}"
                     )
+
+                    # Modify Kotak's SL order in LIVE mode
+                    if TRADING_MODE == "LIVE":
+                        sl_order_id = position.get("kotak_sl_order_id")
+                        if sl_order_id:
+                            _modify_sl_order(
+                                sl_order_id,
+                                new_tsl,
+                                position["quantity"]
+                            )
+            
+            elif tsl_mode == "locked":
+                # Locked mode: SL stays fixed at activation price (no update needed)
+                pass
+
+
 
 
 def check_max_daily_loss() -> bool:
