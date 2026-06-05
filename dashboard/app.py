@@ -23,12 +23,18 @@ from core.trading_settings import (
     load_settings,
     save_settings,
     validate_updates,
-    FIELD_SCHEMA,
+    get_field_schema,
     get as cfg,
 )
 from core.strategy_sets import load_strategy_sets, normalize_set_key
 from core.safe_io import safe_read_json
-from core.state_manager import load_briefing
+from core.state_manager import (
+    load_briefing,
+    get_trading_session_state,
+    lock_entries,
+    resume_entries,
+    initialize_db,
+)
 
 app = Flask(
     __name__,
@@ -38,6 +44,9 @@ app = Flask(
 )
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
+
+# Initialize database schema on startup
+initialize_db()
 
 DB_PATH         = os.path.join(_ROOT, "data", "alcosoft.db")
 REFLECTION_DB_PATH = os.path.join(_ROOT, "data", "reflection.db")
@@ -51,6 +60,7 @@ try:
         get_all_signal_stats,
         get_all_time_window_stats,
         get_all_symbol_stats,
+        get_signal_execution_policy,
     )
     from reflection.adaptive_config_updater import get_adaptive_config_summary
     ADAPTIVE_AVAILABLE = True
@@ -109,11 +119,17 @@ def _strategy_set_performance_rows(signal_stats: list[dict], multiplier_rows: li
         for row in multiplier_rows
         if row.get("multiplier_type") == "signal"
     }
+    settings = load_settings()
+    strategy_set_settings = settings.get("strategy_sets", {})
+    adaptive_safety_blocks_execution = bool(
+        settings.get("risk", {}).get("adaptive_safety_blocks_execution", False)
+    )
 
     rows = []
     for set_def in set_defs:
         stats = stats_by_name.get(set_def.name, {})
         multiplier = multipliers.get(normalize_set_key(set_def.name), {})
+        execution_policy = get_signal_execution_policy(set_def.name) if ADAPTIVE_AVAILABLE else {}
         rows.append({
             "signal_name": set_def.name,
             "set_name": set_def.name,
@@ -133,6 +149,11 @@ def _strategy_set_performance_rows(signal_stats: list[dict], multiplier_rows: li
             "avg_drawdown": stats.get("avg_drawdown", 0.0),
             "multiplier": multiplier.get("multiplier_value", 1.0),
             "confidence": multiplier.get("confidence_strength", 0.0),
+            "execution_policy": execution_policy,
+            "execution_suppressed": bool(execution_policy.get("suppressed")),
+            "execution_blocking_enabled": adaptive_safety_blocks_execution,
+            "strategy_set_enabled": bool(strategy_set_settings.get(set_def.name, True)),
+            "execution_scope": execution_policy.get("scope", ""),
         })
 
     return rows
@@ -152,7 +173,7 @@ def settings_page():
 def api_settings_get():
     return jsonify({
         "settings": load_settings(),
-        "schema": FIELD_SCHEMA,
+        "schema": get_field_schema(),
     })
 
 
@@ -189,6 +210,15 @@ def api_status():
                pnl, status, strategy, notes, entry_time, exit_time
         FROM trades ORDER BY id DESC LIMIT 10
     """)
+    for trade in trades:
+        raw_status = str(trade.get("status") or "").upper()
+        exit_reason = str(trade.get("notes") or "").strip()
+        trade["raw_status"] = raw_status
+        if raw_status == "STOPPED":
+            trade["status"] = "CLOSED"
+            trade["exit_reason"] = exit_reason or "STOPLOSS"
+        else:
+            trade["exit_reason"] = exit_reason
 
     # Load briefing using centralized state_manager (uses validation)
     briefing = load_briefing() or {}
@@ -223,19 +253,26 @@ def api_status():
     winners = stats.get("winning_trades", 0)
     win_pct = round((winners / total * 100) if total > 0 else 0)
 
-    cap_path = os.path.join(_ROOT, "data", "live_capital.json")
-    capital_display = float(cfg("risk", "paper_capital", 10000))
-    if os.path.exists(cap_path):
-        cap_data = safe_read_json(
-            cap_path,
-            {},
-            expected_type=dict,
-            label="live capital",
-            log=app.logger,
-        )
-        capital_display = cap_data.get("capital", capital_display)
+    try:
+        from core.order_executor import get_capital_snapshot
+        capital_snapshot = get_capital_snapshot()
+    except Exception as exc:
+        app.logger.warning("Capital snapshot unavailable: %s", exc, exc_info=True)
+        fallback_capital = float(cfg("risk", "paper_capital", 10000))
+        capital_snapshot = {
+            "mode": os.getenv("TRADING_MODE", "PAPER"),
+            "starting_capital": fallback_capital,
+            "available_cash": None,
+            "deployed_capital": None,
+            "equity": None,
+            "closed_pnl": stats.get("gross_pnl", 0.0),
+            "unrealized_pnl": None,
+            "total_buying_power": None,
+            "remaining_buying_power": None,
+        }
 
     st = load_settings().get("strategy", {})
+    trading_state = get_trading_session_state()
 
     chart_trades = _db_query("""
         SELECT symbol, pnl, status, exit_time, entry_time
@@ -291,8 +328,10 @@ def api_status():
     return jsonify({
         "timestamp":    datetime.now().strftime("%H:%M:%S"),
         "trading_mode": os.getenv("TRADING_MODE", "PAPER"),
+        "trading_state": trading_state,
         "strategy":     st.get("strategy_type", "INTRADAY"),
-        "capital":      capital_display,
+        "capital":      capital_snapshot.get("available_cash"),
+        "capital_snapshot": capital_snapshot,
         "stats": {**stats, "win_rate": win_pct},
         "positions":   positions,
         "trades":      trades,
@@ -317,6 +356,22 @@ def api_status():
     })
 
 
+@app.route("/api/trading-state", methods=["GET", "POST"])
+def api_trading_state():
+    if request.method == "GET":
+        return jsonify({"ok": True, "state": get_trading_session_state()})
+
+    body = request.get_json(silent=True) or {}
+    action = str(body.get("action") or "").strip().lower()
+    if action == "resume":
+        state = resume_entries("DASHBOARD_RESUME_TRADING")
+        return jsonify({"ok": True, "state": state})
+    if action in {"lock", "flat_lock"}:
+        state = lock_entries("DASHBOARD_MANUAL_LOCK")
+        return jsonify({"ok": True, "state": state})
+    return jsonify({"ok": False, "error": "Unknown trading-state action"}), 400
+
+
 @app.route("/api/margin-status")
 def api_margin_status():
     """
@@ -324,8 +379,9 @@ def api_margin_status():
     Returns current margin deployment status.
     """
     try:
-        from core.order_executor import get_margin_status
+        from core.order_executor import get_capital_snapshot, get_margin_status
         margin = get_margin_status()
+        capital_snapshot = get_capital_snapshot()
         allow_margin = cfg("risk", "allow_margin", False)
         forced_buy = cfg("risk", "forced_buy_margin", False)
 
@@ -334,6 +390,11 @@ def api_margin_status():
             "margin_enabled": allow_margin,
             "forced_buy_enabled": forced_buy,
             "real_capital": margin.get("real_capital", 0),
+            "capital_snapshot": capital_snapshot,
+            "starting_capital": capital_snapshot.get("starting_capital"),
+            "available_cash": capital_snapshot.get("available_cash"),
+            "deployed_capital": capital_snapshot.get("deployed_capital"),
+            "equity": capital_snapshot.get("equity"),
             "margin_leverage": margin.get("margin_leverage", 1.0),
             "total_available": margin.get("total_available_with_margin", 0),
             "deployed": margin.get("current_position_value", 0),
@@ -359,12 +420,12 @@ def api_emergency_squareoff():
     🚨 EMERGENCY: Close all open positions immediately.
     Requires POST to prevent accidental clicks.
     """
-    import asyncio
     trading_mode = os.getenv("TRADING_MODE", "PAPER")
 
     try:
         from core.state_manager import get_open_positions
 
+        lock_entries("DASHBOARD_EMERGENCY_SQUAREOFF_REQUESTED")
         positions = get_open_positions()
         if not positions:
             return jsonify({
@@ -373,12 +434,13 @@ def api_emergency_squareoff():
                 "closed_count": 0,
                 "failed_count": 0,
                 "message": "No open positions to close",
+                "trading_state": get_trading_session_state(),
                 "timestamp": datetime.now().isoformat(),
                 "details": [],
             })
 
         from core.emergency_squareoff import emergency_square_off_all
-        result = asyncio.run(emergency_square_off_all())
+        result = emergency_square_off_all()
 
         return jsonify({
             "ok": True,
@@ -387,6 +449,7 @@ def api_emergency_squareoff():
             "failed_count": result["failed_count"],
             "timestamp": result["timestamp"],
             "details": result["details"],
+            "trading_state": get_trading_session_state(),
         })
     except ImportError as e:
         import logging
@@ -476,10 +539,16 @@ def api_adaptive():
                 "level": "warning",
                 "message": f"Low sample size: {set_name} has only {trade_count} trades",
             })
-        if trade_count >= 10 and stats.get("win_rate", 0) < 40:
+        policy = stats.get("execution_policy") or {}
+        if policy.get("suppressed"):
             alerts.append({
                 "level": "danger",
-                "message": f"{set_name} suppressed due to low win rate ({stats.get('win_rate', 0):.1f}%)",
+                "message": policy.get("reason") or f"{set_name} execution-suppressed",
+            })
+        elif trade_count >= 10 and stats.get("win_rate", 0) < 40:
+            alerts.append({
+                "level": "warning",
+                "message": f"{set_name} historically weak ({stats.get('win_rate', 0):.1f}%) but not execution-blocked without recent confirmation",
             })
 
     for symbol in symbols:

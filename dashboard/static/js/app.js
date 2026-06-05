@@ -6,7 +6,11 @@ function updateClock() {
   el.textContent = '⏰ ' + new Date().toLocaleTimeString('en-IN', { hour12: false });
 }
 
-const fmt = (v) => (v !== null && v !== undefined ? '₹' + parseFloat(v).toFixed(2) : '—');
+const fmt = (v) => {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  return Number.isFinite(n) ? '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
+};
 
 function pnlClass(v) {
   if (!v) return 'neutral';
@@ -72,7 +76,11 @@ async function fetchAndRender() {
     }
 
     set('stat-open', (data.positions || []).length);
-    set('stat-capital', '💵 Capital: ₹' + (data.capital || 10000).toLocaleString('en-IN'));
+    const cap = data.capital_snapshot || {};
+    set('cap-starting', fmt(cap.starting_capital));
+    set('cap-available', fmt(cap.available_cash));
+    set('cap-deployed', fmt(cap.deployed_capital));
+    set('cap-equity', fmt(cap.equity));
 
     const posBody = document.getElementById('positions-body');
     if (posBody) {
@@ -221,11 +229,12 @@ async function updateMarginStatus() {
     const marginDetails = document.getElementById('margin-details');
     
     if (marginPct) {
-      marginPct.textContent = data.margin_pct.toFixed(1) + '%';
+      const marginPctValue = Number(data.margin_pct || 0);
+      marginPct.textContent = marginPctValue.toFixed(1) + '%';
       // Color based on usage
-      if (data.margin_pct > 80) {
+      if (marginPctValue > 80) {
         marginPct.style.color = '#ff4444'; // Red - dangerous
-      } else if (data.margin_pct > 50) {
+      } else if (marginPctValue > 50) {
         marginPct.style.color = '#ffaa00'; // Orange - caution
       } else {
         marginPct.style.color = '#00dd88'; // Green - safe
@@ -233,12 +242,12 @@ async function updateMarginStatus() {
     }
     
     if (marginDetails) {
-      const leverage = data.margin_leverage.toFixed(1);
-      const deployed = data.deployed.toLocaleString('en-IN');
-      const remaining = data.remaining_margin.toLocaleString('en-IN');
+      const leverage = Number(data.margin_leverage || 1).toFixed(1);
+      const deployed = fmt(data.deployed);
+      const remaining = fmt(data.remaining_margin);
       const status = data.is_over_leveraged ? '⚠️ OVER-LEVERAGED' : '✅ Safe';
       
-      let txt = `${leverage}x Leverage | Deployed: ₹${deployed} | Remaining: ₹${remaining} | ${status}`;
+      let txt = `${leverage}x Leverage | Deployed: ${deployed} | Remaining: ${remaining} | ${status}`;
       if (data.forced_buy_enabled) {
         txt = '🔥 FORCED BUY ON | ' + txt;
       }
@@ -247,7 +256,7 @@ async function updateMarginStatus() {
       // Color the card border based on status
       if (data.is_over_leveraged) {
         marginCard.style.borderTop = '3px solid #ff4444';
-      } else if (data.margin_pct > 50) {
+      } else if (Number(data.margin_pct || 0) > 50) {
         marginCard.style.borderTop = '3px solid #ffaa00';
       } else {
         marginCard.style.borderTop = '3px solid #00dd88';
@@ -395,6 +404,38 @@ async function fetchAdaptiveData() {
 
 // Emergency Square Off All
 document.addEventListener('DOMContentLoaded', () => {
+  const resumeBtn = document.getElementById('resume-trading-btn');
+  if (resumeBtn) {
+    resumeBtn.addEventListener('click', async () => {
+      if (!confirm('Resume trading and allow new entries again?')) {
+        return;
+      }
+
+      resumeBtn.disabled = true;
+      resumeBtn.textContent = 'Resuming...';
+
+      try {
+        const res = await fetch('/api/trading-state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'resume' }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          alert('Trading resumed. New entries are enabled.');
+          fetchAndRender();
+        } else {
+          alert(`Error: ${data.error}`);
+        }
+      } catch (e) {
+        alert(`Network error: ${e.message}`);
+      } finally {
+        resumeBtn.disabled = false;
+        resumeBtn.textContent = '▶ Resume Trading';
+      }
+    });
+  }
+
   const btn = document.getElementById('squareoff-btn');
   if (btn) {
     btn.addEventListener('click', async () => {

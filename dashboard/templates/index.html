@@ -16,6 +16,7 @@
     <a href="/" class="nav-link active">Dashboard</a>
     <a href="/cognition" class="nav-link">🧠 Cognition Lab</a>
     <a href="/settings" class="nav-link">⚙️ Settings</a>
+    <button class="btn-resume" id="resume-trading-btn" title="Clear the flat lock and allow new entries">▶ Resume Trading</button>
     <button class="btn-emergency" id="squareoff-btn" title="Close all positions immediately">🚨 SQUARE OFF ALL</button>
     <span class="clock" id="clock">⏰ --:--:--</span>
     <span class="badge badge-paper" id="mode-badge">📋 PAPER</span>
@@ -42,7 +43,12 @@
   <div class="card stat-card">
     <div class="card-title">💼 Open Positions</div>
     <div class="card-value" id="stat-open">0</div>
-    <div class="card-sub" id="stat-capital">Capital: ₹10,000</div>
+    <div class="capital-lines" id="capital-breakdown">
+      <div><span>Starting</span><strong id="cap-starting">—</strong></div>
+      <div><span>Available</span><strong id="cap-available">—</strong></div>
+      <div><span>Deployed</span><strong id="cap-deployed">—</strong></div>
+      <div><span>Equity</span><strong id="cap-equity">—</strong></div>
+    </div>
   </div>
 
   <!-- 🔥 MARGIN STATUS WIDGET -->

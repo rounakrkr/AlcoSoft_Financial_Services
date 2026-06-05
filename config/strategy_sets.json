@@ -1,111 +1,246 @@
 {
-  "version": 1,
+  "version": 3,
+
+  "_legend": {
+    "condition_types": {
+      "EVENT": "Fires at a specific moment — tight, precise",
+      "STATE": "Can be true for hours — use only as filter, never alone",
+      "SEMI":  "Decays quickly — acceptable as secondary"
+    },
+    "rule": "Every set must have at least 1 EVENT condition as anchor"
+  },
+
   "buy_sets": [
+
     {
       "name": "BUY_RSI_MACD_REVERSAL",
       "priority": 10,
       "base_confidence": 72,
       "confidence_weight": 1.0,
-      "notes": "Oversold momentum recovery confirmed by a reversal candle.",
+      "notes": "Oversold momentum recovery confirmed by a bullish reversal candle. Classic intraday bottom reversal.",
+      "_conditions_audit": {
+        "rsi_macd_momentum":     "EVENT — RSI < 35 recently + MACD cross",
+        "bullish_reversal_candle": "EVENT — candle pattern"
+      },
       "conditions": [
         "rsi_macd_momentum",
         "bullish_reversal_candle"
       ]
     },
+
+    {
+      "name": "BUY_EMA_TREND_PULLBACK",
+      "priority": 20,
+      "base_confidence": 74,
+      "confidence_weight": 1.0,
+      "notes": "Buy the dip in an active uptrend. EMA9 > EMA21 confirms uptrend state, RSI recovering from a mild dip, bullish candle confirms the reversal point. Removed price_above_ema20 (redundant STATE) and replaced with candle EVENT anchor.",
+      "_conditions_audit": {
+        "ema_trending_up":        "STATE — filter only, EMA9 > EMA21",
+        "rsi_recovering":         "SEMI  — decays quickly",
+        "bullish_reversal_candle": "EVENT — anchor, prevents continuous firing"
+      },
+      "conditions": [
+        "ema_trending_up",
+        "rsi_recovering",
+        "bullish_reversal_candle"
+      ]
+    },
+
     {
       "name": "BUY_EMA_VOLUME_MOMENTUM",
-      "priority": 20,
+      "priority": 30,
       "base_confidence": 76,
       "confidence_weight": 1.05,
-      "notes": "Trend continuation after bullish EMA confirmation and strong participation.",
+      "notes": "EMA 9/21 crossover with strong volume participation. MACD positive confirms bullish regime — prevents buying a dead-cat bounce where MACD is still negative.",
+      "_conditions_audit": {
+        "ema_9_21_crossover": "EVENT — anchor",
+        "volume_spike":       "EVENT — anchor",
+        "macd_positive":      "STATE — regime filter only"
+      },
       "conditions": [
         "ema_9_21_crossover",
         "volume_spike",
-        "price_above_ema20"
+        "macd_positive"
       ]
     },
+
+    {
+      "name": "BUY_MACD_VWAP_SURGE",
+      "priority": 40,
+      "base_confidence": 73,
+      "confidence_weight": 1.0,
+      "notes": "MACD bullish regime + price above VWAP + volume surge + bullish candle. Added bullish_reversal_candle as EVENT anchor — without it 2 STATE conditions would fire continuously on any uptrending stock.",
+      "_conditions_audit": {
+        "macd_positive":          "STATE — regime filter",
+        "price_above_vwap":       "STATE — context filter",
+        "volume_spike":           "EVENT — anchor",
+        "bullish_reversal_candle": "EVENT — second anchor"
+      },
+      "conditions": [
+        "macd_positive",
+        "price_above_vwap",
+        "volume_spike",
+        "bullish_reversal_candle"
+      ]
+    },
+
     {
       "name": "BUY_BREAKOUT_CONFIRMATION",
-      "priority": 30,
-      "base_confidence": 74,
-      "confidence_weight": 1.05,
-      "notes": "Breakout candle with volume and price holding above short trend.",
+      "priority": 50,
+      "base_confidence": 72,
+      "confidence_weight": 1.0,
+      "notes": "4-gate fakeout filter. volume_breakout is a strong EVENT anchor. price_above_ema20, price_above_vwap, rsi_not_overbought are filters that eliminate false breakouts. Note: price_above_ema20 is slightly redundant (volume_breakout already checks SMA20) but kept as extra VWAP zone filter.",
+      "_conditions_audit": {
+        "volume_breakout":   "EVENT — primary anchor (vol spike + price broke prior high + above SMA20)",
+        "price_above_ema20": "STATE — filter (breakout must be in trend)",
+        "price_above_vwap":  "STATE — filter (must be in institutional zone)",
+        "rsi_not_overbought": "STATE — filter (RSI < 65 — not buying at exhaustion)"
+      },
       "conditions": [
         "volume_breakout",
-        "price_above_ema20"
+        "price_above_ema20",
+        "price_above_vwap",
+        "rsi_not_overbought"
       ]
     },
+
     {
       "name": "BUY_BOLLINGER_REVERSAL",
-      "priority": 40,
+      "priority": 60,
       "base_confidence": 70,
       "confidence_weight": 1.0,
-      "notes": "Mean-reversion bounce confirmed by bullish candle structure.",
+      "notes": "Mean-reversion bounce from lower Bollinger Band with bullish candle structure confirming the reversal. Works well in ranging intraday conditions.",
+      "_conditions_audit": {
+        "bollinger_band_bounce":  "EVENT — touched lower band + bounced + RSI < 45",
+        "bullish_reversal_candle": "EVENT — candle anchor"
+      },
       "conditions": [
         "bollinger_band_bounce",
         "bullish_reversal_candle"
       ]
     },
+
     {
       "name": "BUY_VWAP_REVERSAL",
-      "priority": 50,
+      "priority": 70,
       "base_confidence": 73,
       "confidence_weight": 1.0,
-      "notes": "Price reclaims VWAP while RSI recovers and candle structure turns bullish.",
+      "notes": "Price reclaims VWAP while RSI recovers and bullish candle structure appears. VWAP is the most important intraday reference — reclaim = trend resumption. bullish_reversal_candle is the EVENT anchor preventing noise.",
+      "_conditions_audit": {
+        "price_above_vwap":       "STATE — context filter",
+        "rsi_recovering":         "SEMI  — decays quickly",
+        "bullish_reversal_candle": "EVENT — anchor"
+      },
       "conditions": [
         "price_above_vwap",
         "rsi_recovering",
         "bullish_reversal_candle"
       ]
     }
+
   ],
+
   "sell_sets": [
+
     {
-      "name": "SELL_RSI_MACD_WEAKNESS",
+      "name": "SELL_EMA_MOMENTUM_LOSS",
       "priority": 10,
       "base_confidence": 70,
       "confidence_weight": 1.0,
-      "notes": "Overbought momentum rolls over with bearish confirmation.",
+      "notes": "Early exit. Price breaks below EMA20 (EVENT) and RSI confirms weakening momentum (SEMI). Fast, reliable, no candle dependency.",
+      "_conditions_audit": {
+        "ema20_breakdown": "EVENT — anchor (price crossed below EMA20 in lookback window)",
+        "rsi_weakening":   "SEMI  — confirms momentum loss"
+      },
       "conditions": [
-        "rsi_overbought",
-        "macd_bearish_cross",
-        "bearish_pattern"
+        "ema20_breakdown",
+        "rsi_weakening"
       ]
     },
+
     {
-      "name": "SELL_EMA_BREAKDOWN",
+      "name": "SELL_VWAP_RSI_REVERSAL",
       "priority": 20,
       "base_confidence": 70,
       "confidence_weight": 1.0,
-      "notes": "Price breaks below EMA20 and remains below short trend support.",
-      "conditions": [
-        "ema20_breakdown",
-        "price_below_ema20"
-      ]
-    },
-    {
-      "name": "SELL_VWAP_WEAKNESS",
-      "priority": 30,
-      "base_confidence": 70,
-      "confidence_weight": 1.0,
-      "notes": "Price loses VWAP while RSI weakens and bearish candle structure appears.",
+      "notes": "Price loses VWAP + RSI weakening + EMA breakdown. Added ema20_breakdown as EVENT anchor. Without it, price_below_vwap (STATE) + rsi_weakening (SEMI) would fire continuously in any afternoon downtrend.",
+      "_conditions_audit": {
+        "price_below_vwap": "STATE — context filter",
+        "rsi_weakening":    "SEMI  — momentum filter",
+        "ema20_breakdown":  "EVENT — anchor, prevents continuous firing"
+      },
       "conditions": [
         "price_below_vwap",
         "rsi_weakening",
-        "bearish_pattern"
+        "ema20_breakdown"
       ]
     },
+
     {
-      "name": "SELL_BREAKDOWN_CONFIRMATION",
-      "priority": 40,
+      "name": "SELL_MACD_EMA_WEAKNESS",
+      "priority": 30,
       "base_confidence": 72,
       "confidence_weight": 1.05,
-      "notes": "Support breakdown confirmed by volume and bearish candle action.",
+      "notes": "MACD bearish cross aligned with EMA20 breakdown. Both are EVENT conditions — this is the tightest, most reliable sell set. High conviction exit.",
+      "_conditions_audit": {
+        "macd_bearish_cross": "EVENT — anchor",
+        "ema20_breakdown":    "EVENT — anchor"
+      },
+      "conditions": [
+        "macd_bearish_cross",
+        "ema20_breakdown"
+      ]
+    },
+
+    {
+      "name": "SELL_EMA_CROSS_WEAKNESS",
+      "priority": 40,
+      "base_confidence": 71,
+      "confidence_weight": 1.0,
+      "notes": "EMA9 below EMA21 (STATE) + price below VWAP (STATE) + MACD bearish cross (EVENT). Critical fix: original had 2 pure STATE conditions — would fire every 5 seconds in a downtrend. macd_bearish_cross added as mandatory EVENT anchor.",
+      "_conditions_audit": {
+        "ema9_below_ema21":   "STATE — structural context (EMA9 < EMA21)",
+        "price_below_vwap":   "STATE — context filter",
+        "macd_bearish_cross": "EVENT — anchor, prevents continuous firing"
+      },
+      "conditions": [
+        "ema9_below_ema21",
+        "price_below_vwap",
+        "macd_bearish_cross"
+      ]
+    },
+
+    {
+      "name": "SELL_BREAKDOWN_CONFIRMED",
+      "priority": 50,
+      "base_confidence": 72,
+      "confidence_weight": 1.0,
+      "notes": "Support broken AND EMA confirms breakdown. Both are EVENT conditions. Reliable structural exit — not noise, not a fake dip.",
+      "_conditions_audit": {
+        "price_below_recent_support": "EVENT — anchor (below prior N-candle low)",
+        "ema20_breakdown":             "EVENT — anchor"
+      },
       "conditions": [
         "price_below_recent_support",
-        "volume_spike",
+        "ema20_breakdown"
+      ]
+    },
+
+    {
+      "name": "SELL_RSI_BEARISH_REVERSAL",
+      "priority": 60,
+      "base_confidence": 70,
+      "confidence_weight": 1.0,
+      "notes": "Overbought RSI (> 70) with a bearish candle pattern. Momentum exhaustion at the top. bearish_pattern is the EVENT anchor.",
+      "_conditions_audit": {
+        "rsi_overbought": "SEMI  — RSI > 70 in lookback window",
+        "bearish_pattern": "EVENT — anchor (bearish engulfing or shooting star)"
+      },
+      "conditions": [
+        "rsi_overbought",
         "bearish_pattern"
       ]
     }
+
   ]
 }

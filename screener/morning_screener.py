@@ -19,9 +19,12 @@ import os
 import signal
 import threading
 import asyncio
+import time
 from datetime import datetime
+from urllib.parse import quote
 import yfinance as yf
 import pandas as pd
+import requests
 import ta
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -32,6 +35,15 @@ from core.trading_settings import get as cfg
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+YAHOO_CHART_URL = "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
+YAHOO_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+}
+YAHOO_CACHE_TTL_SEC = 300
+YAHOO_FAILURE_COOLDOWN_SEC = 30
+_YAHOO_HISTORY_CACHE: dict[tuple[str, str, str], tuple[float, pd.DataFrame]] = {}
+_YAHOO_FAILED_UNTIL: dict[tuple[str, str, str], float] = {}
 
 # ── Stock Universe (Configurable) ────────────────────────────
 # Add or remove stocks here — screener auto-adjusts
@@ -260,6 +272,159 @@ def _score_all_stocks(summaries: list[dict]) -> list[dict]:
 #   DATA FETCHING
 # ════════════════════════════════════════════════════════════
 
+def _yahoo_chart_symbol(symbol: str) -> str:
+    symbol = str(symbol or "").strip().upper()
+    if symbol.startswith("^") or "." in symbol:
+        return symbol
+    return f"{symbol}.NS"
+
+
+def _empty_history_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+
+
+def _interval_seconds(interval: str | None, hist=None) -> int:
+    raw = str(interval or "").strip().lower()
+    try:
+        if raw.endswith("m"):
+            return max(60, int(raw[:-1]) * 60)
+        if raw.endswith("h"):
+            return max(60, int(raw[:-1]) * 3600)
+        if raw.endswith("d"):
+            return 86400
+    except ValueError:
+        pass
+
+    try:
+        if hist is not None and len(hist.index) >= 2:
+            seconds = int((hist.index[-1] - hist.index[-2]).total_seconds())
+            if seconds > 0:
+                return seconds
+    except Exception:
+        pass
+
+    return 300
+
+
+def _drop_incomplete_candle_if_present(hist: pd.DataFrame, interval: str | None = None) -> pd.DataFrame:
+    if hist is None or hist.empty:
+        return hist
+
+    last_time = hist.index[-1]
+    tz = getattr(last_time, "tzinfo", None)
+    now = pd.Timestamp.now(tz=tz) if tz is not None else pd.Timestamp.now()
+    interval_sec = _interval_seconds(interval, hist)
+
+    if interval_sec >= 86400:
+        market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+        if last_time.date() == now.date() and now < market_close:
+            logger.debug("Dropped incomplete daily Yahoo candle for screener: %s", last_time)
+            return hist.iloc[:-1]
+        return hist
+
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elapsed = int((now - day_start).total_seconds())
+    current_period_start = day_start + pd.Timedelta(seconds=(elapsed // interval_sec) * interval_sec)
+    if last_time >= current_period_start:
+        logger.debug("Dropped incomplete Yahoo candle for screener: %s", last_time)
+        return hist.iloc[:-1]
+
+    return hist
+
+
+def _fetch_yahoo_history(symbol: str, period: str, interval: str, timeout: float = 8.0) -> pd.DataFrame:
+    """
+    Fetch candles from Yahoo's chart endpoint without yfinance's crumb flow.
+
+    yfinance can poison the crumb as "Edge: Too Many Requests"; the chart endpoint
+    itself still returns valid OHLCV JSON without that crumb.
+    """
+    cache_key = (str(symbol or "").upper(), period, interval)
+    now_ts = time.time()
+    cached = _YAHOO_HISTORY_CACHE.get(cache_key)
+    if cached and now_ts - cached[0] < YAHOO_CACHE_TTL_SEC:
+        return cached[1].copy()
+
+    failed_until = _YAHOO_FAILED_UNTIL.get(cache_key, 0.0)
+    if failed_until > now_ts:
+        raise RuntimeError(f"Yahoo chart cooldown active for {symbol}")
+
+    yahoo_symbol = _yahoo_chart_symbol(symbol)
+    response = None
+    last_error = None
+    for attempt in range(3):
+        try:
+            response = requests.get(
+                YAHOO_CHART_URL.format(symbol=quote(yahoo_symbol, safe="")),
+                params={
+                    "range": period,
+                    "interval": interval,
+                    "includePrePost": "false",
+                    "events": "div,splits,capitalGains",
+                },
+                headers=YAHOO_HEADERS,
+                timeout=timeout,
+            )
+            if response.status_code == 429:
+                raise RuntimeError("Too Many Requests. Rate limited.")
+            response.raise_for_status()
+            break
+        except Exception as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.35 * (2 ** attempt))
+    else:
+        _YAHOO_FAILED_UNTIL[cache_key] = time.time() + YAHOO_FAILURE_COOLDOWN_SEC
+        raise RuntimeError(f"Yahoo chart request failed for {symbol}: {last_error}")
+
+    chart = response.json().get("chart", {})
+    error = chart.get("error")
+    if error:
+        raise RuntimeError(error.get("description") or error.get("code") or "Yahoo chart error")
+
+    results = chart.get("result") or []
+    if not results:
+        return _empty_history_frame()
+
+    result = results[0]
+    timestamps = result.get("timestamp") or []
+    quote_rows = ((result.get("indicators") or {}).get("quote") or [{}])
+    quote_data = quote_rows[0] if quote_rows else {}
+    if not timestamps or not quote_data:
+        return _empty_history_frame()
+
+    arrays = {
+        "open": quote_data.get("open") or [],
+        "high": quote_data.get("high") or [],
+        "low": quote_data.get("low") or [],
+        "close": quote_data.get("close") or [],
+        "volume": quote_data.get("volume") or [],
+    }
+    lengths = {"timestamp": len(timestamps), **{name: len(values) for name, values in arrays.items()}}
+    if any(length != len(timestamps) for length in lengths.values()):
+        raise RuntimeError(f"Yahoo chart length mismatch for {symbol}: {lengths}")
+
+    index = pd.to_datetime(timestamps, unit="s", utc=True)
+    exchange_tz = ((result.get("meta") or {}).get("exchangeTimezoneName") or "Asia/Kolkata")
+    index = index.tz_convert(exchange_tz)
+
+    frame = pd.DataFrame(
+        {
+            "Open": arrays["open"],
+            "High": arrays["high"],
+            "Low": arrays["low"],
+            "Close": arrays["close"],
+            "Volume": arrays["volume"],
+        },
+        index=index,
+    )
+    for column in ("Open", "High", "Low", "Close", "Volume"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = _drop_incomplete_candle_if_present(frame.dropna(subset=["Close"]), interval=interval)
+    _YAHOO_HISTORY_CACHE[cache_key] = (time.time(), frame.copy())
+    return frame
+
+
 def _fetch_all_summaries() -> list[dict]:
     """
     Fetches OHLCV + indicators for all NIFTY_50 stocks.
@@ -274,10 +439,8 @@ def _fetch_all_summaries() -> list[dict]:
 
     def _fetch_one(sym, result):
         try:
-            t = yf.Ticker(f"{sym}.NS")
-            hist = t.history(period="30d", interval="1d")
+            hist = _fetch_yahoo_history(sym, period="30d", interval="1d")
             result["hist"] = hist
-            result["ticker_obj"] = t
         except Exception as e:
             result["error"] = str(e)
 
@@ -372,8 +535,7 @@ def _get_market_bias() -> str:
     
     def fetch_nifty():
         try:
-            nifty  = yf.Ticker("^NSEI")
-            hist   = nifty.history(period="5d", interval="1d")
+            hist = _fetch_yahoo_history("^NSEI", period="5d", interval="1d", timeout=3.0)
             if hist.empty:
                 result_container["bias"] = "NEUTRAL"
                 return
@@ -409,8 +571,7 @@ def _get_stock_market_bias(symbol: str) -> str:
     
     def fetch_stock_bias():
         try:
-            ticker = yf.Ticker(f"{symbol}.NS")
-            hist = ticker.history(period="5d", interval="1d")
+            hist = _fetch_yahoo_history(symbol, period="5d", interval="1d", timeout=2.0)
             if hist.empty or len(hist) < 3:
                 result_container["bias"] = "NEUTRAL"
                 return

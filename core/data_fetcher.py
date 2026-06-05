@@ -193,6 +193,11 @@ def _process_tick(tick: dict):
 
     symbol = _token_to_symbol.get(token)
     if not symbol:
+        # 🚨 CRITICAL: If token mapping is missing, tick is lost!
+        logger.debug(
+            f"⚠️  TICK DROPPED: token={token} not in mapping. "
+            f"Known tokens: {list(_token_to_symbol.keys())[:5]}..."
+        )
         return
 
     _tick_counts[symbol] += 1
@@ -490,6 +495,9 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
     Converts stock symbols (e.g. 'RELIANCE') to Kotak instrument tokens.
     Caches results to avoid repeated API calls.
     Returns list of {"instrument_token": "...", "exchange_segment": "nse_cm"}
+    
+    🚨 CRITICAL: If a symbol fails to resolve, its ticks will be SILENTLY DROPPED.
+    All requested symbols MUST resolve successfully.
     """
     from core.kotak_client import get_client
     client = get_client()
@@ -507,6 +515,7 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
 
     tokens_list = []
     updated     = False
+    failed_symbols = []
 
     for symbol in symbols:
         if symbol in cached and _is_valid_equity_entry(symbol, cached[symbol]):
@@ -530,7 +539,11 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
                 # search_scrip returns a list — take the equity match
                 scrip = _find_equity_scrip(result, symbol)
                 if not scrip:
-                    logger.warning(f"Could not resolve token for {symbol}")
+                    logger.error(
+                        f"🚨 CRITICAL: Could not resolve token for {symbol} — "
+                        f"ticks for this symbol will be LOST during market!"
+                    )
+                    failed_symbols.append(symbol)
                     continue
 
                 token_raw = scrip.get("pSymbol") or scrip.get("token") or scrip.get("instrument_token")
@@ -539,6 +552,7 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
                     logger.warning(
                         f"{symbol}: non-EQ trading symbol {trading_sym} — skipping"
                     )
+                    failed_symbols.append(symbol)
                     continue
 
                 token_info = {
@@ -547,13 +561,17 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
                     "trading_symbol":   trading_sym,
                 }
                 logger.info(
-                    f"  {symbol} → token={token_info['instrument_token']} "
+                    f"  ✅ {symbol} → token={token_info['instrument_token']} "
                     f"| {trading_sym}"
                 )
                 cached[symbol] = token_info
                 updated = True
             except Exception as e:
-                logger.error(f"Token resolution failed for {symbol}: {e}")
+                logger.error(
+                    f"🚨 CRITICAL: Token resolution FAILED for {symbol}: {e} — "
+                    f"ticks will be LOST!"
+                )
+                failed_symbols.append(symbol)
                 continue
 
         tokens_list.append({
@@ -567,6 +585,12 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
         os.makedirs("data", exist_ok=True)
         atomic_write_json(TOKENS_CACHE_PATH, cached, label="instrument token cache", log=logger)
         logger.info("Instrument token cache updated.")
+
+    if failed_symbols:
+        logger.error(
+            f"🚨 RESOLUTION FAILED for {len(failed_symbols)} symbols: {failed_symbols} — "
+            f"Emergency squareoff will NOT be able to get prices for these!"
+        )
 
     return tokens_list
 

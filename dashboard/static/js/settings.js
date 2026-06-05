@@ -3,6 +3,7 @@
 const GROUP_LABELS = {
   risk: '💰 Risk & exits (SL / TSL / targets / Margin)',
   strategy: '⚡ Strategy signals',
+  strategy_sets: 'Strategy set toggles',
   screener: '🌅 Morning screener',
   market_data: '📡 Market data & candles',
   scheduling: '⏰ Scheduling',
@@ -11,6 +12,7 @@ const GROUP_LABELS = {
 const GROUP_DESCRIPTIONS = {
   risk: 'Trading risk controls including stop losses, targets, and margin settings.',
   strategy: 'Strategy-set mode, position limits, lookback, and loop timing used by the trading engine.',
+  strategy_sets: 'Choose which BUY and SELL strategy sets are allowed to run. OFF means that set will not be used.',
   screener: 'Morning stock selection and cognition candidate settings.',
   market_data: 'Market data refresh rates and websocket health thresholds.',
   scheduling: 'Timing for cognition scans and strategy loop execution.',

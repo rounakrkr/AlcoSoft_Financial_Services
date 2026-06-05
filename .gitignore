@@ -1,4 +1,5 @@
 .env
+.antigravityignore
 __pycache__/
 *.pyc
 data/

@@ -250,7 +250,7 @@ def _build_final_reflection_context(
     # Trade summary
     trade_lines = []
     for t in trades:
-        outcome = "WIN" if (t.get("pnl") or 0) > 0 else "LOSS"
+        outcome = "WIN" if (t.get("pnl") or 0) >= 0 else "LOSS"
         trade_lines.append(
             f"  {t['symbol']} | {t['status']} | Entry: ₹{t['entry_price']} | "
             f"Exit: ₹{t.get('exit_price', 'OPEN')} | P&L: ₹{t.get('pnl', 0):.2f} | {outcome}"
@@ -330,7 +330,7 @@ def _build_reflection_context(
     # Trade summary
     trade_lines = []
     for t in trades:
-        outcome = "WIN" if (t.get("pnl") or 0) > 0 else "LOSS"
+        outcome = "WIN" if (t.get("pnl") or 0) >= 0 else "LOSS"
         trade_lines.append(
             f"  {t['symbol']} | {t['status']} | "
             f"Entry: ₹{t['entry_price']} | "

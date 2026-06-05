@@ -491,8 +491,8 @@ def update_signal_stats(signal_name: str):
         
         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
         
-        winning_pnls = [pnl for pnl, _ in trades if pnl > 0]
-        losing_pnls = [abs(pnl) for pnl, _ in trades if pnl <= 0]
+        winning_pnls = [pnl for pnl, _ in trades if pnl >= 0]
+        losing_pnls = [abs(pnl) for pnl, _ in trades if pnl < 0]
         
         avg_profit = sum(winning_pnls) / len(winning_pnls) if winning_pnls else 0.0
         avg_loss = sum(losing_pnls) / len(losing_pnls) if losing_pnls else 0.0
@@ -731,6 +731,126 @@ def get_all_signal_stats() -> list[dict]:
     except Exception as e:
         logger.error(f"Failed to get all signal stats: {e}")
         return []
+
+
+def _stats_from_pnls(pnls: list[float]) -> dict:
+    total = len(pnls)
+    wins = sum(1 for pnl in pnls if pnl > 0)
+    losses = total - wins
+    win_rate = (wins / total * 100) if total else 0.0
+    return {
+        "total_trades": total,
+        "winning_trades": wins,
+        "losing_trades": losses,
+        "win_rate": round(win_rate, 2),
+    }
+
+
+def _trade_record_pnls(signal_name: str, since: datetime | None = None) -> list[float]:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    if since is None:
+        c.execute(
+            "SELECT pnl FROM trade_records WHERE signal_name = ? ORDER BY timestamp DESC",
+            (signal_name,),
+        )
+    else:
+        c.execute(
+            "SELECT pnl FROM trade_records WHERE signal_name = ? AND timestamp >= ? ORDER BY timestamp DESC",
+            (signal_name, since.strftime("%Y-%m-%d %H:%M:%S")),
+        )
+    rows = c.fetchall()
+    conn.close()
+    return [float(row[0] or 0.0) for row in rows]
+
+
+def get_signal_execution_policy(
+    signal_name: str,
+    min_trades: int = 10,
+    min_win_rate: float = 40.0,
+    rolling_days: int = 20,
+) -> dict:
+    """
+    First-class execution policy for strategy-set admission.
+    Uses current-session data first, then a recent rolling window. Lifetime
+    stats are reported for context but do not hard-block fresh sessions.
+    """
+    signal_name = str(signal_name or "").strip()
+    if not signal_name:
+        return {
+            "signal_name": signal_name,
+            "suppressed": False,
+            "reason": "No signal name",
+            "scope": "none",
+            "sample_size": 0,
+            "win_rate": 0.0,
+        }
+
+    try:
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        rolling_start = datetime.now() - timedelta(days=max(1, int(rolling_days)))
+
+        today_stats = _stats_from_pnls(_trade_record_pnls(signal_name, today_start))
+        rolling_stats = _stats_from_pnls(_trade_record_pnls(signal_name, rolling_start))
+        lifetime = get_signal_stats(signal_name) or {}
+
+        selected_scope = "insufficient_recent_sample"
+        selected = today_stats
+        if today_stats["total_trades"] >= min_trades:
+            selected_scope = "today"
+            selected = today_stats
+        elif rolling_stats["total_trades"] >= min_trades:
+            selected_scope = f"rolling_{rolling_days}d"
+            selected = rolling_stats
+        else:
+            selected = rolling_stats
+
+        suppressed = (
+            selected_scope != "insufficient_recent_sample"
+            and selected["total_trades"] >= min_trades
+            and selected["win_rate"] < min_win_rate
+        )
+
+        if suppressed:
+            reason = (
+                f"{signal_name} suppressed: {selected_scope} win rate "
+                f"{selected['win_rate']:.1f}% from {selected['total_trades']} trades "
+                f"is below {min_win_rate:.1f}%"
+            )
+        elif selected_scope == "insufficient_recent_sample":
+            reason = (
+                f"{signal_name} not execution-suppressed: only "
+                f"{selected['total_trades']} recent trades; need {min_trades}"
+            )
+        else:
+            reason = (
+                f"{signal_name} allowed: {selected_scope} win rate "
+                f"{selected['win_rate']:.1f}% from {selected['total_trades']} trades"
+            )
+
+        return {
+            "signal_name": signal_name,
+            "suppressed": suppressed,
+            "reason": reason,
+            "scope": selected_scope,
+            "sample_size": selected["total_trades"],
+            "win_rate": selected["win_rate"],
+            "min_trades": min_trades,
+            "min_win_rate": min_win_rate,
+            "today": today_stats,
+            "rolling": rolling_stats,
+            "lifetime": lifetime,
+        }
+    except Exception as e:
+        logger.error(f"Failed to get signal execution policy: {e}")
+        return {
+            "signal_name": signal_name,
+            "suppressed": False,
+            "reason": f"Policy unavailable: {e}",
+            "scope": "error",
+            "sample_size": 0,
+            "win_rate": 0.0,
+        }
 
 
 def get_time_window_stats(time_window: str) -> dict | None:

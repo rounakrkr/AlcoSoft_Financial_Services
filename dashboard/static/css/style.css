@@ -49,7 +49,7 @@ header {
   gap: 0.6rem;
   font-weight: 700;
   font-size: 1.2rem;
-  letter-spacing: -0.3px;
+  letter-spacing: 0;
 }
 
 .logo span { color: var(--accent); }
@@ -79,7 +79,7 @@ header {
   border-radius: 20px;
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -114,7 +114,7 @@ main {
   font-size: 0.72rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   color: var(--text2);
   margin-bottom: 0.8rem;
   display: flex;
@@ -125,7 +125,7 @@ main {
 .card-value {
   font-size: 2rem;
   font-weight: 700;
-  letter-spacing: -1px;
+  letter-spacing: 0;
   line-height: 1;
 }
 
@@ -141,6 +141,28 @@ main {
 .trades-card    { grid-column: span 7; }
 .agent-card     { grid-column: span 5; }
 .reflection-card{ grid-column: span 12; }
+
+.capital-lines {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.25rem;
+  margin-top: 0.65rem;
+  font-size: 0.76rem;
+}
+
+.capital-lines div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--text2);
+}
+
+.capital-lines strong {
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  text-align: right;
+}
 
 .table-wrap {
   overflow-x: auto;
@@ -163,7 +185,7 @@ main {
   font-weight: 600;
   font-size: 0.7rem;
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
@@ -245,7 +267,7 @@ main {
   border-radius: 20px;
   font-size: 0.68rem;
   font-weight: 600;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 .status-closed  { background: rgba(23, 168, 101, 0.12); color: var(--green); }
@@ -321,7 +343,7 @@ main {
   font-size: 0.68rem;
   color: var(--text2);
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0;
   margin-bottom: 0.4rem;
   font-weight: 400;   /* unbold */
 }
@@ -335,7 +357,7 @@ main {
 .grade-a, .grade-b, .grade-c, .grade-d {
   font-size: 2.5rem;      /* bada kiya */
   font-weight: 600;       /* semi-bold, thoda strong */
-  letter-spacing: normal;
+  letter-spacing: 0;
 }
 .grade-a { color: var(--green); }
 .grade-b { color: #4fc3f7; }
@@ -511,6 +533,27 @@ main {
   color: #fff;
 }
 .btn-primary:hover { background: var(--accent2); }
+
+.btn-resume {
+  background: #17a865;
+  color: #fff;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-resume:hover {
+  background: #108650;
+  transform: scale(1.03);
+}
+
+.btn-resume:active {
+  transform: scale(0.98);
+}
 
 .btn-emergency {
   background: #e03660;

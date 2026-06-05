@@ -35,6 +35,7 @@ DEFAULTS: dict = {
         "paper_capital": 10000,
         "allow_margin": False,
         "forced_buy_margin": False,
+        "adaptive_safety_blocks_execution": False,
         "margin_leverage": 2.0,
         "position_size_margin": 0.75,
     },
@@ -42,7 +43,8 @@ DEFAULTS: dict = {
         "strategy_type": "INTRADAY",
         "max_open_positions": 2,
         "min_confidence": 70,
-        "signal_lookback_candles": 3,
+        "buy_signal_lookback_candles": 3,
+        "sell_signal_lookback_candles": 3,
         "min_ws_candles_for_patterns": 2,
         "loop_interval_sec": 5,
     },
@@ -58,6 +60,7 @@ DEFAULTS: dict = {
     "scheduling": {
         "cognition_cycle_interval_minutes": 30,
     },
+    "strategy_sets": {},
     "adaptive": {
         "last_updated": None,
         "strategy": {
@@ -70,7 +73,7 @@ DEFAULTS: dict = {
 }
 
 # UI schema for dashboard forms
-FIELD_SCHEMA: list[dict] = [
+BASE_FIELD_SCHEMA: list[dict] = [
     {"section": "risk", "key": "stop_loss_percent", "label": "Stop loss (%)", "type": "percent", "min": 0.1, "max": 10, "step": 0.1, "hint": "Hard SL distance below entry (e.g. 1 = 1%)"},
     {"section": "risk", "key": "trailing_sl_percent", "label": "Trailing SL (%)", "type": "percent", "min": 0.1, "max": 5, "step": 0.1, "hint": "Trail distance from peak price"},
     {"section": "risk", "key": "target_rr_ratio", "label": "Profit target (R:R)", "type": "float", "min": 1, "max": 5, "step": 0.1, "hint": "Target = risk × this ratio"},
@@ -80,11 +83,13 @@ FIELD_SCHEMA: list[dict] = [
     {"section": "risk", "key": "paper_capital", "label": "Paper capital (₹)", "type": "int", "min": 1000, "max": 10000000, "step": 1000, "hint": "Total bankroll available for trading (used for position sizing)"},
     {"section": "risk", "key": "allow_margin", "label": "🔴 Allow margin", "type": "bool", "hint": "⚠️ Turn this ON to use broker margin. Turn it OFF to trade with real capital only (recommended for safe mode)."},
     {"section": "risk", "key": "forced_buy_margin", "label": "🔥 Force buy with margin", "type": "bool", "hint": "⚠️ AGGRESSIVE: If enabled + Allow margin ON, buys maximum with 100% margin even if risk calc says 0."},
+    {"section": "risk", "key": "adaptive_safety_blocks_execution", "label": "Adaptive safety blocks execution", "type": "bool", "hint": "ON lets adaptive safety suppress flagged strategy sets. OFF keeps alerts visible only, without blocking BUY/SELL execution."},
     {"section": "risk", "key": "margin_leverage", "label": "Margin leverage / buying power", "type": "float", "min": 1.0, "max": 5.0, "step": 0.5, "hint": "Choose how much extra buying power to unlock. 2.0 = 2x capital, 3.0 = 3x capital. Values above 5.0 are rejected."},
     {"section": "risk", "key": "position_size_margin", "label": "Margin position size (%)", "type": "percent", "min": 10, "max": 100, "step": 5, "hint": "Choose what percentage of the margin buying power is used per trade. 100% uses all available margin power. Values above 100% are rejected."},
     {"section": "strategy", "key": "max_open_positions", "label": "Max open positions", "type": "int", "min": 1, "max": 10, "step": 1, "hint": "Max simultaneous open positions (affects capital allocation)."},
     {"section": "strategy", "key": "min_confidence", "label": "Min AI confidence", "type": "int", "min": 0, "max": 100, "step": 5, "hint": "Minimum confidence (%) required for AI agent picks."},
-    {"section": "strategy", "key": "signal_lookback_candles", "label": "Signal lookback (candles)", "type": "int", "min": 1, "max": 10, "step": 1, "hint": "How many past candles to scan for patterns"},
+    {"section": "strategy", "key": "buy_signal_lookback_candles", "label": "BUY signal lookback (candles)", "type": "int", "min": 1, "max": 10, "step": 1, "hint": "How many past candles to scan for BUY patterns (bullish reversals, breakouts)"},
+    {"section": "strategy", "key": "sell_signal_lookback_candles", "label": "SELL signal lookback (candles)", "type": "int", "min": 1, "max": 10, "step": 1, "hint": "How many past candles to scan for SELL patterns (bearish reversals, breakdowns)"},
     {"section": "strategy", "key": "min_ws_candles_for_patterns", "label": "Min live WS candles (patterns)", "type": "int", "min": 1, "max": 10, "step": 1, "hint": "Minimum live websocket candles required to detect patterns."},
     {"section": "strategy", "key": "loop_interval_sec", "label": "Strategy loop interval (sec)", "type": "int", "min": 1, "max": 60, "step": 1, "hint": "Seconds between each strategy loop iteration."},
     {"section": "screener", "key": "screener_total_stocks", "label": "Screener: total stocks", "type": "int", "min": 5, "max": 50, "step": 1, "hint": "Total number of stocks the screener scans each run."},
@@ -94,6 +99,35 @@ FIELD_SCHEMA: list[dict] = [
     {"section": "market_data", "key": "scan_log_interval_sec", "label": "Full scan log interval (sec)", "type": "int", "min": 30, "max": 600, "step": 10, "hint": "Seconds between writing full scan logs."},
     {"section": "scheduling", "key": "cognition_cycle_interval_minutes", "label": "Cognition cycle interval (min)", "type": "int", "min": 5, "max": 120, "step": 5, "hint": "Minutes between cognition cycles."},
 ]
+
+
+def _strategy_set_fields() -> list[dict]:
+    try:
+        from core.strategy_sets import load_strategy_sets
+
+        config = load_strategy_sets()
+        set_defs = list(config.buy_sets) + list(config.sell_sets)
+    except Exception as exc:
+        logger.warning("Could not build strategy set settings: %s", exc)
+        return []
+
+    return [
+        {
+            "section": "strategy_sets",
+            "key": set_def.name,
+            "label": set_def.name,
+            "type": "bool",
+            "hint": "ON allows this strategy set to trigger normally. OFF disables this set completely.",
+        }
+        for set_def in set_defs
+    ]
+
+
+def get_field_schema() -> list[dict]:
+    return BASE_FIELD_SCHEMA + _strategy_set_fields()
+
+
+FIELD_SCHEMA: list[dict] = get_field_schema()
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -138,6 +172,10 @@ def load_settings(force: bool = False) -> dict:
             "loaded_at": datetime.now().isoformat(),
             "path": path,
         }
+        data.setdefault("strategy_sets", {})
+        for field in _strategy_set_fields():
+            data["strategy_sets"].setdefault(field["key"], True)
+
         _cache = data
         _mtime = mtime
         return _cache
@@ -182,7 +220,7 @@ def validate_updates(updates: dict) -> tuple[dict, list[str]]:
     errors: list[str] = []
     cleaned: dict = {}
 
-    field_map = {(f["section"], f["key"]): f for f in FIELD_SCHEMA}
+    field_map = {(f["section"], f["key"]): f for f in get_field_schema()}
 
     for section, values in updates.items():
         if section.startswith("_") or not isinstance(values, dict):

@@ -22,6 +22,10 @@ from core.state_manager import (
     save_open_position, close_position, get_open_positions,
     update_trailing_sl, update_sl_order_id,
     get_today_gross_pnl,
+    entries_are_enabled,
+    lock_entries,
+    mark_liquidating,
+    mark_position_reconciliation_pending,
 )
 from core.audit_logger import (
     audit_order_placed, audit_position_closed, audit_system_error,
@@ -69,6 +73,48 @@ _config_warnings = []
 
 def _is_risk_reducing_sell(reason: str) -> bool:
     return str(reason or "").strip().upper() in RISK_REDUCING_SELL_REASONS
+
+
+def _extract_broker_fill_price(row: dict | None) -> float:
+    if not isinstance(row, dict):
+        return 0.0
+    for key in (
+        "avgPrc",
+        "avgPrice",
+        "averagePrice",
+        "average_price",
+        "trdPrice",
+        "tradedPrice",
+        "fillPrice",
+        "price",
+        "prc",
+    ):
+        price = safe_float(row.get(key), 0.0)
+        if price > 0:
+            return price
+    return 0.0
+
+
+def _resolve_liquidation_price(
+    position: dict,
+    live_prices: dict[str, float] | None,
+) -> tuple[float, str]:
+    symbol = str(position.get("symbol", "")).strip().upper()
+    current = safe_float((live_prices or {}).get(symbol), 0.0)
+    if current > 0:
+        return current, "ws_ltp"
+
+    try:
+        from core.data_fetcher import get_latest_tick
+        tick = get_latest_tick(symbol)
+        if tick:
+            tick_price = safe_float(tick.get("ltp"), 0.0)
+            if tick_price > 0:
+                return tick_price, "latest_tick"
+    except Exception:
+        logger.debug("Latest tick lookup failed during liquidation for %s", symbol, exc_info=True)
+
+    return 0.0, "missing_quote"
 
 
 def validate_allocation_config() -> list:
@@ -745,6 +791,21 @@ def place_buy_order(
     Prevents cascading failures from bad tokens.
     """
     symbol = str(symbol or "").strip().upper()
+    if not entries_are_enabled():
+        state = {}
+        try:
+            from core.state_manager import get_trading_session_state
+            state = get_trading_session_state()
+        except Exception:
+            pass
+        logger.warning(
+            "BUY rejected for %s: entries disabled by session state %s (%s)",
+            symbol,
+            state.get("state", "UNKNOWN"),
+            state.get("reason", ""),
+        )
+        return {}
+
     confidence_value = max(0.0, min(100.0, safe_float(confidence, 0.0)))
     min_confidence = max(0.0, min(100.0, safe_float(cfg("strategy", "min_confidence", 70), 70)))
     if confidence_value < min_confidence:
@@ -973,6 +1034,7 @@ def place_sell_order(
     exit_price: float,
     reason:     str = "SIGNAL",
     product:    str = "MIS",
+    exit_price_source: str = "ws_ltp",
 ) -> bool:
     """Place SELL. Risk-reducing exits bypass an open order circuit."""
     breaker = get_breaker("order")
@@ -998,6 +1060,7 @@ def place_sell_order(
                     exit_price=exit_price,
                     reason=reason,
                     product=product,
+                    exit_price_source=exit_price_source,
                 )
             return breaker.call(
                 _place_sell_order_impl,
@@ -1005,6 +1068,7 @@ def place_sell_order(
                 exit_price=exit_price,
                 reason=reason,
                 product=product,
+                exit_price_source=exit_price_source,
                 default=False,
             )
     except OrderExecutionError as e:
@@ -1017,6 +1081,7 @@ def _place_sell_order_impl(
     exit_price: float,
     reason:     str = "SIGNAL",
     product:    str = "MIS",
+    exit_price_source: str = "ws_ltp",
 ) -> bool:
 
     symbol = str(symbol or "").strip().upper()
@@ -1039,6 +1104,8 @@ def _place_sell_order_impl(
     # ← FIXED: use stored trading_symbol, not raw ticker
     trading_symbol = position.get("trading_symbol") or symbol
     success        = True
+    final_exit_price = exit_price
+    final_exit_price_source = str(exit_price_source or "unknown")
 
     if TRADING_MODE == "PAPER":
         logger.info(
@@ -1076,10 +1143,40 @@ def _place_sell_order_impl(
             )
             raise OrderExecutionError(f"SELL not verified for {symbol}")
 
+        try:
+            from core.order_verifier import fetch_kotak_order_row
+            broker_row = fetch_kotak_order_row(order_id)
+            broker_fill = _extract_broker_fill_price(broker_row)
+            if broker_fill > 0:
+                final_exit_price = broker_fill
+                final_exit_price_source = "broker_fill"
+            else:
+                logger.warning(
+                    "Broker SELL verified for %s but fill price unavailable; "
+                    "recording requested quote %s from %s for reconciliation",
+                    symbol,
+                    exit_price,
+                    final_exit_price_source,
+                )
+                final_exit_price_source = f"{final_exit_price_source}:broker_fill_missing"
+        except Exception:
+            logger.warning("Could not fetch broker fill price for %s", symbol, exc_info=True)
+            final_exit_price_source = f"{final_exit_price_source}:broker_fill_lookup_failed"
+
     if success:
         entry = safe_float(position.get("entry_price"), 0.0)
-        pnl = (exit_price - entry) * quantity if entry else None
-        close_position(symbol, exit_price, reason)
+        pnl = (final_exit_price - entry) * quantity if entry else None
+        reconciliation_status = None
+        if "broker_fill_missing" in final_exit_price_source or "broker_fill_lookup_failed" in final_exit_price_source:
+            reconciliation_status = "RECONCILIATION_PENDING"
+
+        close_position(
+            symbol,
+            final_exit_price,
+            reason,
+            exit_price_source=final_exit_price_source,
+            reconciliation_status=reconciliation_status,
+        )
         
         # ── Record trade outcome for reflection statistics ────
         try:
@@ -1089,8 +1186,8 @@ def _place_sell_order_impl(
             confidence = position.get("confidence", 0)  # Now contains adaptive-adjusted confidence from signal
             
             # Calculate drawdown if available (estimate from position tracking)
-            max_price = safe_float(position.get("max_price_during_hold"), exit_price)
-            drawdown = max(0, (max_price - exit_price) / exit_price * 100) if exit_price > 0 else 0
+            max_price = safe_float(position.get("max_price_during_hold"), final_exit_price)
+            drawdown = max(0, (max_price - final_exit_price) / final_exit_price * 100) if final_exit_price > 0 else 0
             
             # Get current time window for statistics
             now = datetime.now().time()
@@ -1115,7 +1212,7 @@ def _place_sell_order_impl(
                 signal_name=strategy_context,
                 symbol=symbol,
                 entry_price=entry,
-                exit_price=exit_price,
+                exit_price=final_exit_price,
                 pnl=pnl,
                 confidence=confidence,
                 time_window=time_window,
@@ -1129,7 +1226,7 @@ def _place_sell_order_impl(
         
         try:
             from core.alerts import alert_sell
-            alert_sell(symbol, quantity, exit_price, reason, pnl)
+            alert_sell(symbol, quantity, final_exit_price, reason, pnl)
         except Exception:
             pass
         if TRADING_MODE == "LIVE":
@@ -1342,6 +1439,51 @@ def get_margin_status() -> dict:
         'remaining_margin': remaining_margin,
         'is_over_leveraged': is_over_leveraged,
     }
+
+
+def get_capital_snapshot() -> dict:
+    """
+    Canonical capital breakdown for dashboard/API display.
+
+    starting_capital is the configured paper bankroll in PAPER mode and the
+    broker-reported cash base in LIVE mode. available_cash is cash/buying power
+    available before margin expansion, not total equity.
+    """
+    margin = get_margin_status()
+    valuation = {
+        "entry_position_value": safe_float(margin.get("entry_position_value"), 0.0),
+        "current_position_value": safe_float(margin.get("current_position_value"), 0.0),
+        "unrealized_pnl": safe_float(margin.get("unrealized_pnl"), 0.0),
+    }
+    closed_pnl = safe_float(get_today_gross_pnl(), 0.0)
+
+    if TRADING_MODE == "PAPER":
+        starting_capital = max(0.0, safe_float(cfg("risk", "paper_capital", 10000), 10000.0))
+        available_cash = max(0.0, starting_capital - valuation["entry_position_value"] + closed_pnl)
+    else:
+        starting_capital = max(0.0, safe_float(margin.get("real_capital"), 0.0))
+        available_cash = max(0.0, safe_float(_get_available_capital(), 0.0))
+
+    equity = starting_capital + closed_pnl + valuation["unrealized_pnl"]
+    total_buying_power = safe_float(margin.get("total_available_with_margin"), starting_capital)
+    remaining_buying_power = max(0.0, total_buying_power - valuation["entry_position_value"])
+
+    return {
+        "mode": TRADING_MODE,
+        "starting_capital": round(starting_capital, 2),
+        "available_cash": round(available_cash, 2),
+        "deployed_capital": round(valuation["entry_position_value"], 2),
+        "current_position_value": round(valuation["current_position_value"], 2),
+        "closed_pnl": round(closed_pnl, 2),
+        "unrealized_pnl": round(valuation["unrealized_pnl"], 2),
+        "equity": round(equity, 2),
+        "total_buying_power": round(total_buying_power, 2),
+        "remaining_buying_power": round(remaining_buying_power, 2),
+        "margin_enabled": bool(cfg("risk", "allow_margin", False)),
+        "margin_leverage": safe_float(margin.get("margin_leverage"), 1.0),
+    }
+
+
 def update_trailing_stop_losses(live_prices: dict[str, float]):
     """
     Moves SL up as price rises. Never moves SL down.
@@ -1411,7 +1553,7 @@ def check_max_daily_loss() -> bool:
     return False
  
 
-def squareoff_all_intraday(live_prices: dict[str, float]):
+def squareoff_all_intraday(live_prices: dict[str, float] | None = None):
     """Force-closes all MIS positions at 3:15 PM. Runs only once."""
     global _squareoff_done
 
@@ -1421,9 +1563,11 @@ def squareoff_all_intraday(live_prices: dict[str, float]):
     if datetime.now().time() < INTRADAY_SQUAREOFF:
         return
 
+    mark_liquidating("EOD_SQUAREOFF_STARTED")
     open_positions = get_open_positions()
     if not open_positions:
         _squareoff_done = True
+        lock_entries("EOD_SQUAREOFF_NO_OPEN_POSITIONS")
         return
 
     logger.warning(
@@ -1433,15 +1577,23 @@ def squareoff_all_intraday(live_prices: dict[str, float]):
     failures = []
     for position in open_positions:
         symbol  = position["symbol"]
-        current = safe_float(live_prices.get(symbol), 0.0)
+        current, price_source = _resolve_liquidation_price(position, live_prices)
         if current <= 0:
-            current = safe_float(position.get("entry_price"), 0.0)
+            mark_position_reconciliation_pending(
+                symbol,
+                "SQUAREOFF_MISSING_EXIT_QUOTE",
+                "No live quote available; sell order was not sent",
+                exit_price_source=price_source,
+            )
             logger.warning(
-                "Squareoff using entry-price fallback for %s because live tick is missing",
+                "Squareoff blocked for %s because live exit quote is missing; "
+                "position left open and marked RECONCILIATION_PENDING",
                 symbol,
             )
+            failures.append(symbol)
+            continue
 
-        if current <= 0 or not place_sell_order(symbol, current, "SQUAREOFF"):
+        if not place_sell_order(symbol, current, "SQUAREOFF", exit_price_source=price_source):
             failures.append(symbol)
 
     remaining = get_open_positions()
@@ -1455,6 +1607,7 @@ def squareoff_all_intraday(live_prices: dict[str, float]):
         return
 
     _squareoff_done = True
+    lock_entries("EOD_SQUAREOFF_COMPLETE")
 
 
 def get_portfolio_snapshot() -> dict:

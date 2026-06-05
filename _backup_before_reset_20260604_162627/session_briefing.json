@@ -1,0 +1,113 @@
+{
+  "generated_at": "2026-06-04T08:57:11.121799",
+  "session_type": "MORNING_SCREENER",
+  "market_bias": "NEUTRAL",
+  "approved_stocks": [
+    {
+      "ticker": "MARUTI",
+      "trading_symbol": "MARUTI-EQ",
+      "direction": "BUY_ONLY",
+      "confidence": 88,
+      "entry_price": 0.0,
+      "stop_loss": 0.0,
+      "execution_strategy": "TBD",
+      "reason": "Catalyst: Auto sector demand remains resilient with rising May sales despite higher fuel prices | Tech: RSI at 45.2 (oversold recovery zone) + strong volume at 1.57x | Risk: High raw material inputs",
+      "math_score": 70,
+      "math_score_raw": 7,
+      "market_bias": "BULLISH"
+    },
+    {
+      "ticker": "SUNPHARMA",
+      "trading_symbol": "SUNPHARMA-EQ",
+      "direction": "BUY_ONLY",
+      "confidence": 90,
+      "entry_price": 0.0,
+      "stop_loss": 0.0,
+      "execution_strategy": "TBD",
+      "reason": "Catalyst: Beats Q4 profit estimates driven by strong global demand for specialty drugs | Tech: RSI in recovery zone at 43.4 + elevated volume at 1.5x | Risk: Regulatory compliance issues at manufacturing facilities",
+      "math_score": 70,
+      "math_score_raw": 7,
+      "market_bias": "BEARISH"
+    },
+    {
+      "ticker": "DIVISLAB",
+      "trading_symbol": "DIVISLAB-EQ",
+      "direction": "BUY_ONLY",
+      "confidence": 87,
+      "entry_price": 0.0,
+      "stop_loss": 0.0,
+      "execution_strategy": "TBD",
+      "reason": "Catalyst: Strong operational performance in Q4 FY26 earnings points to API recovery | Tech: RSI at 43.5 + volume building up at 1.56x | Risk: Margin pressure from competitive pricing",
+      "math_score": 70,
+      "math_score_raw": 7,
+      "market_bias": "NEUTRAL"
+    },
+    {
+      "ticker": "RELIANCE",
+      "trading_symbol": "RELIANCE-EQ",
+      "direction": "BUY_ONLY",
+      "confidence": 89,
+      "entry_price": 0.0,
+      "stop_loss": 0.0,
+      "execution_strategy": "TBD",
+      "reason": "Catalyst: Supreme Court relief in legacy 2007 securities fraud case removes a major legal overhang | Tech: Oversold RSI at 35.0 + volume building at 1.24x | Risk: Fluctuations in global refining margins",
+      "math_score": 50,
+      "math_score_raw": 5,
+      "market_bias": "BEARISH"
+    },
+    {
+      "ticker": "BAJFINANCE",
+      "trading_symbol": "BAJFINANCE-EQ",
+      "direction": "BUY_ONLY",
+      "confidence": 86,
+      "entry_price": 0.0,
+      "stop_loss": 0.0,
+      "execution_strategy": "TBD",
+      "reason": "Catalyst: Declining yields enable NBFCs to plan massive debt sales, lowering borrowing costs | Tech: RSI at 33.5 with significant volume interest at 1.59x | Risk: Intense competition in the unsecured lending space",
+      "math_score": 60,
+      "math_score_raw": 6,
+      "market_bias": "BEARISH"
+    },
+    {
+      "ticker": "SBIN",
+      "trading_symbol": "SBIN-EQ",
+      "direction": "BUY_ONLY",
+      "confidence": 83,
+      "entry_price": 0.0,
+      "stop_loss": 0.0,
+      "execution_strategy": "TBD",
+      "reason": "Catalyst: Overall positive credit growth momentum in public banking space | Tech: Strong technical recovery with RSI at 39.5 and volume at 1.49x | Risk: Margin pressure due to high deposit costs",
+      "math_score": 60,
+      "math_score_raw": 6,
+      "market_bias": "BULLISH"
+    },
+    {
+      "ticker": "AXISBANK",
+      "trading_symbol": "AXISBANK-EQ",
+      "direction": "BUY_ONLY",
+      "confidence": 81,
+      "entry_price": 0.0,
+      "stop_loss": 0.0,
+      "execution_strategy": "TBD",
+      "reason": "Catalyst: AI-driven cost optimizations and headcount efficiencies improve operating margins | Tech: RSI at 39.2 with volume building up at 1.22x | Risk: Asset quality changes in retail portfolios",
+      "math_score": 50,
+      "math_score_raw": 5,
+      "market_bias": "NEUTRAL"
+    },
+    {
+      "ticker": "ULTRACEMCO",
+      "trading_symbol": "ULTRACEMCO-EQ",
+      "direction": "BUY_ONLY",
+      "confidence": 80,
+      "entry_price": 0.0,
+      "stop_loss": 0.0,
+      "execution_strategy": "TBD",
+      "reason": "Catalyst: Grasim's narrowed loss highlights strengthening of core cement business operations | Tech: Deep oversold zone with RSI at 31.2 + volume rising at 1.16x | Risk: High logistics and energy costs",
+      "math_score": 40,
+      "math_score_raw": 4,
+      "market_bias": "BEARISH"
+    }
+  ],
+  "watchlist": [],
+  "avoid_list": []
+}

@@ -176,7 +176,7 @@ def init_db():
         ))
     
     # Calculate stats
-    win_count = sum(1 for t in CLOSED_TRADES if t["pnl"] > 0)
+    win_count = sum(1 for t in CLOSED_TRADES if t["pnl"] >= 0)
     loss_count = sum(1 for t in CLOSED_TRADES if t["pnl"] < 0)
     total_pnl = sum(t["pnl"] for t in CLOSED_TRADES)
     
@@ -210,7 +210,7 @@ def update_json_files():
         "status": "CLOSED",
         "pnl": t["pnl"],
         "pnl_percent": t["pnl_percent"],
-        "reason": "Target hit" if t["pnl"] > 0 else "Stop loss hit"
+        "reason": "Target hit" if t["pnl"] >= 0 else "Stop loss hit"
     } for t in CLOSED_TRADES]
     
     with open("data/trades_history.json", "w") as f:

@@ -23,13 +23,14 @@ import logging
 import math
 import os
 import pandas as pd
+import requests
 import ta
 import time
-import yfinance as yf
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
 from typing import Callable
+from urllib.parse import quote
 
 from core.data_fetcher import (
     get_latest_tick,
@@ -45,10 +46,14 @@ from core.order_executor import (
     squareoff_all_intraday,
     check_max_daily_loss,
 )
-from core.state_manager import load_briefing, get_open_positions
+from core.state_manager import (
+    load_briefing,
+    get_open_positions,
+    entries_are_enabled,
+    get_trading_session_state,
+)
 from core.trading_settings import get as cfg, get_section
 from core.safe_io import atomic_write_json, safe_float, safe_int
-from core.yfinance_tracer import ticker_history_with_retry_traced, should_retry_on_error
 from core.strategy_sets import (
     StrategySetDefinition,
     load_strategy_sets,
@@ -64,7 +69,9 @@ LOOP_INTERVAL         = 5
 MAX_POSITIONS         = 2
 MIN_CONFIDENCE        = 70
 MATH_RISK_PER_TRADE   = 0.05
-LOOKBACK              = 3
+LOOKBACK              = 3  # Legacy fallback
+LOOKBACK_BUY          = 3  # Lookback for BUY pattern detection
+LOOKBACK_SELL         = 3  # Lookback for SELL pattern detection
 MIN_WS_CANDLES_FOR_PATTERNS = 2
 SCAN_LOG_INTERVAL     = 90
 
@@ -74,22 +81,26 @@ FAILED_ORDER_COOLDOWN_SEC = 300
 _yfinance_cache: dict[str, list] = {}
 _yfinance_failed_until: dict[str, float] = {}
 _yfinance_failure_reason: dict[str, str] = {}
-YFINANCE_FAILURE_COOLDOWN_SEC = 3600
+YFINANCE_FAILURE_COOLDOWN_SEC = 300
 _briefing_cache: dict = None
 _briefing_cache_time: float = 0.0
 BRIEFING_CACHE_SECONDS = 60  # Reload from disk every 60 seconds
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+YAHOO_CHART_URL = "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
+YAHOO_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+}
 
 
 def _get_briefing_cached():
     """Get briefing from cache, reload from disk every 60 seconds max.
-    
+
     Also validates cached briefing for TEST_* sessions and resets
     cache if a test briefing is detected.
     """
     global _briefing_cache, _briefing_cache_time
     now = time.time()
-    
+
     # Check if cache is still fresh
     if _briefing_cache is not None and (now - _briefing_cache_time) < BRIEFING_CACHE_SECONDS:
         # Validate cached content - reject TEST briefings
@@ -100,16 +111,24 @@ def _get_briefing_cached():
             _briefing_cache_time = 0.0
         else:
             return _briefing_cache
-    
+
     # Load or reload from disk
     _briefing_cache = load_briefing()
     _briefing_cache_time = now
+
+    # Freshly loaded briefing bhi validate karo
+    if _briefing_cache:
+        session_type = _briefing_cache.get("session_type", "")
+        if isinstance(session_type, str) and session_type.startswith("TEST"):
+            logger.warning(f"[BRIEFING] Disk briefing is TEST ({session_type}). Ignoring.")
+            _briefing_cache = None
+
     return _briefing_cache
 
 def _apply_trading_settings():
     """Reload tunables from config/trading_settings.json (dashboard-editable)."""
     global STRATEGY_TYPE, LOOP_INTERVAL, MAX_POSITIONS, MIN_CONFIDENCE
-    global MATH_RISK_PER_TRADE, LOOKBACK, MIN_WS_CANDLES_FOR_PATTERNS
+    global MATH_RISK_PER_TRADE, LOOKBACK, LOOKBACK_BUY, LOOKBACK_SELL, MIN_WS_CANDLES_FOR_PATTERNS
     global SCAN_LOG_INTERVAL
 
     s = get_section("strategy")
@@ -120,7 +139,10 @@ def _apply_trading_settings():
     LOOP_INTERVAL         = max(1, safe_int(s.get("loop_interval_sec"), 5))
     MAX_POSITIONS         = max(1, safe_int(s.get("max_open_positions"), 2))
     MIN_CONFIDENCE        = int(max(0, min(100, safe_float(s.get("min_confidence"), 70))))
-    LOOKBACK              = max(1, safe_int(s.get("signal_lookback_candles"), 3))
+    # Load new separate configs, fallback to legacy signal_lookback_candles for backward compat
+    LOOKBACK_BUY          = max(1, safe_int(s.get("buy_signal_lookback_candles", s.get("signal_lookback_candles", 3)), 3))
+    LOOKBACK_SELL         = max(1, safe_int(s.get("sell_signal_lookback_candles", s.get("signal_lookback_candles", 3)), 3))
+    LOOKBACK              = max(LOOKBACK_BUY, LOOKBACK_SELL)  # Legacy support - use max of both
     MIN_WS_CANDLES_FOR_PATTERNS = max(1, safe_int(s.get("min_ws_candles_for_patterns"), 2))
     MATH_RISK_PER_TRADE   = max(0.0, min(1.0, safe_float(risk.get("math_risk_per_trade"), 0.05)))
     SCAN_LOG_INTERVAL     = max(30, safe_int(md.get("scan_log_interval_sec"), 90))
@@ -228,7 +250,7 @@ def _load_adaptive_config():
     """Load adaptive configuration from trading_settings.json."""
     global _adaptive_config, _adaptive_signal_multipliers, _adaptive_time_multipliers
     global _adaptive_sl_values, _adaptive_market_multiplier
-    
+
     try:
         s = get_section("adaptive")
         if not s:
@@ -238,7 +260,7 @@ def _load_adaptive_config():
             _adaptive_sl_values = {}
             _adaptive_market_multiplier = 1.0
             return
-        
+
         # Strategy adaptive values
         strategy_adaptive = s.get("strategy", {})
         if not isinstance(strategy_adaptive, dict):
@@ -251,20 +273,20 @@ def _load_adaptive_config():
             strategy_adaptive.get("market_regime_multiplier", 1.0),
             "adaptive.strategy.market_regime_multiplier",
         )
-        
+
         # Time window adaptive values
         _adaptive_time_multipliers = _coerce_multiplier_map(
             s.get("time_windows", {}),
             "adaptive.time_windows",
             normalize_keys=False,
         )
-        
+
         # Symbol-specific SL values
         _adaptive_sl_values = _coerce_float_map(
             s.get("symbol_stops", {}),
             "adaptive.symbol_stops",
         )
-        
+
         _adaptive_config = s
         logger.debug(f"📊 Adaptive config loaded | Signals: {len(_adaptive_signal_multipliers)} | Times: {len(_adaptive_time_multipliers)} | SLs: {len(_adaptive_sl_values)}")
     except Exception as e:
@@ -296,7 +318,7 @@ def _get_time_window(now: dt_time) -> str:
     hour = now.hour
     minute = now.minute
     total_min = hour * 60 + minute
-    
+
     # Define time windows (adjust as needed)
     if total_min >= 9*60+15 and total_min < 10*60:
         return "9:15-10:00"
@@ -331,45 +353,117 @@ def _mark_yfinance_failed(symbol: str, reason: str) -> None:
 #   Uses multiple retry strategies to fetch historical data.
 #   Critical for building indicators (RSI, MACD, EMA, Bollinger).
 # ════════════════════════════════════════════════════════════
+def _yahoo_chart_symbol(symbol: str) -> str:
+    symbol = str(symbol or "").strip().upper()
+    if symbol.startswith("^") or "." in symbol:
+        return symbol
+    return f"{symbol}.NS"
+
+
+def _fetch_yahoo_history(symbol: str, period: str, interval: str, timeout: float = 8.0) -> pd.DataFrame:
+    """
+    Fetch candles from Yahoo's chart endpoint without yfinance's crumb flow.
+
+    yfinance can poison the crumb as "Edge: Too Many Requests"; the chart endpoint
+    itself still returns valid OHLCV JSON without that crumb.
+    """
+    yahoo_symbol = _yahoo_chart_symbol(symbol)
+    response = requests.get(
+        YAHOO_CHART_URL.format(symbol=quote(yahoo_symbol, safe="")),
+        params={
+            "range": period,
+            "interval": interval,
+            "includePrePost": "false",
+            "events": "div,splits,capitalGains",
+        },
+        headers=YAHOO_HEADERS,
+        timeout=timeout,
+    )
+    if response.status_code == 429:
+        raise RuntimeError("Too Many Requests. Rate limited.")
+    response.raise_for_status()
+
+    chart = response.json().get("chart", {})
+    error = chart.get("error")
+    if error:
+        raise RuntimeError(error.get("description") or error.get("code") or "Yahoo chart error")
+
+    results = chart.get("result") or []
+    if not results:
+        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+
+    result = results[0]
+    timestamps = result.get("timestamp") or []
+    quote_rows = ((result.get("indicators") or {}).get("quote") or [{}])
+    quote_data = quote_rows[0] if quote_rows else {}
+    if not timestamps or not quote_data:
+        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+
+    arrays = {
+        "open": quote_data.get("open") or [],
+        "high": quote_data.get("high") or [],
+        "low": quote_data.get("low") or [],
+        "close": quote_data.get("close") or [],
+        "volume": quote_data.get("volume") or [],
+    }
+    lengths = {"timestamp": len(timestamps), **{name: len(values) for name, values in arrays.items()}}
+    if any(length != len(timestamps) for length in lengths.values()):
+        raise RuntimeError(f"Yahoo chart length mismatch for {symbol}: {lengths}")
+
+    index = pd.to_datetime(timestamps, unit="s", utc=True)
+    exchange_tz = ((result.get("meta") or {}).get("exchangeTimezoneName") or "Asia/Kolkata")
+    index = index.tz_convert(exchange_tz)
+
+    frame = pd.DataFrame(
+        {
+            "Open": arrays["open"],
+            "High": arrays["high"],
+            "Low": arrays["low"],
+            "Close": arrays["close"],
+            "Volume": arrays["volume"],
+        },
+        index=index,
+    )
+    for column in ("Open", "High", "Low", "Close", "Volume"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = frame.dropna(subset=["Close"])
+    return _drop_incomplete_candle_if_present(frame, interval=interval)
+
 
 def _fetch_yfinance_with_retry(symbol: str, max_attempts: int = 2) -> pd.DataFrame:
     """
-    Fetch yfinance data with multiple retry strategies for Yahoo .NS symbols.
-    
+    Fetch Yahoo chart data with multiple retry strategies for Yahoo .NS symbols.
+
     Attempt 1: period="5d", interval="5m" (preferred)
     Attempt 2: period="1d", interval="1h" (shorter retry window)
-    
-    REQUIREMENT: Gets historical data from working source.
-    All retry attempts are traced with full diagnostic output.
+
+    REQUIREMENT: Gets historical data from the same chart JSON source used by
+    the morning screener, without yfinance's crumb flow.
     """
     attempts = [
         ("5d", "5m"),   # 5 days of 5-min candles (preferred)
         ("1d", "1h"),   # 1 day of hourly candles (shorter retry window)
     ]
-    
+
     last_error = None
     for attempt_num, (period, interval) in enumerate(attempts[:max_attempts], 1):
         try:
-            hist = yf.Ticker(f"{symbol}.NS").history(period=period, interval=interval)
+            hist = _fetch_yahoo_history(symbol, period=period, interval=interval)
             if not hist.empty:
-                logger.info(f"✅ {symbol} — yfinance fetched {len(hist)} {interval} candles (attempt {attempt_num})")
+                logger.info(f"✅ {symbol} — Yahoo chart fetched {len(hist)} {interval} candles (attempt {attempt_num})")
                 return hist
             else:
                 last_error = ValueError(f"Empty result for {symbol}: period={period}, interval={interval}")
         except Exception as e:
             last_error = e
-            # Check if error is retryable
-            if not should_retry_on_error(e):
-                logger.debug(f"🛑 {symbol} — Error is not retryable (JSON/parse): {type(e).__name__}: {str(e)[:50]}")
-                break
-            else:
-                logger.debug(f"  {symbol} attempt {attempt_num} failed (retryable): {type(e).__name__}")
-    
+            logger.debug(f"  {symbol} Yahoo chart attempt {attempt_num} failed: {type(e).__name__}")
+            continue
+
     logger.critical(
-        f"{symbol} - No historical data available from yfinance | Last error: {type(last_error).__name__}: {str(last_error)}"
+        f"{symbol} - No historical data available from Yahoo chart | Last error: {type(last_error).__name__}: {str(last_error)}"
     )
     raise RuntimeError(
-        f"{symbol}: Cannot bootstrap indicators - yfinance failed. "
+        f"{symbol}: Cannot bootstrap indicators - Yahoo chart failed. "
         f"Last error: {type(last_error).__name__}: {str(last_error)}"
     )
 
@@ -377,12 +471,12 @@ def _fetch_yfinance_with_retry(symbol: str, max_attempts: int = 2) -> pd.DataFra
 def _get_candles_with_yfinance_seed(symbol: str) -> list[dict]:
     """
     Get candles for indicator calculations.
-    
+
     Priority:
     1. Use completed live WebSocket candles if enough are already available.
     2. Use cached yfinance seed data.
     3. Fetch fresh yfinance seed data with retries.
-    
+
     No secondary market-data provider is used. If yfinance cannot provide data,
     the caller marks the symbol WAIT instead of placing a trade.
     """
@@ -405,11 +499,11 @@ def _get_candles_with_yfinance_seed(symbol: str) -> list[dict]:
 
     # Try to fetch fresh yfinance data with proper retry logic.
     hist = _fetch_yfinance_with_retry(symbol, max_attempts=2)
-    
+
     if not hist.empty:
         # Convert to our candle format
         hist = _drop_incomplete_candle_if_present(hist)
-        
+
         yf_candles = [
             {
                 "open":   float(row["Open"]),
@@ -420,10 +514,10 @@ def _get_candles_with_yfinance_seed(symbol: str) -> list[dict]:
             }
             for _, row in hist.iterrows()
         ]
-        
+
         # Cache it
         _yfinance_cache[symbol] = yf_candles
-        
+
         merged = yf_candles + candles
         logger.info(
             f"📦 {symbol} — Combined: {len(yf_candles)} yfinance + "
@@ -567,8 +661,8 @@ def detect_shooting_star(df: pd.DataFrame) -> bool:
 
 
 def detect_inverted_hammer(df: pd.DataFrame) -> bool:
-    """Long upper shadow, small lower shadow — bullish reversal signal."""
-    if len(df) < 1:
+    """Long upper shadow, small lower shadow AFTER bearish candle — bullish reversal."""
+    if len(df) < 2:
         return False
     r = df.iloc[-1]
     body       = abs(r["close"] - r["open"])
@@ -576,7 +670,9 @@ def detect_inverted_hammer(df: pd.DataFrame) -> bool:
     lower_wick = min(r["open"], r["close"]) - r["low"]
     if body == 0:
         return False
-    return upper_wick >= (2 * body) and lower_wick <= (0.5 * body)
+    shape_ok      = upper_wick >= (2 * body) and lower_wick <= (0.5 * body)
+    prior_bearish = df.iloc[-2]["close"] < df.iloc[-2]["open"]
+    return shape_ok and prior_bearish
 
 
 def detect_dragonfly_doji(df: pd.DataFrame) -> bool:
@@ -751,26 +847,27 @@ def strategy_rsi_macd(df: pd.DataFrame) -> dict:
     )
 
 
-def strategy_hammer(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
+def strategy_hammer(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None, lookback: int = None) -> dict:
     """Pattern on live WS candles; RSI/volume filter from yfinance indicator_df."""
+    lookback = lookback if lookback is not None else LOOKBACK
     ind = indicator_df if indicator_df is not None else pattern_df
     hammer_found = False
-    for i in _lookback_range(pattern_df, LOOKBACK):
+    for i in _lookback_range(pattern_df, lookback):
         slice_df = pattern_df.iloc[: len(pattern_df) + i + 1]
         if detect_hammer(slice_df):
             hammer_found = True
             break
 
     if "rsi" in ind.columns:
-        rsi_zone = ((ind["rsi"].iloc[-LOOKBACK:] > 25) &
-                    (ind["rsi"].iloc[-LOOKBACK:] < 50)).any()
+        rsi_zone = ((ind["rsi"].iloc[-lookback:] > 25) &
+                    (ind["rsi"].iloc[-lookback:] < 50)).any()
         latest_rsi = round(ind["rsi"].iloc[-1], 1)
     else:
         rsi_zone = True
         latest_rsi = 0
 
     if "avg_vol" in ind.columns:
-        vol_ok = (ind["volume"].iloc[-LOOKBACK:] > ind["avg_vol"].iloc[-LOOKBACK:]).any()
+        vol_ok = (ind["volume"].iloc[-lookback:] > ind["avg_vol"].iloc[-lookback:]).any()
     else:
         vol_ok = True
 
@@ -783,10 +880,11 @@ def strategy_hammer(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None)
     )
 
 
-def strategy_bullish_engulfing(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
+def strategy_bullish_engulfing(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None, lookback: int = None) -> dict:
+    lookback = lookback if lookback is not None else LOOKBACK
     ind = indicator_df if indicator_df is not None else pattern_df
     engulf_found = False
-    for i in _lookback_range(pattern_df, LOOKBACK):
+    for i in _lookback_range(pattern_df, lookback):
         slice_df = pattern_df.iloc[: len(pattern_df) + i + 1]
         if detect_bullish_engulfing(slice_df):
             engulf_found = True
@@ -835,17 +933,18 @@ def strategy_bollinger_bounce(df: pd.DataFrame) -> dict:
     )
 
 
-def strategy_volume_breakout(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
+def strategy_volume_breakout(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None, lookback: int = None) -> dict:
     """Breakout on live candles; volume average from yfinance indicators."""
+    lookback = lookback if lookback is not None else LOOKBACK
     ind = indicator_df if indicator_df is not None else pattern_df
     if "avg_vol" in ind.columns:
-        avg_vol   = ind["avg_vol"].iloc[-LOOKBACK:]
-        vol_spike = (ind["volume"].iloc[-LOOKBACK:] > avg_vol * 2).any()
+        avg_vol   = ind["avg_vol"].iloc[-lookback:]
+        vol_spike = (ind["volume"].iloc[-lookback:] > avg_vol * 2).any()
     else:
         vol_spike = False
 
     price_brk = False
-    for i in _lookback_range(pattern_df, LOOKBACK):
+    for i in _lookback_range(pattern_df, lookback):
         if pattern_df["close"].iloc[i] > pattern_df["high"].iloc[i - 1]:
             price_brk = True
             break
@@ -862,38 +961,38 @@ def strategy_volume_breakout(pattern_df: pd.DataFrame, indicator_df: pd.DataFram
     )
 
 
-def strategy_inverted_hammer(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
-    hit = _scan_pattern_in_lookback(pattern_df, detect_inverted_hammer)
+def strategy_inverted_hammer(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None, lookback: int = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_inverted_hammer, lookback)
     return _candle_strategy_result("Inverted Hammer", pattern_hit=hit)
 
 
-def strategy_dragonfly_doji(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
-    hit = _scan_pattern_in_lookback(pattern_df, detect_dragonfly_doji)
+def strategy_dragonfly_doji(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None, lookback: int = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_dragonfly_doji, lookback)
     return _candle_strategy_result("Dragonfly Doji", pattern_hit=hit)
 
 
-def strategy_bullish_marubozu(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
-    hit = _scan_pattern_in_lookback(pattern_df, detect_bullish_marubozu)
+def strategy_bullish_marubozu(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None, lookback: int = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_bullish_marubozu, lookback)
     return _candle_strategy_result("Bullish Marubozu", pattern_hit=hit)
 
 
-def strategy_piercing_line(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
-    hit = _scan_pattern_in_lookback(pattern_df, detect_piercing_line)
+def strategy_piercing_line(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None, lookback: int = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_piercing_line, lookback)
     return _candle_strategy_result("Piercing Line", pattern_hit=hit)
 
 
-def strategy_bullish_harami(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
-    hit = _scan_pattern_in_lookback(pattern_df, detect_bullish_harami)
+def strategy_bullish_harami(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None, lookback: int = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_bullish_harami, lookback)
     return _candle_strategy_result("Bullish Harami", pattern_hit=hit)
 
 
-def strategy_morning_star(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
-    hit = _scan_pattern_in_lookback(pattern_df, detect_morning_star)
+def strategy_morning_star(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None, lookback: int = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_morning_star, lookback)
     return _candle_strategy_result("Morning Star", pattern_hit=hit)
 
 
-def strategy_three_white_soldiers(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None) -> dict:
-    hit = _scan_pattern_in_lookback(pattern_df, detect_three_white_soldiers)
+def strategy_three_white_soldiers(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None, lookback: int = None) -> dict:
+    hit = _scan_pattern_in_lookback(pattern_df, detect_three_white_soldiers, lookback)
     return _candle_strategy_result("Three White Soldiers", pattern_hit=hit)
 
 
@@ -1004,6 +1103,17 @@ def strategy_sell_ema_breakdown(df: pd.DataFrame) -> dict:
     }
 
 
+def _get_lookback_for_side(side: str) -> int:
+    """Get the appropriate lookback window based on trade side (buy/sell)."""
+    side_lower = str(side).lower().strip()
+    if side_lower == "buy":
+        return LOOKBACK_BUY
+    elif side_lower == "sell":
+        return LOOKBACK_SELL
+    else:
+        return LOOKBACK  # Fallback to max of both
+
+
 # ════════════════════════════════════════════════════════════
 @dataclass(frozen=True)
 class StrategyEvaluationContext:
@@ -1011,6 +1121,10 @@ class StrategyEvaluationContext:
     indicator_df: pd.DataFrame
     pattern_df: pd.DataFrame | None = None
     ws_count: int = 0
+
+    def get_lookback(self) -> int:
+        """Get the appropriate lookback window based on this context's trade side."""
+        return _get_lookback_for_side(self.side)
 
 
 StrategyConditionFn = Callable[[StrategyEvaluationContext], dict]
@@ -1057,11 +1171,12 @@ def condition_bollinger_band_bounce(ctx: StrategyEvaluationContext) -> dict:
 def _buy_candle_condition(
     ctx: StrategyEvaluationContext,
     name: str,
-    fn: Callable[[pd.DataFrame, pd.DataFrame | None], dict],
+    fn: Callable[[pd.DataFrame, pd.DataFrame | None, int], dict],
 ) -> dict:
     if ctx.pattern_df is None:
         return _waiting_candle_strategy(name, ctx.ws_count)
-    return fn(ctx.pattern_df, ctx.indicator_df)
+    lookback = ctx.get_lookback()
+    return fn(ctx.pattern_df, ctx.indicator_df, lookback)
 
 
 def condition_hammer_reversal(ctx: StrategyEvaluationContext) -> dict:
@@ -1170,7 +1285,7 @@ def condition_rsi_recovering(ctx: StrategyEvaluationContext) -> dict:
     if len(df) < 2 or "rsi" not in df.columns:
         return _indicator_strategy_result("RSI recovering", False, "RSI not ready")
 
-    recent_oversold = bool((df["rsi"].iloc[-LOOKBACK:] < 35).fillna(False).any())
+    recent_oversold = bool((df["rsi"].iloc[-LOOKBACK:] < 40).fillna(False).any())
     rising = df["rsi"].iloc[-1] > df["rsi"].iloc[-2]
     latest = round(float(df["rsi"].iloc[-1]), 1)
     fired = recent_oversold and rising and latest < 60
@@ -1229,33 +1344,146 @@ def condition_price_below_recent_support(ctx: StrategyEvaluationContext) -> dict
     )
 
 
+# ──────────────────────────────────────────────────────────────
+#  NEW CONDITION 1: rsi_not_overbought
+#  Purpose : Buy-side gate. Ensures RSI has headroom before
+#            entering a breakout. Filters buying into an already
+#            extended / exhausted move.
+#  Threshold: RSI < 65  (not the full 70 overbought — we want
+#             a safety margin before the sell zone)
+#  Used in : BUY_BREAKOUT_CONFIRMATION
+# ──────────────────────────────────────────────────────────────
+def condition_rsi_not_overbought(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if "rsi" not in df.columns:
+        return _indicator_strategy_result("RSI not overbought", False, "RSI not ready")
+    latest = df["rsi"].iloc[-1]
+    if pd.isna(latest):
+        return _indicator_strategy_result("RSI not overbought", False, "RSI not ready")
+    latest_f = round(float(latest), 1)
+    fired = latest_f < 65.0
+    return _indicator_strategy_result(
+        "RSI not overbought",
+        fired,
+        f"RSI={latest_f} {'< 65 ✓' if fired else '>= 65 — too extended'}",
+    )
+
+
+# ──────────────────────────────────────────────────────────────
+#  NEW CONDITION 2: macd_positive
+#  Purpose : Confirms bullish momentum regime. MACD line above
+#            zero means the 12-EMA is above the 26-EMA globally —
+#            the macro momentum is bullish. Prevents buying
+#            into a dead-cat bounce where MACD is still negative.
+#  Used in : BUY_EMA_VOLUME_MOMENTUM, BUY_MACD_VWAP_SURGE
+# ──────────────────────────────────────────────────────────────
+def condition_macd_positive(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if "macd" not in df.columns:
+        return _indicator_strategy_result("MACD positive", False, "MACD not ready")
+    latest = df["macd"].iloc[-1]
+    if pd.isna(latest):
+        return _indicator_strategy_result("MACD positive", False, "MACD not ready")
+    latest_f = float(latest)
+    fired = latest_f > 0.0
+    return _indicator_strategy_result(
+        "MACD positive",
+        fired,
+        f"MACD={round(latest_f, 4)} {'> 0 ✓' if fired else '<= 0 — bearish regime'}",
+    )
+
+
+# ──────────────────────────────────────────────────────────────
+#  NEW CONDITION 3: ema_trending_up
+#  Purpose : Confirms active uptrend structure. EMA9 above EMA21
+#            means the short-term average is above the medium-term
+#            average — price is in a confirmed upward trajectory.
+#            Pairs with rsi_recovering to form the "buy the dip
+#            in an uptrend" strategy.
+#  NOTE    : This is a STATE condition (is trend up right now?),
+#            unlike ema_9_21_crossover which detects the EVENT
+#            (did it just cross in the last N candles?).
+#  Used in : BUY_EMA_TREND_PULLBACK
+# ──────────────────────────────────────────────────────────────
+def condition_ema_trending_up(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if "ema9" not in df.columns or "ema21" not in df.columns:
+        return _indicator_strategy_result("EMA trending up", False, "EMA not ready")
+    ema9 = df["ema9"].iloc[-1]
+    ema21 = df["ema21"].iloc[-1]
+    if pd.isna(ema9) or pd.isna(ema21):
+        return _indicator_strategy_result("EMA trending up", False, "EMA not ready")
+    ema9_f = round(float(ema9), 2)
+    ema21_f = round(float(ema21), 2)
+    fired = ema9_f > ema21_f
+    return _indicator_strategy_result(
+        "EMA trending up",
+        fired,
+        f"EMA9={ema9_f}, EMA21={ema21_f} — {'uptrend ✓' if fired else 'downtrend / flat'}",
+    )
+
+
+# ──────────────────────────────────────────────────────────────
+#  NEW CONDITION 4: ema9_below_ema21
+#  Purpose : Sell-side counterpart of ema_trending_up.
+#            EMA9 crossing below EMA21 signals trend structure
+#            has flipped bearish. Used for structural exit signals.
+#  NOTE    : This is also a STATE condition — fires whenever
+#            EMA9 is below EMA21, not just at the moment of cross.
+#            Pair with price_below_vwap for SELL_EMA_CROSS_WEAKNESS.
+#  Used in : SELL_EMA_CROSS_WEAKNESS
+# ──────────────────────────────────────────────────────────────
+def condition_ema9_below_ema21(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if "ema9" not in df.columns or "ema21" not in df.columns:
+        return _indicator_strategy_result("EMA9 below EMA21", False, "EMA not ready")
+    ema9 = df["ema9"].iloc[-1]
+    ema21 = df["ema21"].iloc[-1]
+    if pd.isna(ema9) or pd.isna(ema21):
+        return _indicator_strategy_result("EMA9 below EMA21", False, "EMA not ready")
+    ema9_f = round(float(ema9), 2)
+    ema21_f = round(float(ema21), 2)
+    fired = ema9_f < ema21_f
+    return _indicator_strategy_result(
+        "EMA9 below EMA21",
+        fired,
+        f"EMA9={ema9_f}, EMA21={ema21_f} — {'bearish structure ✓' if fired else 'still bullish'}",
+    )
+
+
 CONDITION_REGISTRY: dict[str, StrategyConditionFn] = {
-    "rsi_macd_momentum": condition_rsi_macd_momentum,
-    "ema_9_21_crossover": condition_ema_9_21_crossover,
-    "bollinger_band_bounce": condition_bollinger_band_bounce,
-    "hammer_reversal": condition_hammer_reversal,
-    "bullish_engulfing": condition_bullish_engulfing,
-    "inverted_hammer": condition_inverted_hammer,
-    "dragonfly_doji": condition_dragonfly_doji,
-    "bullish_marubozu": condition_bullish_marubozu,
-    "piercing_line": condition_piercing_line,
-    "bullish_harami": condition_bullish_harami,
-    "morning_star": condition_morning_star,
-    "three_white_soldiers": condition_three_white_soldiers,
-    "volume_breakout": condition_volume_breakout,
-    "bullish_reversal_candle": condition_bullish_reversal_candle,
-    "volume_spike": condition_volume_spike,
-    "price_above_ema20": condition_price_above_ema20,
-    "price_below_ema20": condition_price_below_ema20,
-    "price_above_vwap": condition_price_above_vwap,
-    "price_below_vwap": condition_price_below_vwap,
-    "rsi_recovering": condition_rsi_recovering,
-    "rsi_weakening": condition_rsi_weakening,
-    "rsi_overbought": condition_rsi_overbought,
-    "macd_bearish_cross": condition_macd_bearish_cross,
-    "bearish_pattern": condition_bearish_pattern,
-    "ema20_breakdown": condition_ema20_breakdown,
-    "price_below_recent_support": condition_price_below_recent_support,
+    # ── existing buy conditions ──────────────────────────────────────────
+    "rsi_macd_momentum":            condition_rsi_macd_momentum,
+    "ema_9_21_crossover":           condition_ema_9_21_crossover,
+    "bollinger_band_bounce":        condition_bollinger_band_bounce,
+    "hammer_reversal":              condition_hammer_reversal,
+    "bullish_engulfing":            condition_bullish_engulfing,
+    "inverted_hammer":              condition_inverted_hammer,
+    "dragonfly_doji":               condition_dragonfly_doji,
+    "bullish_marubozu":             condition_bullish_marubozu,
+    "piercing_line":                condition_piercing_line,
+    "bullish_harami":               condition_bullish_harami,
+    "morning_star":                 condition_morning_star,
+    "three_white_soldiers":         condition_three_white_soldiers,
+    "volume_breakout":              condition_volume_breakout,
+    "bullish_reversal_candle":      condition_bullish_reversal_candle,
+    "volume_spike":                 condition_volume_spike,
+    "price_above_ema20":            condition_price_above_ema20,
+    "price_below_ema20":            condition_price_below_ema20,
+    "price_above_vwap":             condition_price_above_vwap,
+    "price_below_vwap":             condition_price_below_vwap,
+    "rsi_recovering":               condition_rsi_recovering,
+    "rsi_weakening":                condition_rsi_weakening,
+    "rsi_overbought":               condition_rsi_overbought,
+    "macd_bearish_cross":           condition_macd_bearish_cross,
+    "bearish_pattern":              condition_bearish_pattern,
+    "ema20_breakdown":              condition_ema20_breakdown,
+    "price_below_recent_support":   condition_price_below_recent_support,
+    # ── NEW conditions (v2 — added for strategy_sets.json v2) ────────────
+    "rsi_not_overbought":           condition_rsi_not_overbought,
+    "macd_positive":                condition_macd_positive,
+    "ema_trending_up":              condition_ema_trending_up,
+    "ema9_below_ema21":             condition_ema9_below_ema21,
 }
 
 
@@ -1268,6 +1496,8 @@ class StrategySetEvaluator:
         set_defs = config.buy_sets if side == "buy" else config.sell_sets
 
         for set_def in set_defs:
+            if not _strategy_set_enabled(set_def.name):
+                continue
             condition_results = self._evaluate_conditions(set_def, ctx)
             if condition_results and all(r.get("fired") for r in condition_results):
                 return {
@@ -1537,6 +1767,68 @@ def _log_triggered_strategy_set(action: str, signal: dict):
     )
 
 
+def _get_strategy_set_execution_policy(set_name: str) -> dict:
+    def _attach_blocking_config(policy: dict) -> dict:
+        policy = dict(policy or {})
+        blocking_enabled = _adaptive_safety_block_enabled()
+        policy["adaptive_safety_blocking_enabled"] = blocking_enabled
+        policy["execution_blocked_by_adaptive_safety"] = bool(
+            policy.get("suppressed") and blocking_enabled
+        )
+        return policy
+
+    try:
+        from reflection.reflection_engine import get_signal_execution_policy
+        return _attach_blocking_config(get_signal_execution_policy(set_name))
+    except Exception as exc:
+        logger.error("Signal execution policy unavailable for %s: %s", set_name, exc)
+        return _attach_blocking_config({
+            "signal_name": set_name,
+            "suppressed": False,
+            "reason": f"Execution policy unavailable: {exc}",
+            "scope": "error",
+        })
+
+
+def _adaptive_safety_block_enabled() -> bool:
+    return bool(cfg("risk", "adaptive_safety_blocks_execution", False))
+
+
+def _strategy_set_enabled(set_name: str) -> bool:
+    settings = get_section("strategy_sets")
+    if not isinstance(settings, dict):
+        return True
+    if set_name in settings:
+        return bool(settings.get(set_name))
+    normalized = normalize_set_key(set_name)
+    if normalized in settings:
+        return bool(settings.get(normalized))
+    return True
+
+
+def _suppression_rejection(triggered_set: dict, symbol: str, action: str = "BUY") -> dict | None:
+    policy = _get_strategy_set_execution_policy(triggered_set["set_name"])
+    if not policy.get("suppressed"):
+        return None
+
+    if not policy.get("adaptive_safety_blocking_enabled"):
+        logger.info(
+            "%s adaptive safety alert-only | %s | %s",
+            action,
+            symbol,
+            policy.get("reason") or f"{triggered_set['set_name']} suppressed",
+        )
+        return None
+
+    reason = policy.get("reason") or f"{triggered_set['set_name']} execution-suppressed"
+    logger.warning("%s blocked | %s | %s", action, symbol, reason)
+    return {
+        "action": "WAIT",
+        "reason": reason,
+        "execution_policy": policy,
+    }
+
+
 #   BUY SIGNAL EVALUATOR
 # ════════════════════════════════════════════════════════════
 
@@ -1571,6 +1863,11 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
     if not triggered_set:
         return {"action": "WAIT", "reason": "No complete BUY strategy set triggered"}
 
+    suppression = _suppression_rejection(triggered_set, symbol)
+    if suppression:
+        return suppression
+
+    execution_policy = _get_strategy_set_execution_policy(triggered_set["set_name"])
     base_confidence = _resolve_base_confidence(stock, triggered_set, "confidence")
     confidence_trace = _build_confidence_trace(base_confidence, triggered_set, symbol=symbol)
     adaptive_confidence = confidence_trace["final_confidence"]
@@ -1584,7 +1881,7 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
         return {"action": "WAIT", "reason": f"No live price for {symbol} (WS tick missing)"}
 
     stop_loss = _calculate_adaptive_stop_loss(symbol, price, "BUY")
-    
+
     return {
         "action":    "BUY",
         "symbol":    symbol,
@@ -1598,6 +1895,7 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
         "set_conditions": triggered_set["conditions"],
         "set_notes": triggered_set.get("notes", ""),
         "confidence_trace": confidence_trace,
+        "execution_policy": execution_policy,
         "reason": _format_strategy_set_reason(
             triggered_set,
             price_src,
@@ -1644,6 +1942,11 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
     if not triggered_set:
         return {"action": "WAIT", "reason": "Math: no complete BUY strategy set triggered"}
 
+    suppression = _suppression_rejection(triggered_set, symbol)
+    if suppression:
+        return suppression
+
+    execution_policy = _get_strategy_set_execution_policy(triggered_set["set_name"])
     base_confidence = _resolve_base_confidence(stock, triggered_set, "math_score")
     confidence_trace = _build_confidence_trace(base_confidence, triggered_set, symbol=symbol)
     adaptive_confidence = confidence_trace["final_confidence"]
@@ -1656,7 +1959,7 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
     if not price:
         return {"action": "WAIT", "reason": f"No live price for {symbol}"}
     stop_loss = _calculate_adaptive_stop_loss(symbol, price, "BUY")
-    
+
     return {
         "action":       "BUY",
         "trade_type":   "MATH",
@@ -1671,6 +1974,7 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
         "set_conditions": triggered_set["conditions"],
         "set_notes":    triggered_set.get("notes", ""),
         "confidence_trace": confidence_trace,
+        "execution_policy": execution_policy,
         "reason":       _format_strategy_set_reason(
             triggered_set,
             price_src,
@@ -1715,6 +2019,11 @@ def _check_sell_signals(live_prices: dict[str, float]):
         ctx = StrategyEvaluationContext(side="sell", indicator_df=df)
         triggered_set = _strategy_set_evaluator.evaluate("sell", ctx)
         if not triggered_set:
+            continue
+
+        suppression = _suppression_rejection(triggered_set, symbol, action="SELL")
+        if suppression:
+            logger.warning("SELL signal skipped | %s | %s", symbol, suppression["reason"])
             continue
 
         signal = {
@@ -1775,6 +2084,8 @@ def _get_live_prices(briefing: dict) -> dict[str, float]:
 
 
 def _can_open_new_position(stock: dict) -> bool:
+    if not entries_are_enabled():
+        return False
     if stock.get("direction") == "AVOID":
         return False
     open_symbols = [p["symbol"] for p in get_open_positions()]
@@ -1787,34 +2098,56 @@ def _can_open_new_position(stock: dict) -> bool:
     return True
 
 
-def _drop_incomplete_candle_if_present(hist):
+def _interval_seconds(interval: str | None, hist=None) -> int:
+    if interval:
+        raw = str(interval).strip().lower()
+        try:
+            if raw.endswith("m"):
+                return max(60, int(raw[:-1]) * 60)
+            if raw.endswith("h"):
+                return max(60, int(raw[:-1]) * 3600)
+            if raw.endswith("d"):
+                return 86400
+        except ValueError:
+            pass
+
+    try:
+        if hist is not None and len(hist.index) >= 2:
+            seconds = int((hist.index[-1] - hist.index[-2]).total_seconds())
+            if seconds > 0:
+                return seconds
+    except Exception:
+        pass
+
+    return max(60, int(cfg("market_data", "candle_interval_seconds", 300)))
+
+
+def _drop_incomplete_candle_if_present(hist, interval: str | None = None):
     """
-    Yfinance kabhi kabhi current incomplete 5-min candle 
-    last row mein include kar deta hai during market hours.
-    Ye function use drop karta hai agar waise ho.
+    Yahoo can include the currently-building intraday or daily candle.
+    Drop that last row so indicators use only completed candles.
     """
     if hist is None or hist.empty:
         return hist
 
     last_time = hist.index[-1]
-    # Timezone remove karo (yfinance timezone-aware timestamps deta hai)
-    if hasattr(last_time, 'tzinfo') and last_time.tzinfo is not None:
-        import pytz
-        last_time = last_time.astimezone(pytz.timezone('Asia/Kolkata')).replace(tzinfo=None)
+    tz = getattr(last_time, "tzinfo", None)
+    now = pd.Timestamp.now(tz=tz) if tz is not None else pd.Timestamp.now()
+    interval_sec = _interval_seconds(interval, hist)
 
-    now = datetime.now()
-    current_bucket_min   = (now.minute // 5) * 5
-    current_period_start = now.replace(
-        minute      = current_bucket_min,
-        second      = 0,
-        microsecond = 0,
-    )
+    if interval_sec >= 86400:
+        market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+        if last_time.date() == now.date() and now < market_close:
+            logger.debug("Dropped incomplete daily Yahoo candle: %s", last_time)
+            return hist.iloc[:-1]
+        return hist
+
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elapsed = int((now - day_start).total_seconds())
+    current_period_start = day_start + pd.Timedelta(seconds=(elapsed // interval_sec) * interval_sec)
 
     if last_time >= current_period_start:
-        logger.debug(
-            f"Dropped incomplete yfinance candle: "
-            f"{last_time.strftime('%H:%M')} (current period)"
-        )
+        logger.debug("Dropped incomplete Yahoo candle: %s >= %s", last_time, current_period_start)
         return hist.iloc[:-1]
 
     return hist
@@ -1867,13 +2200,27 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
             live_prices = _get_live_prices(briefing)
             _check_all_exits(live_prices)
 
+            if not entries_are_enabled():
+                state = get_trading_session_state()
+                logger.warning(
+                    "Entries disabled by session state %s (%s). Exit checks continue; BUY scan skipped.",
+                    state.get("state"),
+                    state.get("reason", ""),
+                )
+                await asyncio.sleep(LOOP_INTERVAL)
+                continue
+
             # Update live capital file for dashboard
             try:
-                from core.order_executor import _get_available_capital
-                cap = _get_available_capital()
+                from core.order_executor import get_capital_snapshot
+                capital_snapshot = get_capital_snapshot()
                 atomic_write_json(
                     "data/live_capital.json",
-                    {"capital": cap, "timestamp": datetime.now().isoformat()},
+                    {
+                        **capital_snapshot,
+                        "capital": capital_snapshot.get("available_cash"),
+                        "timestamp": datetime.now().isoformat(),
+                    },
                     label="live capital",
                     log=logger,
                 )

@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 DB_PATH = "data/alcosoft.db"
 POSITIONS_PATH = "data/positions.json"
 BRIEFING_PATH = "data/session_briefing.json"
+TRADING_SESSION_STATE_PATH = "data/trading_session_state.json"
 LEGACY_AGENT_TABLE = "war" + "_room_log"
+TRADING_STATES = {"ACTIVE", "LIQUIDATING", "FLAT_LOCKED", "HALTED"}
 
 FALLBACK_BRIEFING = {
     "generated_at": None,
@@ -154,6 +156,8 @@ def initialize_db():
         _add_column_if_missing(conn, "trades", "trailing_sl", "REAL")
         _add_column_if_missing(conn, "trades", "target_price", "REAL")
         _add_column_if_missing(conn, "trades", "kotak_sl_order_id", "TEXT")
+        _add_column_if_missing(conn, "trades", "exit_price_source", "TEXT")
+        _add_column_if_missing(conn, "trades", "reconciliation_status", "TEXT")
         _add_column_if_missing(conn, "daily_stats", "agent_decision_calls", "INTEGER DEFAULT 0")
         _migrate_agent_decision_log(conn)
         _repair_invalid_open_positions(conn)
@@ -171,6 +175,92 @@ def _sanitize_position(row: sqlite3.Row | dict) -> dict:
             data[key] = safe_float(data.get(key), 0.0)
     data["confidence"] = safe_int(data.get("confidence"), 0)
     return data
+
+
+def _default_trading_session_state() -> dict:
+    now = datetime.now().isoformat()
+    return {
+        "state": "ACTIVE",
+        "entries_enabled": True,
+        "reason": "BOOT_DEFAULT",
+        "updated_at": now,
+        "locked_at": None,
+        "resumed_at": now,
+    }
+
+
+def _normalize_trading_session_state(raw: dict | None) -> dict:
+    state = _default_trading_session_state()
+    if isinstance(raw, dict):
+        state.update(raw)
+
+    state["state"] = str(state.get("state") or "ACTIVE").strip().upper()
+    if state["state"] not in TRADING_STATES:
+        state["state"] = "ACTIVE"
+
+    state["entries_enabled"] = bool(state.get("entries_enabled")) and state["state"] == "ACTIVE"
+    state["reason"] = str(state.get("reason") or "")
+    return state
+
+
+def get_trading_session_state() -> dict:
+    raw = safe_read_json(
+        TRADING_SESSION_STATE_PATH,
+        _default_trading_session_state(),
+        expected_type=dict,
+        label="trading session state",
+        log=logger,
+    )
+    state = _normalize_trading_session_state(raw)
+    if state != raw:
+        atomic_write_json(TRADING_SESSION_STATE_PATH, state, label="trading session state", log=logger)
+    return state
+
+
+def set_trading_session_state(state: str, reason: str = "") -> dict:
+    normalized_state = str(state or "").strip().upper()
+    if normalized_state not in TRADING_STATES:
+        raise ValueError(f"Invalid trading session state: {state}")
+
+    now = datetime.now().isoformat()
+    current = get_trading_session_state()
+    current.update({
+        "state": normalized_state,
+        "entries_enabled": normalized_state == "ACTIVE",
+        "reason": str(reason or normalized_state),
+        "updated_at": now,
+    })
+    if normalized_state in {"LIQUIDATING", "FLAT_LOCKED", "HALTED"}:
+        current["locked_at"] = current.get("locked_at") or now
+    if normalized_state == "ACTIVE":
+        current["resumed_at"] = now
+        current["locked_at"] = None
+
+    atomic_write_json(TRADING_SESSION_STATE_PATH, current, label="trading session state", log=logger)
+    logger.warning(
+        "Trading session state set to %s | entries_enabled=%s | reason=%s",
+        current["state"],
+        current["entries_enabled"],
+        current["reason"],
+    )
+    return current
+
+
+def lock_entries(reason: str = "ENTRIES_LOCKED") -> dict:
+    return set_trading_session_state("FLAT_LOCKED", reason)
+
+
+def mark_liquidating(reason: str = "LIQUIDATING") -> dict:
+    return set_trading_session_state("LIQUIDATING", reason)
+
+
+def resume_entries(reason: str = "RESUME_TRADING") -> dict:
+    return set_trading_session_state("ACTIVE", reason)
+
+
+def entries_are_enabled() -> bool:
+    state = get_trading_session_state()
+    return state.get("state") == "ACTIVE" and bool(state.get("entries_enabled"))
 
 
 def save_open_position(trade_data: dict):
@@ -311,7 +401,48 @@ def mark_position_reconciled_closed(symbol: str, exit_price: float, reason: str)
     return close_position(symbol, exit_price, reason)
 
 
-def close_position(symbol: str, exit_price: float, reason: str = "SIGNAL") -> bool:
+def mark_position_reconciliation_pending(
+    symbol: str,
+    reason: str,
+    detail: str = "",
+    exit_price_source: str = "missing_quote",
+) -> bool:
+    now = datetime.now().isoformat()
+    symbol = str(symbol or "").strip().upper()
+    if not symbol:
+        return False
+
+    note = reason if not detail else f"{reason}:{detail}"
+    with _get_conn() as conn:
+        cursor = conn.execute("""
+            UPDATE trades
+            SET reconciliation_status = 'RECONCILIATION_PENDING',
+                exit_price_source = ?,
+                notes = CASE
+                    WHEN notes IS NULL OR notes = '' THEN ?
+                    ELSE notes || '|' || ?
+                END
+            WHERE symbol = ? AND status = 'OPEN'
+        """, (exit_price_source, note, note, symbol))
+
+    _update_positions_json()
+    logger.error(
+        "Position reconciliation pending: %s | %s | source=%s | %s",
+        symbol,
+        reason,
+        exit_price_source,
+        detail,
+    )
+    return (cursor.rowcount or 0) > 0
+
+
+def close_position(
+    symbol: str,
+    exit_price: float,
+    reason: str = "SIGNAL",
+    exit_price_source: str = "unknown",
+    reconciliation_status: str | None = None,
+) -> bool:
     now = datetime.now().isoformat()
     symbol = str(symbol or "").strip().upper()
     exit_price = safe_float(exit_price, 0.0)
@@ -330,17 +461,35 @@ def close_position(symbol: str, exit_price: float, reason: str = "SIGNAL") -> bo
             return False
 
         pnl = (exit_price - safe_float(row["entry_price"], 0.0)) * safe_int(row["quantity"], 0)
-        status = "STOPPED" if reason == "STOPLOSS" else "CLOSED"
+        status = "CLOSED"
         conn.execute("""
             UPDATE trades
             SET exit_price = ?, pnl = ?, status = ?,
-                exit_time = ?, notes = ?
+                exit_time = ?, notes = ?,
+                exit_price_source = ?,
+                reconciliation_status = ?
             WHERE id = ?
-        """, (exit_price, pnl, status, now, reason, row["id"]))
+        """, (
+            exit_price,
+            pnl,
+            status,
+            now,
+            reason,
+            exit_price_source,
+            reconciliation_status,
+            row["id"],
+        ))
 
     _update_positions_json()
     _update_daily_stats()
-    logger.info("Position closed: %s | %s | P&L: %.2f | %s", symbol, exit_price, pnl, reason)
+    logger.info(
+        "Position closed: %s | %s | P&L: %.2f | %s | price_source=%s",
+        symbol,
+        exit_price,
+        pnl,
+        reason,
+        exit_price_source,
+    )
     return True
 
 
