@@ -518,6 +518,21 @@ def update_sl_order_id(symbol: str, sl_order_id: str):
     _update_positions_json()
 
 
+def update_position_notes(symbol: str, notes: str):
+    """Update the notes field for the open position of a given symbol.
+    Used by the SL recovery loop to clear the SL_BROKER_UNPROTECTED flag
+    once a broker-side SL order has been successfully placed.
+    """
+    with _get_conn() as conn:
+        conn.execute("""
+            UPDATE trades
+            SET notes = ?
+            WHERE symbol = ? AND status = 'OPEN'
+        """, (str(notes or ""), str(symbol or "").strip().upper()))
+
+    _update_positions_json()
+
+
 def update_tsl_activation_state(symbol: str, is_activated: bool, activation_price: float, tsl_mode: str):
     """Update TSL activation state and mode for a position."""
     with _get_conn() as conn:
@@ -585,9 +600,13 @@ def _update_daily_stats():
     try:
         today = datetime.now().strftime("%Y-%m-%d")
         with _get_conn() as conn:
+            # F030: Include reconciliation close statuses in daily PnL
             rows = conn.execute("""
                 SELECT pnl, status FROM trades
-                WHERE date = ? AND status IN ('CLOSED', 'STOPPED')
+                WHERE date = ? AND status IN (
+                    'CLOSED', 'STOPPED',
+                    'BROKER_RECONCILED_CLOSED', 'SL_PLACEMENT_FAILED'
+                )
             """, (today,)).fetchall()
 
             total = len(rows)
@@ -596,7 +615,7 @@ def _update_daily_stats():
             gross = sum(safe_float(row["pnl"], 0.0) for row in rows)
 
             existing = conn.execute(
-                "SELECT capital_start FROM daily_stats WHERE date = ?",
+                "SELECT capital_start, capital_end FROM daily_stats WHERE date = ?",
                 (today,),
             ).fetchone()
             capital_start = existing["capital_start"] if existing else None
@@ -604,8 +623,21 @@ def _update_daily_stats():
                 from core.order_executor import _get_available_capital
                 capital_start = _get_available_capital() + gross
 
-            from core.order_executor import _get_available_capital
-            capital_end = _get_available_capital()
+            # F017: Make capital_end fetch resilient — use last known value on failure
+            capital_end = None
+            try:
+                from core.order_executor import _get_available_capital
+                capital_end = _get_available_capital()
+            except Exception as cap_exc:
+                logger.warning(
+                    "Capital fetch failed for daily stats, using fallback: %s",
+                    cap_exc,
+                )
+                # Fallback: last known capital_end, or capital_start
+                if existing and existing["capital_end"]:
+                    capital_end = existing["capital_end"]
+                else:
+                    capital_end = capital_start
 
             conn.execute("""
                 INSERT INTO daily_stats
@@ -766,6 +798,32 @@ def validate_briefing(briefing: dict | None) -> tuple[bool, str]:
             logger.warning(f"[BRIEFING] Validation REJECTED: watchlist[{i}] is not a dict")
             return False, f"Stock {i} in watchlist must be dict"
     
+    # F018: Check briefing staleness — reject briefings older than 14 hours
+    generated_at = briefing.get('generated_at') or briefing.get('timestamp')
+    if generated_at:
+        try:
+            from datetime import datetime
+            gen_time = datetime.fromisoformat(str(generated_at))
+            age_hours = (datetime.now() - gen_time).total_seconds() / 3600
+            if age_hours > 14:
+                logger.warning(
+                    '[BRIEFING] STALE: Generated %.1f hours ago (%s). '
+                    'Screener may have failed to run today.',
+                    age_hours, generated_at,
+                )
+                try:
+                    from core.alerts import alert_critical
+                    alert_critical(
+                        f'Session briefing is {age_hours:.0f} hours old. '
+                        f'Morning screener may have failed. Trading on stale data.'
+                    )
+                except Exception:
+                    pass
+                # Don't reject — but flag it so the system can be more conservative
+                briefing.setdefault('_stale_warning', True)
+        except Exception as e:
+            logger.debug('Could not parse briefing timestamp: %s', e)
+
     logger.info(f"[BRIEFING] Validation PASSED: {len(approved)} approved + {len(watchlist)} watchlist ({session_type})")
     return True, f"Valid briefing ({len(approved)} approved + {len(watchlist)} watchlist)"
 

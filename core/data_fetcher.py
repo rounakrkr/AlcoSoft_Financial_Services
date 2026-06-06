@@ -235,6 +235,13 @@ def _build_candle(
     Aggregates ticks into 5-minute OHLCV candles.
     When a candle period ends, pushes it to history and starts fresh.
     """
+    # F024: Don't build candles outside market hours to prevent indicator contamination
+    market_open_time = dt_time(9, 15)
+    market_close_time = dt_time(15, 30)
+    current_time = now.time()
+    if current_time < market_open_time or current_time > market_close_time:
+        return
+
     bucket_minute = _candle_bucket_minutes(now)
     bucket_key    = now.strftime(f"%Y-%m-%d %H:{bucket_minute:02d}")
 
@@ -378,7 +385,15 @@ def _schedule_reconnect():
             _reconnect_timer.cancel()               # ← yeh add karo
             _reconnect_timer = None
         if _reconnect_attempts >= _max_reconnect:
-            logger.error("Max reconnect attempts reached. Manual restart needed.")
+            logger.error('Max reconnect attempts reached. Manual restart needed.')
+            try:
+                from core.alerts import alert_critical
+                alert_critical(
+                    f'WebSocket feed DEAD after {_max_reconnect} reconnect attempts. '
+                    f'Positions are unmonitored by software SL. Manual restart required.'
+                )
+            except Exception:
+                pass
             return
         delay = min(_reconnect_delay * (2 ** _reconnect_attempts), 300)
         logger.info(f"Scheduling reconnect in {delay}s (attempt {_reconnect_attempts+1}/{_max_reconnect})")
@@ -591,6 +606,27 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
             f"🚨 RESOLUTION FAILED for {len(failed_symbols)} symbols: {failed_symbols} — "
             f"Emergency squareoff will NOT be able to get prices for these!"
         )
+        # F014: Check if any open positions are affected by resolution failure
+        try:
+            from core.state_manager import get_open_positions
+            open_syms = {str(p.get('symbol', '')).upper() for p in get_open_positions()}
+            affected = [s for s in failed_symbols if s.upper() in open_syms]
+            if affected:
+                logger.critical(
+                    'OPEN POSITIONS %s have NO live price feed — '
+                    'software SL will NOT fire for these symbols!',
+                    affected,
+                )
+                try:
+                    from core.alerts import alert_critical
+                    alert_critical(
+                        f'Open positions {affected} have no live price feed. '
+                        f'Only broker-side SL-M protects them.'
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     return tokens_list
 

@@ -55,6 +55,8 @@ _capital_cache: float = 10000.0
 _capital_last_update: float = 0.0
 CAPITAL_CACHE_TTL = 300
 _order_lock = threading.RLock()
+_capital_api_failures: int = 0
+_CAPITAL_API_FAILURE_ALERT_THRESHOLD = 3
 
 # ── Squareoff flag — prevents repeated calls after 3:15 ──────
 _squareoff_done = False
@@ -70,6 +72,16 @@ RISK_REDUCING_SELL_REASONS = {
 # ── Configuration validation ──────────────────────────────────
 _config_validated = False
 _config_warnings = []
+
+# ── F002: Broker SL recovery — per-symbol backoff state ─────────────────────
+# Tracks recovery attempts for positions missing a broker-side SL-M order.
+# State per symbol: {last_attempt_ts, next_delay_sec, attempt_count}
+# Prevents API spam and log flooding during prolonged broker outages.
+_sl_recovery_state: dict[str, dict] = {}
+_SL_RECOVERY_INITIAL_DELAY_SEC: int = 30    # First retry 30s after failure
+_SL_RECOVERY_MAX_DELAY_SEC:     int = 300   # Cap at 5 minutes between retries
+_SL_RECOVERY_BACKOFF_FACTOR:    int = 2     # Double delay each time
+_SL_RECOVERY_LOG_EVERY_N:       int = 5     # Log a summary every N failures
 
 
 def _is_risk_reducing_sell(reason: str) -> bool:
@@ -114,6 +126,21 @@ def _resolve_liquidation_price(
                 return tick_price, "latest_tick"
     except Exception:
         logger.debug("Latest tick lookup failed during liquidation for %s", symbol, exc_info=True)
+
+    # Attempt 3: yfinance fallback for squareoff pricing
+    try:
+        import yfinance as yf
+        nse_ticker = f'{symbol}.NS'
+        data = yf.Ticker(nse_ticker, session=None)
+        if data and data.info:
+            price = safe_float(
+                data.info.get('currentPrice') or data.info.get('regularMarketPrice'), 0.0
+            )
+            if price > 0:
+                logger.info('Liquidation price for %s from yfinance: Rs%s', symbol, price)
+                return price, 'yfinance_fallback'
+    except Exception as e:
+        logger.debug('yfinance liquidation fallback failed for %s: %s', symbol, e)
 
     return 0.0, "missing_quote"
 
@@ -524,6 +551,17 @@ def calculate_quantity(price: float, stop_loss: float, risk_pct: float = None) -
     
     qty = max(0, safe_int(constraint_analysis['final_qty'], 0))
     limiting_constraint = constraint_analysis['limiting_constraint']
+
+    # GUARD: Prevent quantity floor of 1 from exceeding available buying power
+    if qty > 0:
+        order_cost = qty * price
+        available_to_deploy = max(0.0, total_buying_power - deployed_now)
+        if order_cost > available_to_deploy:
+            logger.warning(
+                'Quantity %d for %s (cost Rs%.0f) exceeds available buying power (Rs%.0f) — rejecting',
+                qty, symbol if 'symbol' in dir() else 'expensive_stock', order_cost, available_to_deploy,
+            )
+            return 0
     
     # ─────────────────────────────────────────────────────────
     # STEP 5: Handle forced_buy (if configured)
@@ -708,15 +746,21 @@ def _market_protection_pct(price: float) -> float:
     return 0.005
 
 
-def _broker_safe_limit_price(ltp: float, transaction: str) -> float:
+def _broker_safe_limit_price(ltp: float, transaction: str, is_sl_order: bool = False) -> float:
     """
     Convert a desired market-style order into a limit order inside Kotak's
     protection band. Retail algo market orders are not allowed.
     
     NSE requires prices to be multiples of 0.05. This function ensures compliance.
+    
+    Args:
+        is_sl_order: If True, use 3x the normal buffer for SL orders
+                     to survive gap-downs.
     """
     ltp = max(safe_float(ltp, 0.0), 0.05)
     pct = _market_protection_pct(ltp)
+    if is_sl_order:
+        pct = pct * 3  # Wider buffer for SL orders to survive gap-downs
     
     if str(transaction).upper() == "B":
         adjusted = ltp * (1 + pct)
@@ -976,37 +1020,104 @@ def _place_buy_order_impl(
         # Step 2 — Place SL-M SELL order on Kotak immediately
         # 🔧 NO PRE-VALIDATION: ensure_trade_token_on_client() already handles all token checks
         # Calling validate_and_fix_session_before_order() here causes DOUBLE token refresh!
+        #
+        # 🛡️ F002 FIX (REVISED): SL-M placement is attempted with up to 3 external retries.
+        # If ALL retries fail, the position is still saved locally so every software protection
+        # layer (software SL, trailing SL, profit target, EOD squareoff) remains active.
+        # The position is marked SL_BROKER_UNPROTECTED and the strategy loop will attempt
+        # SL-M recovery on every subsequent iteration via _attempt_sl_recovery().
+        # A CRITICAL alert is raised immediately so the operator is aware.
+        # We do NOT abort the trade — cancelling a filled BUY is impossible and creates
+        # an orphan position with zero visibility, which is strictly worse.
         
-        logger.info(f"🔄 About to call _send_kotak_sl_order for {symbol} | Qty: {quantity} | Trigger: ₹{stop_loss} | Symbol: {trading_symbol} | Product: {product}")
-        try:
-            trade["sl_order_id"] = _send_kotak_sl_order(
-                trading_symbol = trading_symbol,
-                quantity       = quantity,
-                trigger_price  = stop_loss,
-                product        = product,
+        _SL_MAX_EXT_RETRIES = 3
+        _SL_RETRY_DELAY_SEC = 2
+
+        logger.info(
+            f"🔄 Placing broker SL-M for {symbol} | "
+            f"Qty: {quantity} | Trigger: ₹{stop_loss} | Trading symbol: {trading_symbol}"
+        )
+
+        for _sl_attempt in range(1, _SL_MAX_EXT_RETRIES + 1):
+            try:
+                trade["sl_order_id"] = _send_kotak_sl_order(
+                    trading_symbol = trading_symbol,
+                    quantity       = quantity,
+                    trigger_price  = stop_loss,
+                    product        = product,
+                )
+            except Exception as _sl_exc:
+                logger.error(
+                    f"❌ _send_kotak_sl_order exception (attempt {_sl_attempt}/{_SL_MAX_EXT_RETRIES}): {_sl_exc}",
+                    exc_info=True,
+                )
+                trade["sl_order_id"] = None
+
+            if trade["sl_order_id"]:
+                logger.info(
+                    f"🛡️ Broker SL-M placed | {symbol} | Qty: {quantity} | "
+                    f"Trigger: ₹{stop_loss} | OrderID: {trade['sl_order_id']} "
+                    f"(attempt {_sl_attempt}/{_SL_MAX_EXT_RETRIES})"
+                )
+                break  # SL placed — exit retry loop
+
+            if _sl_attempt < _SL_MAX_EXT_RETRIES:
+                logger.warning(
+                    f"⚠️ SL-M attempt {_sl_attempt}/{_SL_MAX_EXT_RETRIES} failed for {symbol}. "
+                    f"Retrying in {_SL_RETRY_DELAY_SEC}s..."
+                )
+                import time as _time_mod
+                _time_mod.sleep(_SL_RETRY_DELAY_SEC)
+
+        # ── F002: SL-M failed after all retries ──────────────────────────────────────
+        # CRITICAL: Do NOT abort or cancel the trade. The BUY is already filled on the
+        # exchange. Cancelling a filled order is impossible. Raising an exception here
+        # would create an orphan broker position with zero local visibility — strictly
+        # worse than continuing with software-only protection.
+        #
+        # Instead: save the position (software SL stays fully active), flag it as
+        # unprotected, alert the operator, and rely on the strategy loop's SL recovery
+        # function to re-attempt broker-side SL placement on every subsequent iteration.
+        # ─────────────────────────────────────────────────────────────────────────────
+        if not trade["sl_order_id"]:
+            logger.critical(
+                f"🚨 CRITICAL: Broker SL-M FAILED for {symbol} after {_SL_MAX_EXT_RETRIES} attempts. "
+                f"Position will be saved with SOFTWARE-ONLY protection. "
+                f"Recovery loop will retry broker SL via kotak_sl_order_id=NULL detection. "
+                f"BUY order_id: {trade['order_id']} | Entry: ₹{entry_price} | SL: ₹{stop_loss}"
             )
-            logger.info(f"✅ _send_kotak_sl_order returned: {trade['sl_order_id']}")
-        except Exception as e:
-            logger.error(f"❌ _send_kotak_sl_order THREW EXCEPTION: {e}", exc_info=True)
-            trade["sl_order_id"] = None
-        
-        if trade["sl_order_id"]:
-            logger.info(
-                f"🛡️ Kotak SL-M placed | {symbol} | "
-                f"Qty: {quantity} | Trigger: ₹{stop_loss} | OrderID: {trade['sl_order_id']}"
-            )
-        else:
-            logger.warning(
-                f"⚠️ Kotak SL-M FAILED for {symbol}. "
-                f"Software SL active but no broker-side protection!"
-            )
+            # NOTE: No notes flag is written here. The absence of kotak_sl_order_id
+            # is the sole, authoritative signal for the recovery loop. This avoids
+            # storing machine state in a free-text field that other code paths may
+            # overwrite (e.g. broker reconciliation quantity/entry repair writes notes).
+            # Fire CRITICAL alert to operator immediately
+            try:
+                from core.alerts import alert_critical
+                alert_critical(
+                    f"🚨 Broker SL-M FAILED for {symbol} ({_SL_MAX_EXT_RETRIES} retries). "
+                    f"Position held with SOFTWARE SL only (₹{stop_loss}). "
+                    f"BUY: {trade['order_id']} | Entry: ₹{entry_price}. "
+                    f"Strategy loop will retry broker SL automatically."
+                )
+            except Exception:
+                pass
+            # Permanent audit trail entry
+            try:
+                audit_system_error(
+                    f"Broker SL-M placement failed for {symbol} after {_SL_MAX_EXT_RETRIES} attempts. "
+                    f"Position saved with software-only SL. Recovery driven by kotak_sl_order_id=NULL. "
+                    f"BUY order_id={trade['order_id']} entry={entry_price} sl={stop_loss}."
+                )
+            except Exception:
+                pass
 
         logger.info(
             f"✅ [LIVE] BUY | {symbol} | Qty: {quantity} | "
-            f"@ ₹{entry_price} | SL: ₹{stop_loss} | Target: ₹{target_price}"
+            f"@ ₹{entry_price} | SL: ₹{stop_loss} | Target: ₹{target_price} | "
+            f"Broker SL: {'✅ ' + str(trade['sl_order_id']) if trade['sl_order_id'] else '❌ UNPROTECTED (recovery pending)'}"
         )
         _get_available_capital(force_refresh=True)
-        
+
         audit_order_placed(
             symbol=symbol,
             side="BUY",
@@ -1285,8 +1396,215 @@ def check_profit_targets(live_prices: dict[str, float]):
             place_sell_order(symbol, current, "TARGET")
 
 
+def attempt_broker_sl_recovery():
+    """
+    F002 RECOVERY (v3 — final): Scans all open positions for missing broker-side
+    SL-M orders and attempts to place them. Called every strategy loop iteration
+    in LIVE mode.
+
+    Recovery eligibility:
+        A position is a recovery candidate when kotak_sl_order_id is empty/None
+        in LIVE mode. This is the single authoritative field — no separate flag
+        or notes annotation is written or read. This design is immune to
+        notes-field overwrites by reconciliation or any future code that writes
+        to notes for legitimate operator-facing purposes (Scenario C protection).
+
+    Safety properties:
+    - Circuit-breaker aware: skips ALL attempts when the order circuit is open,
+      preventing the recovery loop from contributing to circuit trips that block
+      legitimate risk-reducing sell orders.
+    - Per-symbol exponential backoff: starts at 30s, doubles each failure up to
+      a 300s cap. Eliminates API spam during prolonged broker outages.
+    - Log-flood protected: WARNING on first attempt per cooldown cycle, DEBUG
+      for cooldown skips, CRITICAL when a fresh attempt fails, WARNING summary
+      every 5th failure.
+    - Never creates more risk than the original condition: software SL remains
+      fully active regardless of broker SL recovery status.
+
+    Worst-case broker API load (30-minute outage, 10 positions):
+        Schedule per symbol: 30s/90s/210s/450s/750s/1050s/1350s/1650s = 8 attempts
+        Total: 8 x 10 symbols x 2 internal retries = 160 broker API calls.
+        vs. 7,200 without backoff — 97.8% reduction.
+    """
+    import time as _t
+
+    if TRADING_MODE != "LIVE":
+        return  # Paper mode: no real broker SL orders
+
+    # ── Guard 1: Circuit breaker ─────────────────────────────────────────────
+    # If the order circuit is open, recovery attempts would fail immediately AND
+    # each failure increments the breaker's counter, making it stay open longer.
+    # More critically: an open order circuit already blocks new buy orders;
+    # if recovery hammered it further, it would also delay HALF_OPEN recovery
+    # which would prevent legitimate sell orders from going through.
+    order_breaker = get_breaker("order")
+    if order_breaker.is_open():
+        logger.debug(
+            "SL recovery skipped: order circuit OPEN (state=%s). "
+            "Software SL remains active for all positions.",
+            order_breaker.state.value,
+        )
+        return
+
+    now_ts = _t.time()
+
+    for position in get_open_positions():
+        symbol      = str(position.get("symbol", "")).upper()
+        sl_order_id = str(position.get("kotak_sl_order_id") or "").strip()
+
+        # Recovery eligibility: kotak_sl_order_id is the authoritative signal.
+        # Empty = no broker-side SL exists. No separate flag needed or used.
+        # This is immune to notes-field overwrites by reconciliation or any
+        # other code path that legitimately annotates the notes column.
+        if sl_order_id:
+            continue
+
+        # ── Guard 2: Exponential backoff ────────────────────────────────────
+        state = _sl_recovery_state.get(symbol)
+        if state is None:
+            # First time we've seen this symbol as unprotected in this session
+            state = {
+                "last_attempt_ts": 0.0,
+                "next_delay_sec":  _SL_RECOVERY_INITIAL_DELAY_SEC,
+                "attempt_count":   0,
+            }
+            _sl_recovery_state[symbol] = state
+
+        elapsed = now_ts - state["last_attempt_ts"]
+        if elapsed < state["next_delay_sec"]:
+            # Still in cooldown — skip silently (no log to prevent flood)
+            logger.debug(
+                "SL recovery cooldown for %s: %.0fs remaining before next attempt "
+                "(delay=%ds, attempt=%d)",
+                symbol,
+                state["next_delay_sec"] - elapsed,
+                state["next_delay_sec"],
+                state["attempt_count"],
+            )
+            continue
+
+        # ── Cooldown elapsed: attempt recovery ──────────────────────────────
+        stop_loss      = safe_float(position.get("stop_loss"), 0.0)
+        trailing_sl    = safe_float(position.get("trailing_sl"), 0.0)
+        quantity       = safe_int(position.get("quantity"), 0)
+        trading_symbol = str(position.get("trading_symbol") or f"{symbol}-EQ")
+        product        = str(position.get("product") or "MIS")
+        active_trigger = max(stop_loss, trailing_sl) if trailing_sl else stop_loss
+
+        if quantity <= 0 or active_trigger <= 0:
+            logger.warning(
+                "SL recovery skipped for %s: invalid position data "
+                "(qty=%r trigger=%.2f)",
+                symbol, quantity, active_trigger,
+            )
+            continue
+
+        attempt_num = state["attempt_count"] + 1
+        logger.warning(
+            "🔄 SL recovery attempt #%d for %s | "
+            "Qty: %d | Trigger: ₹%.2f | delay_was: %ds",
+            attempt_num, symbol, quantity, active_trigger, state["next_delay_sec"],
+        )
+
+        # Update state BEFORE the call so a crash/exception still records the attempt
+        state["last_attempt_ts"] = now_ts
+        state["attempt_count"]   = attempt_num
+
+        new_sl_id = None
+        try:
+            new_sl_id = _send_kotak_sl_order(
+                trading_symbol=trading_symbol,
+                quantity=quantity,
+                trigger_price=active_trigger,
+                product=product,
+            )
+        except Exception as exc:
+            logger.critical(
+                "🚨 SL recovery #%d EXCEPTION for %s: %s. "
+                "Software SL at ₹%.2f active. Next attempt in %ds.",
+                attempt_num, symbol, exc, active_trigger,
+                min(state["next_delay_sec"] * _SL_RECOVERY_BACKOFF_FACTOR,
+                    _SL_RECOVERY_MAX_DELAY_SEC),
+            )
+
+        if new_sl_id:
+            # ── SUCCESS ─────────────────────────────────────────────────────
+            logger.info(
+                "✅ SL recovery SUCCESS for %s after %d attempt(s) | "
+                "New SL-M order: %s | Trigger: ₹%.2f",
+                symbol, attempt_num, new_sl_id, active_trigger,
+            )
+            try:
+                from core.state_manager import update_sl_order_id
+                update_sl_order_id(symbol, new_sl_id)
+                # kotak_sl_order_id now non-empty — position exits recovery
+                # eligibility automatically on next loop iteration. No flag to clear.
+            except Exception as upd_exc:
+                logger.error(
+                    "SL recovery: DB update failed for %s after success: %s",
+                    symbol, upd_exc,
+                )
+            # Remove from backoff tracking — position is now protected
+            _sl_recovery_state.pop(symbol, None)
+            try:
+                from core.alerts import send_alert
+                send_alert(
+                    f"✅ Broker SL-M recovered for {symbol} "
+                    f"(attempt #{attempt_num}). "
+                    f"SL order: {new_sl_id} | Trigger: ₹{active_trigger:.2f}",
+                    severity="INFO",
+                )
+            except Exception:
+                pass
+
+        else:
+            # ── FAILURE: apply exponential backoff ──────────────────────────
+            new_delay = min(
+                state["next_delay_sec"] * _SL_RECOVERY_BACKOFF_FACTOR,
+                _SL_RECOVERY_MAX_DELAY_SEC,
+            )
+            state["next_delay_sec"] = new_delay
+
+            # Log at CRITICAL on first failure; WARNING+summary every 5th;
+            # DEBUG otherwise — prevents log flooding during sustained outages.
+            if attempt_num == 1:
+                logger.critical(
+                    "🚨 SL recovery FAILED (attempt #1) for %s. "
+                    "Software SL at ₹%.2f is the only active protection. "
+                    "Next broker attempt in %ds.",
+                    symbol, active_trigger, new_delay,
+                )
+            elif attempt_num % _SL_RECOVERY_LOG_EVERY_N == 0:
+                logger.warning(
+                    "⚠️ SL recovery still failing for %s "
+                    "(attempt #%d, next in %ds). "
+                    "Software SL at ₹%.2f remains active.",
+                    symbol, attempt_num, new_delay, active_trigger,
+                )
+            else:
+                logger.debug(
+                    "SL recovery attempt #%d failed for %s. Next in %ds.",
+                    attempt_num, symbol, new_delay,
+                )
+
+
 def _get_available_capital(force_refresh: bool = False) -> float:
-    global _capital_cache, _capital_last_update
+    """
+    F005 FIX: Fetch broker account capital with observable failure handling.
+
+    Failure behaviour:
+    - On API failure (exception or None/zero response): increment
+      _capital_api_failures counter and return the last known-good cache.
+    - If _capital_api_failures reaches _CAPITAL_API_FAILURE_ALERT_THRESHOLD,
+      fire a CRITICAL alert so the operator knows trading is running on a
+      stale capital figure (or blocked entirely if cache is still 0.0).
+    - A separate CRITICAL is raised immediately on ANY failure when
+      _capital_cache == 0.0 (cache is still at its initial sentinel — no
+      valid capital has ever been fetched this session), because in that
+      state a failure means calculate_quantity() returns 0 for all trades.
+    - On success: reset _capital_api_failures to 0.
+    """
+    global _capital_cache, _capital_last_update, _capital_api_failures
     import time
 
     if TRADING_MODE == "PAPER":
@@ -1294,15 +1612,23 @@ def _get_available_capital(force_refresh: bool = False) -> float:
 
     now = time.time()
     if not force_refresh and (now - _capital_last_update) < CAPITAL_CACHE_TTL:
-        return _capital_cache   # cache se do
+        return _capital_cache   # valid cache — serve it
 
+    # ── Attempt broker fetch ──────────────────────────────────────────────────
+    fetch_ok = False
     try:
         from core.kotak_client import get_client
         client = get_client()
         limits = client.limits(segment="ALL", exchange="ALL", product="ALL")
 
         if isinstance(limits, dict) and limits.get("stCode") == 300015:
-            return _capital_cache   # market closed — purana cache rakho
+            # Market closed response — stale cache is fine, not a failure
+            return _capital_cache
+
+        if not isinstance(limits, dict):
+            raise ValueError(
+                "Capital API returned non-dict: " + repr(type(limits))
+            )
 
         available = (
             limits.get("Net")
@@ -1313,10 +1639,82 @@ def _get_available_capital(force_refresh: bool = False) -> float:
         if available_value > 0:
             _capital_cache = available_value
             _capital_last_update = now
+            if _capital_api_failures > 0:
+                logger.info(
+                    "Capital API recovered after %d failure(s). "
+                    "Available capital: Rs%.2f",
+                    _capital_api_failures, _capital_cache,
+                )
+            _capital_api_failures = 0   # reset on success
+            fetch_ok = True
             return _capital_cache
+        else:
+            raise ValueError(
+                "Capital API returned zero/empty available field. "
+                "limits=" + repr({k: limits.get(k) for k in ("Net", "availablecash", "data")})
+            )
 
-    except Exception as e:
-        logger.warning(f"Capital fetch failed: {e}. Using cache.")
+    except Exception as exc:
+        _capital_api_failures += 1
+        cache_is_zero = (_capital_cache <= 0.0)
+
+        # Always log at WARNING (details for log review)
+        logger.warning(
+            "Capital API failure #%d: %s. "
+            "Cache value: Rs%.2f (TTL: %ds old).",
+            _capital_api_failures, exc,
+            _capital_cache,
+            int(now - _capital_last_update) if _capital_last_update > 0 else -1,
+        )
+
+        # CRITICAL path 1: Cache still at initial 0.0 — all new orders will be
+        # blocked with qty=0. Fire CRITICAL immediately on first failure.
+        if cache_is_zero:
+            logger.critical(
+                "🚨 CAPITAL API FAILED and cache is ZERO (no valid capital "
+                "fetched this session). ALL new buy orders will return qty=0 "
+                "until capital API recovers. Failure #%d: %s",
+                _capital_api_failures, exc,
+            )
+            try:
+                from core.alerts import alert_critical
+                alert_critical(
+                    f"🚨 Capital API DOWN — no valid capital in cache. "
+                    f"All new buy orders BLOCKED (qty=0). "
+                    f"Failure #{_capital_api_failures}: {exc}"
+                )
+            except Exception:
+                pass
+
+        # CRITICAL path 2: Threshold crossed — stale cache, repeated failure
+        elif _capital_api_failures == _CAPITAL_API_FAILURE_ALERT_THRESHOLD:
+            logger.critical(
+                "🚨 Capital API has failed %d consecutive times. "
+                "Trading on STALE capital cache of Rs%.2f. "
+                "New orders may be mis-sized or blocked if cache expires. "
+                "Latest error: %s",
+                _capital_api_failures, _capital_cache, exc,
+            )
+            try:
+                from core.alerts import alert_critical
+                alert_critical(
+                    f"🚨 Capital API failed {_capital_api_failures}x consecutively. "
+                    f"Running on stale cache: Rs{_capital_cache:.2f}. "
+                    f"Error: {exc}"
+                )
+            except Exception:
+                pass
+
+        # Periodic reminder every 5 failures after threshold
+        elif (
+            _capital_api_failures > _CAPITAL_API_FAILURE_ALERT_THRESHOLD
+            and _capital_api_failures % 5 == 0
+        ):
+            logger.critical(
+                "🚨 Capital API still failing (failure #%d). "
+                "Stale cache: Rs%.2f.",
+                _capital_api_failures, _capital_cache,
+            )
 
     return _capital_cache
 
@@ -1879,7 +2277,7 @@ def _send_kotak_order(
             response = call_broker_api(client.place_order, **order_kwargs)
             
             # 📋 TEMPORARY DIAGNOSTIC: Log raw broker response
-            logger.info(f"📋 RAW BROKER RESPONSE: {response}")
+            logger.debug(f"📋 RAW BROKER RESPONSE: {response}")
             
             if response and isinstance(response, dict):
                 stCode = response.get("stCode")
@@ -2037,7 +2435,7 @@ def _send_kotak_sl_order(
             response = call_broker_api(client.place_order, **sl_kwargs)
             
             # 📋 TEMPORARY DIAGNOSTIC: Log raw broker response
-            logger.info(f"📋 RAW BROKER RESPONSE (SL-M): {response}")
+            logger.debug(f"📋 RAW BROKER RESPONSE (SL-M): {response}")
             
             # 🔥 CRITICAL: Check if response is an error BEFORE parsing
             if response is None:

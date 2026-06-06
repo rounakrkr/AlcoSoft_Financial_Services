@@ -141,7 +141,13 @@ def _init_db():
     conn.close()
 
 
-_init_db()
+# F023: Wrap DB init so a disk/permission error doesn't crash the import chain
+_db_available = True
+try:
+    _init_db()
+except Exception as e:
+    _db_available = False
+    logger.error('Reflection DB initialization failed: %s — adaptive features disabled', e)
 
 
 # ════════════════════════════════════════════════════════════
@@ -431,6 +437,8 @@ def record_trade(
     Record a completed trade.
     Automatically updates signal, time-window, and symbol statistics.
     """
+    if not _db_available:
+        return False
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
@@ -665,6 +673,8 @@ def update_symbol_stats(symbol: str):
 
 def get_signal_stats(signal_name: str) -> dict | None:
     """Get performance stats for a specific signal."""
+    if not _db_available:
+        return {}
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
@@ -776,11 +786,11 @@ def get_signal_execution_policy(
     stats are reported for context but do not hard-block fresh sessions.
     """
     signal_name = str(signal_name or "").strip()
-    if not signal_name:
+    if not signal_name or not _db_available:
         return {
             "signal_name": signal_name,
             "suppressed": False,
-            "reason": "No signal name",
+            "reason": "No signal name" if not signal_name else "DB unavailable",
             "scope": "none",
             "sample_size": 0,
             "win_rate": 0.0,
@@ -990,6 +1000,8 @@ def get_confidence_multiplier(signal_name: str, min_trades: int = 10) -> float:
     
     Requires minimum N trades for reliability.
     """
+    if not _db_available:
+        return 1.0
     stats = get_signal_stats(signal_name)
     
     # Not enough data — neutral multiplier
@@ -1016,6 +1028,8 @@ def get_time_window_multiplier(time_window: str, min_trades: int = 20) -> float:
     
     Multiplier range: 0.4 to 1.2
     """
+    if not _db_available:
+        return 1.0
     stats = get_time_window_stats(time_window)
     
     if not stats or stats["trade_count"] < min_trades:
@@ -1042,6 +1056,8 @@ def get_symbol_sl_adjustment(symbol: str) -> float:
     Returns percentage adjustment.
     Example: 0.8 means use 80% of base SL (tighter)
     """
+    if not _db_available:
+        return 1.0
     stats = get_symbol_stats(symbol)
     
     if not stats:

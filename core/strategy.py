@@ -45,6 +45,7 @@ from core.order_executor import (
     update_trailing_stop_losses,
     squareoff_all_intraday,
     check_max_daily_loss,
+    attempt_broker_sl_recovery,  # F002: retry missing broker SL orders each loop
 )
 from core.state_manager import (
     load_briefing,
@@ -82,6 +83,7 @@ _yfinance_cache: dict[str, list] = {}
 _yfinance_failed_until: dict[str, float] = {}
 _yfinance_failure_reason: dict[str, str] = {}
 YFINANCE_FAILURE_COOLDOWN_SEC = 300
+_yahoo_failure_alerted = False  # F021: one-shot alert flag for Yahoo Finance outage
 _briefing_cache: dict = None
 _briefing_cache_time: float = 0.0
 BRIEFING_CACHE_SECONDS = 60  # Reload from disk every 60 seconds
@@ -413,6 +415,9 @@ def _fetch_yahoo_history(symbol: str, period: str, interval: str, timeout: float
     index = pd.to_datetime(timestamps, unit="s", utc=True)
     exchange_tz = ((result.get("meta") or {}).get("exchangeTimezoneName") or "Asia/Kolkata")
     index = index.tz_convert(exchange_tz)
+    # F003: Normalize to tz-naive to prevent mismatch with WebSocket candles
+    if hasattr(index, 'tz') and index.tz is not None:
+        index = index.tz_localize(None)
 
     frame = pd.DataFrame(
         {
@@ -538,12 +543,24 @@ def _get_candles_with_yfinance_seed(symbol: str) -> list[dict]:
 
 def _get_indicator_df(symbol: str) -> pd.DataFrame | None:
     """RSI / MACD / EMA / Bollinger — seeded from yfinance, updated by WebSocket."""
+    global _yahoo_failure_alerted
     try:
         candles = _get_candles_with_yfinance_seed(symbol)
     except RuntimeError as exc:
         reason = str(exc)
         _mark_yfinance_failed(symbol, reason)
         logger.error("%s - yfinance unavailable; symbol marked WAIT. %s", symbol, reason)
+        # F021: Fire a one-shot CRITICAL alert when Yahoo Finance is unavailable
+        if not _yahoo_failure_alerted:
+            _yahoo_failure_alerted = True
+            try:
+                from core.alerts import alert_critical
+                alert_critical(
+                    'Yahoo Finance data unavailable — no indicators can be computed. '
+                    'New buy signals blocked. Software sell signals degraded.'
+                )
+            except Exception:
+                pass
         return None
 
     if len(candles) < 26:
@@ -558,7 +575,9 @@ def _get_indicator_df(symbol: str) -> pd.DataFrame | None:
 def _get_pattern_df(symbol: str) -> pd.DataFrame | None:
     """Candlestick patterns — WebSocket-built candles only (real-time)."""
     ws_candles = get_candle_history(symbol, include_current=False)
-    if len(ws_candles) < MIN_WS_CANDLES_FOR_PATTERNS:
+    # F028: Need at least 6 candles for reliable pattern detection
+    min_required = max(MIN_WS_CANDLES_FOR_PATTERNS, 6)
+    if len(ws_candles) < min_required:
         return None
     return pd.DataFrame(ws_candles).astype({
         "open": float, "high": float,
@@ -2043,6 +2062,9 @@ def _check_sell_signals(live_prices: dict[str, float]):
 # ════════════════════════════════════════════════════════════
 
 def _check_all_exits(live_prices: dict[str, float]):
+    # F002: Attempt to place missing broker SL orders BEFORE any exit checks.
+    # Silent when all positions are protected; CRITICAL log when recovery attempted.
+    attempt_broker_sl_recovery()
     check_stop_losses(live_prices)
     update_trailing_stop_losses(live_prices)
     check_profit_targets(live_prices)

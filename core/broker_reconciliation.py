@@ -249,8 +249,14 @@ def _order_trigger(row: dict) -> float:
 
 def _is_active_status(status: str) -> bool:
     if not status:
-        return True
-    return not any(word in status for word in ("complete", "traded", "executed", "cancel", "reject"))
+        return True  # Assume active if status unknown
+    status_lower = status.lower()
+    # F025: Expanded inactive keywords for thorough status detection
+    inactive_keywords = (
+        'complete', 'traded', 'executed', 'cancel', 'reject',
+        'expired', 'filled', 'done', 'closed',
+    )
+    return not any(word in status_lower for word in inactive_keywords)
 
 
 def _is_active_sl_sell(row: dict) -> bool:
@@ -498,6 +504,16 @@ def reconcile_broker_vs_local() -> dict:
 
     for symbol, details in broker_long.items():
         if symbol in local_by_symbol:
+            continue
+        # F008: Only recover MIS (intraday) positions — skip CNC/delivery holdings
+        product = str(details.get('product', 'MIS')).upper()
+        if product not in ('MIS', 'INTRADAY', 'CO', 'BO'):
+            logger.warning(
+                'Skipping broker-only position %s — product=%s is not intraday. '
+                'This may be a CNC/delivery holding.',
+                symbol, product,
+            )
+            summary['broker_only'].append(f'{symbol}(SKIPPED:{product})')
             continue
         summary["broker_only"].append(symbol)
         trade = _build_recovered_trade(details)
