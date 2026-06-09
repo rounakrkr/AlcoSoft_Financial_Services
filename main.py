@@ -195,7 +195,7 @@ async def startup():
             logger.critical("Fix issues above and restart the system.")
             sys.exit(1)
     
-    if not health.passed():
+    elif not health.passed():
         logger.warning("⚠️  Some checks failed but continuing (PAPER MODE)")
 
     # Step 2 — Crash Recovery
