@@ -12,28 +12,41 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Kotak Neo ordSt values (see neo_api_client order_api.py)
-_COMPLETE = frozenset({"complete", "traded", "fully executed", "executed"})
-_REJECTED = frozenset({"rejected", "cancelled", "canceled", "cancel"})
-_PENDING = frozenset({
-    "open", "pending", "trigger pending", "partially executed",
-    "partial", "modified", "validation pending", "put order req received",
-})
-
-
 def normalize_kotak_status(ord_st: Optional[str]) -> Optional[str]:
-    """Map Kotak ordSt → COMPLETE | PENDING | REJECTED."""
+    """Map Kotak ordSt into distinct unified states."""
     if not ord_st:
         return None
     s = str(ord_st).strip().lower()
-    if s in _COMPLETE or "traded" in s or s == "complete":
+    
+    if s in ("cancel rejected", "cancel_rejected", "cancel reject"):
+        return "CANCEL_REJECTED"
+        
+    if s in ("complete", "traded", "fully executed", "executed") or "traded" in s:
         return "COMPLETE"
-    if s in _REJECTED or "reject" in s or "cancel" in s:
+        
+    if s in ("cancelled", "canceled", "cancel"):
+        return "CANCELLED"
+        
+    if s in ("rejected", "reject"):
         return "REJECTED"
-    if s in _PENDING:
+        
+    if s in ("open", "pending", "trigger pending", "partially executed", "partial", "modified", "validation pending", "put order req received"):
         return "PENDING"
+        
     # Unknown — treat as pending until proven otherwise
     return "PENDING"
+
+
+def extract_broker_fill_qty(row: dict | None) -> int:
+    """Extract filled quantity from Kotak order row."""
+    if not isinstance(row, dict):
+        return 0
+    from core.safe_io import safe_int
+    for key in ("fldQty", "fillQty", "trdQty", "filledQty", "tradedQty"):
+        qty = safe_int(row.get(key), 0)
+        if qty > 0:
+            return qty
+    return 0
 
 
 def _find_order_in_history(data: Any, order_id: str) -> Optional[dict]:

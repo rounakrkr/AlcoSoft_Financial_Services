@@ -34,6 +34,8 @@ DEFAULTS: dict = {
         "max_risk_per_trade": 0.02,
         "math_risk_per_trade": 0.05,
         "max_daily_loss_percent": 0.05,
+        "broker_sl_trigger_buffer_pct": 0.01,
+        "broker_sl_limit_offset_pct": 0.0005,
         "paper_capital": 10000,
         "allow_margin": False,
         "forced_buy_margin": False,
@@ -48,7 +50,7 @@ DEFAULTS: dict = {
         "buy_signal_lookback_candles": 3,
         "sell_signal_lookback_candles": 3,
         "min_ws_candles_for_patterns": 2,
-        "loop_interval_sec": 5,
+        "loop_interval_sec": 1,
     },
     "screener": {
         "screener_total_stocks": 8,
@@ -81,6 +83,8 @@ BASE_FIELD_SCHEMA: list[dict] = [
     
     {"section": "risk", "key": "target_rr_ratio", "label": "Profit target (R:R)", "type": "float", "min": 1, "max": 5, "step": 0.1, "hint": "Target = risk × this ratio"},
     {"section": "risk", "key": "max_daily_loss_percent", "label": "Max daily loss (%)", "type": "percent", "min": 1, "max": 20, "step": 0.5, "hint": "Circuit breaker — stops ALL trading if daily P&L falls below this"},
+    {"section": "risk", "key": "broker_sl_trigger_buffer_pct", "label": "Broker SL Buffer (%)", "type": "percent", "min": 0.1, "max": 5.0, "step": 0.1, "hint": "Distance from entry for the broker disaster SL trigger."},
+    {"section": "risk", "key": "broker_sl_limit_offset_pct", "label": "Broker SL Limit Offset (%)", "type": "percent", "min": 0.01, "max": 2.0, "step": 0.01, "hint": "Distance below trigger for the limit price of the disaster SL."},
     {"section": "risk", "key": "max_risk_per_trade", "label": "AI agent risk / trade (%)", "type": "percent", "min": 0.5, "max": 10, "step": 0.5, "hint": "Max capital % risked per AI agent trade (cognitive signals)"},
     {"section": "risk", "key": "math_risk_per_trade", "label": "Math watchlist risk / trade (%)", "type": "percent", "min": 0.5, "max": 10, "step": 0.5, "hint": "Max capital % risked per math/technical trade (slower orders)"},
     {"section": "risk", "key": "tsl_activation_ratio", "label": "TSL activation ratio", "type": "float", "min": 1.0, "max": 2.0, "step": 0.1, "hint": "TSL activates when profit reaches SL% × this ratio. Example: SL 0.5% + ratio 1.4 = activate at 0.7% profit"},

@@ -1252,10 +1252,74 @@ def _place_sell_order_impl(
         )
 
     elif TRADING_MODE == "LIVE":
-        # Cancel existing SL-M order first (if it exists)
+        # Enforce Cancel-Verify-Replace State Machine
         sl_order_id = position.get("kotak_sl_order_id")
-        if sl_order_id and reason != "STOPLOSS":
-            _cancel_kotak_order(sl_order_id)
+        if sl_order_id:
+            cancel_success = _cancel_kotak_order(sl_order_id)
+            if cancel_success:
+                logger.info(f"✅ Broker SL {sl_order_id} successfully cancelled before software sell.")
+                
+                # Check for partial fills even on success
+                try:
+                    from core.order_verifier import fetch_kotak_order_row, extract_broker_fill_qty
+                    row = fetch_kotak_order_row(sl_order_id)
+                    filled_qty = extract_broker_fill_qty(row)
+                    if filled_qty > 0:
+                        quantity = max(0, quantity - filled_qty)
+                        logger.warning(f"⚠️ Broker SL was partially filled ({filled_qty} shares). Adjusted software sell qty to {quantity}.")
+                        if quantity <= 0:
+                            logger.info(f"Broker SL completely filled prior to cancel confirmation. Aborting software sell.")
+                            close_position(symbol, exit_price, reason, exit_price_source="broker_sl_partial_complete")
+                            return True
+                except Exception as e:
+                    logger.error(f"Failed to verify partial fill status for cancelled order {sl_order_id}: {e}")
+            
+            else:
+                # Cancel failed -> Status Verification State Machine
+                logger.warning(f"⚠️ Failed to cancel broker SL {sl_order_id}. Initiating State Machine fallback...")
+                try:
+                    from core.order_verifier import fetch_kotak_order_row, extract_broker_fill_qty, normalize_kotak_status
+                    row = fetch_kotak_order_row(sl_order_id)
+                    if row is None:
+                        raise TimeoutError("Status query returned None")
+                        
+                    ord_st = normalize_kotak_status(row.get("ordSt"))
+                    filled_qty = extract_broker_fill_qty(row)
+                    
+                    if ord_st == "COMPLETE":
+                        # State A
+                        logger.info(f"STATE A: Broker SL {sl_order_id} already COMPLETE. Aborting software sell to prevent double exposure.")
+                        close_position(symbol, exit_price, reason, exit_price_source="broker_sl_complete")
+                        return True
+                        
+                    elif ord_st == "CANCELLED":
+                        # State B (Cancelled)
+                        logger.info(f"STATE B: Broker SL {sl_order_id} is CANCELLED.")
+                        if filled_qty > 0:
+                            quantity = max(0, quantity - filled_qty)
+                            logger.warning(f"⚠️ Broker SL was partially filled ({filled_qty} shares). Adjusted software sell qty to {quantity}.")
+                            if quantity <= 0:
+                                close_position(symbol, exit_price, reason, exit_price_source="broker_sl_partial_complete")
+                                return True
+                        # Proceed to software sell
+                        
+                    elif ord_st == "REJECTED":
+                        # State B2 (Rejected on creation - never existed)
+                        logger.info(f"STATE B: Broker SL {sl_order_id} was REJECTED by broker.")
+                        # Proceed to software sell
+                    
+                    elif ord_st in ("PENDING", "CANCEL_REJECTED"):
+                        # State C (Open/Pending/Trigger_Pending/Cancel_Failed)
+                        logger.error(f"🚨 CRITICAL ALERT (STATE C): Broker SL {sl_order_id} is still alive ({ord_st}). Aborting software sell to prevent naked short.")
+                        return False
+                        
+                    else:
+                        raise ValueError(f"Unknown normalized status: {ord_st}")
+                        
+                except (TimeoutError, ConnectionError, Exception) as e:
+                    # State D (Timeout/Error)
+                    logger.error(f"🚨 CRITICAL ALERT (STATE D): API Blackout during status query for {sl_order_id} ({e}). Aborting software sell to prevent blind shoot.")
+                    return False
 
         order_id = _send_kotak_order(
             trading_symbol = trading_symbol,
@@ -1282,11 +1346,12 @@ def _place_sell_order_impl(
             )
             raise OrderExecutionError(f"SELL rejected for {symbol}")
         elif verification == "TIMEOUT":
-            logger.warning(
-                f"⚠️ SELL verification timed out for {symbol}. "
-                f"Assuming order is filled to prevent ghost holding. "
-                f"Reconciliation will clean up if broker actually dropped it. (order_id={order_id})"
+            logger.error(
+                f"🚨 CRITICAL ALERT: SELL verification TIMED OUT for {symbol}. "
+                f"Broker execution could not be verified. "
+                f"Position remains OPEN locally. Manual intervention required. (order_id={order_id})"
             )
+            raise OrderExecutionError(f"SELL verification timed out for {symbol}. Order status unconfirmed.")
 
         try:
             from core.order_verifier import fetch_kotak_order_row
@@ -2389,26 +2454,36 @@ def _send_kotak_sl_order(
     # STEP 0: Handle trading symbol
     # 🔥 FIX (2026-05-27): Kotak order API REQUIRES the -EQ suffix!
     order_symbol = trading_symbol  # ← KEEP -EQ suffix!
-    trigger_price = safe_float(trigger_price, 0.0)
+    software_trigger_price = safe_float(trigger_price, 0.0)
     quantity = safe_int(quantity, 0)
-    if quantity <= 0 or trigger_price <= 0:
+    if quantity <= 0 or software_trigger_price <= 0:
         logger.error(
             "Invalid SL order payload | symbol=%s qty=%r trigger=%r",
             order_symbol,
             quantity,
-            trigger_price,
+            software_trigger_price,
         )
         return None
         
-    limit_price = _broker_safe_limit_price(trigger_price, transaction_type, is_sl_order=False)
+    # Calculate Disaster Backup SL
+    from core.trading_settings import get as cfg
+    trigger_buffer_pct = safe_float(cfg("risk", "broker_sl_trigger_buffer_pct", 0.01), 0.01)
+    limit_offset_pct = safe_float(cfg("risk", "broker_sl_limit_offset_pct", 0.0005), 0.0005)
+    
+    broker_trigger_price = round(software_trigger_price * (1.0 - trigger_buffer_pct), 2)
+    broker_limit_price = round(broker_trigger_price * (1.0 - limit_offset_pct), 2)
         
     logger.debug(f"📋 SL order symbol: {order_symbol}")
-    logger.info(f"🔄 [SL] Starting SL order placement | Symbol: {order_symbol} | Qty: {quantity} | Trigger: ₹{trigger_price} | Limit: ₹{limit_price}")
+    logger.info(
+        f"🔄 [SL] Starting SL order placement | Symbol: {order_symbol} | Qty: {quantity} | "
+        f"Software SL: ₹{software_trigger_price} | Broker Trigger: ₹{broker_trigger_price} | "
+        f"Broker Limit: ₹{broker_limit_price}"
+    )
     
     sl_kwargs = dict(
         exchange_segment   = "nse_cm",
         product            = product,
-        price              = str(limit_price),
+        price              = str(broker_limit_price),
         order_type         = "SL",
         quantity           = str(quantity),
         validity           = "DAY",
@@ -2418,7 +2493,7 @@ def _send_kotak_sl_order(
         disclosed_quantity = "0",
         market_protection  = "0",
         pf                 = "N",
-        trigger_price      = str(round(trigger_price, 2)),
+        trigger_price      = str(broker_trigger_price),
     )
 
     logger.info(f"📋 SL ORDER KWARGS (WILL SEND TO KOTAK):")
@@ -2527,43 +2602,66 @@ def _modify_sl_order(
         logger.error("Invalid SL modify payload | order_id=%s qty=%r trigger=%r", order_id, quantity, new_trigger)
         return False
     try:
+        # Calculate Disaster Backup SL
+        from core.trading_settings import get as cfg
+        trigger_buffer_pct = safe_float(cfg("risk", "broker_sl_trigger_buffer_pct", 0.01), 0.01)
+        limit_offset_pct = safe_float(cfg("risk", "broker_sl_limit_offset_pct", 0.0005), 0.0005)
+        
+        broker_trigger_price = round(new_trigger * (1.0 - trigger_buffer_pct), 2)
+        broker_limit_price = round(broker_trigger_price * (1.0 - limit_offset_pct), 2)
+
         # 🔐 CRITICAL: Ensure Trade token is set before modifying order
         client = ensure_trade_token_on_client()
         
         response = call_broker_api(
             client.modify_order,
             order_id           = order_id,
-            price              = "0",
+            price              = str(broker_limit_price),
             quantity           = str(quantity),
             disclosed_quantity = "0",
-            trigger_price      = str(round(new_trigger, 2)),
+            trigger_price      = str(broker_trigger_price),
             validity           = "DAY",
-            order_type         = "SL-M",
+            order_type         = "SL",
         )
         if response is None or (isinstance(response, dict) and response.get("error")):
-            logger.error("SL-M modify failed: %s", response)
+            logger.error("SL modify failed: %s", response)
             return False
-        logger.info(f"SL-M modified | OrderID: {order_id} | New trigger: ₹{new_trigger}")
+        logger.info(
+            f"SL modified | OrderID: {order_id} | "
+            f"Software SL: ₹{new_trigger} | Broker Trigger: ₹{broker_trigger_price} | "
+            f"Broker Limit: ₹{broker_limit_price}"
+        )
         return True
     except RuntimeError as e:
-        logger.error(f"SL-M modify: Token guarantee failed: {e}")
+        logger.error(f"SL modify: Token guarantee failed: {e}")
         return False
     except Exception as e:
-        logger.error("SL-M modify failed: %s", e, exc_info=True)
+        logger.error("SL modify failed: %s", e, exc_info=True)
         return False
 
 
-def _cancel_kotak_order(order_id: str):
-    """Cancels a pending order on Kotak (e.g., SL-M when exiting via target)."""
+def _cancel_kotak_order(order_id: str) -> bool:
+    """Cancels a pending order on Kotak (e.g., SL when exiting via target).
+    Returns True if successfully cancelled, False otherwise."""
     try:
         from core.kotak_client import get_client
         client = get_client()
         response = call_broker_api(client.cancel_order, order_id=order_id)
         if response is None:
             logger.warning("Order cancel returned no response: %s", order_id)
-        else:
-            logger.info(f"Order cancelled: {order_id}")
+            return False
+        
+        if isinstance(response, dict):
+            error_msg = response.get("error") or response.get("Error") or response.get("Error Message")
+            if error_msg:
+                logger.error("Order cancel failed for %s: %s", order_id, error_msg)
+                return False
+                
+        logger.info(f"Order cancelled: {order_id}")
+        return True
     except (ConnectionError, OSError, TimeoutError) as e:
         logger.warning("Order cancel network error (%s): %s", order_id, e)
+        return False
     except Exception as e:
         logger.warning("Order cancel failed (%s): %s", order_id, e)
+        return False

@@ -187,9 +187,13 @@ async def startup():
     health = run_preflight_checks()
     
     if os.getenv('TRADING_MODE', 'PAPER') == 'LIVE' and not health.passed():
-        logger.critical("❌ LIVE MODE DISABLED: Preflight checks failed")
-        logger.critical("Fix issues above and restart the system.")
-        sys.exit(1)
+        failed_checks = [k for k, v in health.checks.items() if not v]
+        if failed_checks == ["Market Hours"]:
+            logger.warning("⚠️ Market is closed. Preflight check bypassed. Engine will wait for market to open.")
+        else:
+            logger.critical("❌ LIVE MODE DISABLED: Preflight checks failed")
+            logger.critical("Fix issues above and restart the system.")
+            sys.exit(1)
     
     if not health.passed():
         logger.warning("⚠️  Some checks failed but continuing (PAPER MODE)")

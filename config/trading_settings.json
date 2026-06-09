@@ -8,6 +8,8 @@
     "max_risk_per_trade": 0.01,
     "math_risk_per_trade": 0.01,
     "max_daily_loss_percent": 0.05,
+    "broker_sl_trigger_buffer_pct": 0.01,
+    "broker_sl_limit_offset_pct": 0.0005,
     "paper_capital": 20000,
     "allow_margin": true,
     "forced_buy_margin": false,
@@ -22,7 +24,7 @@
     "buy_signal_lookback_candles": 3,
     "sell_signal_lookback_candles": 1,
     "min_ws_candles_for_patterns": 1,
-    "loop_interval_sec": 5
+    "loop_interval_sec": 1
   },
   "screener": {
     "screener_total_stocks": 30,

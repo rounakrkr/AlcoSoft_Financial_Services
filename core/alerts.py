@@ -130,7 +130,10 @@ def alert_buy(symbol: str, qty: int, price: float, strategy: str, order_id: str 
 
 def alert_sell(symbol: str, qty: int, price: float, reason: str, pnl: Optional[float] = None):
     """Tone mapping ensures stops are not presented as failures."""
-    if pnl is not None and pnl < 0:
+    if "SQUAREOFF" in reason.upper():
+        header = f"⏱️ <b>INTRADAY SQUARE-OFF: {symbol}</b>"
+        footer = "Status: Closed by time limit."
+    elif pnl is not None and pnl < 0:
         header = f"🛡️ <b>STOP EXECUTED: {symbol}</b>"
         footer = "Status: Risk managed successfully."
     elif pnl is not None and pnl > 0:
