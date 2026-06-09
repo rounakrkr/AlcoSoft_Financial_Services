@@ -118,6 +118,41 @@ def _get_briefing_cached():
     _briefing_cache = load_briefing()
     _briefing_cache_time = now
 
+    # F018 FIX: STALE / MISSING BRIEFING PROTECTION
+    # Ensure the strategy loop never trades on yesterday's screener picks,
+    # and never drops exit monitoring if the file is temporarily missing (e.g. during regeneration)
+    is_fresh = False
+    if _briefing_cache is not None:
+        generated_at = _briefing_cache.get("generated_at")
+        if generated_at:
+            from datetime import datetime
+            text = str(generated_at).strip()
+            try:
+                gen_date = datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+                if gen_date == datetime.now().date():
+                    is_fresh = True
+            except ValueError:
+                try:
+                    gen_date = datetime.strptime(text[:10], "%Y-%m-%d").date()
+                    if gen_date == datetime.now().date():
+                        is_fresh = True
+                except ValueError:
+                    pass
+        
+    if not is_fresh:
+        if _briefing_cache is None:
+            logger.warning("[BRIEFING] Briefing missing/unreadable at runtime. Blocking new entries.")
+        else:
+            logger.warning("[BRIEFING] Stale briefing detected at runtime. Blocking new entries.")
+            
+        return {
+            "session_type": "SAFE_FALLBACK",
+            "market_bias": "NEUTRAL",
+            "approved_stocks": [],
+            "watchlist": [],
+            "avoid_list": []
+        }
+
     # Freshly loaded briefing bhi validate karo
     if _briefing_cache:
         session_type = _briefing_cache.get("session_type", "")
@@ -492,9 +527,12 @@ def _get_candles_with_yfinance_seed(symbol: str) -> list[dict]:
         _yfinance_cache.pop(symbol, None)  # Clear cache, we're self-sufficient
         return candles
 
-    # If we have cached yfinance data, use it
+    # If we have cached yfinance data, use it (F003: deduplicate at stitch boundary)
     if symbol in _yfinance_cache:
-        merged = _yfinance_cache[symbol] + candles
+        cached_yf = _yfinance_cache[symbol]
+        ws_buckets = {c["bucket"] for c in candles if c.get("bucket")}
+        yf_unique  = [c for c in cached_yf if c.get("bucket") not in ws_buckets]
+        merged = yf_unique + candles
         if len(merged) >= 26:
             return merged
 
@@ -506,27 +544,41 @@ def _get_candles_with_yfinance_seed(symbol: str) -> list[dict]:
     hist = _fetch_yfinance_with_retry(symbol, max_attempts=2)
 
     if not hist.empty:
-        # Convert to our candle format
+        # Convert to our candle format (drop any still-building candle)
         hist = _drop_incomplete_candle_if_present(hist)
 
+        # F003 FIX: Include bucket timestamp in Yahoo candle dicts.
+        # This enables deduplication at the stitch boundary where Yahoo 5m
+        # candles overlap with WebSocket candles built since market open.
+        # Without deduplication, indicators (RSI/MACD/EMA/BB) receive repeated
+        # rows which corrupts all values computed on the merged history.
         yf_candles = [
             {
+                "bucket": ts.strftime("%Y-%m-%d %H:%M"),   # matches WebSocket bucket_key format
                 "open":   float(row["Open"]),
                 "high":   float(row["High"]),
                 "low":    float(row["Low"]),
                 "close":  float(row["Close"]),
                 "volume": float(row["Volume"]),
             }
-            for _, row in hist.iterrows()
+            for ts, row in hist.iterrows()
         ]
 
-        # Cache it
+        # Cache it (with bucket keys so cached-path stitch also deduplicates)
         _yfinance_cache[symbol] = yf_candles
 
-        merged = yf_candles + candles
+        # Stitch: WebSocket candles take priority at the overlap boundary.
+        # Build a set of WebSocket buckets, then filter Yahoo candles to
+        # exclude any bucket already covered by a WebSocket candle.
+        ws_buckets = {c["bucket"] for c in candles if c.get("bucket")}
+        yf_unique  = [c for c in yf_candles if c.get("bucket") not in ws_buckets]
+
+        merged  = yf_unique + candles
+        dropped = len(yf_candles) - len(yf_unique)
         logger.info(
-            f"📦 {symbol} — Combined: {len(yf_candles)} yfinance + "
-            f"{len(candles)} WebSocket = {len(merged)} total candles"
+            "📦 %s — Combined: %d yfinance + %d WebSocket = %d total candles "
+            "(dropped %d duplicate Yahoo candles at stitch boundary)",
+            symbol, len(yf_unique), len(candles), len(merged), dropped,
         )
         return merged
     else:
@@ -836,6 +888,8 @@ def _build_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["bb_lower"]   = bb.bollinger_lband()
     df["bb_upper"]   = bb.bollinger_hband()
 
+    df["obv"]        = ta.volume.OnBalanceVolumeIndicator(close=df["close"], volume=df["volume"]).on_balance_volume()
+
     return df
 
 
@@ -878,8 +932,8 @@ def strategy_hammer(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None,
             break
 
     if "rsi" in ind.columns:
-        rsi_zone = ((ind["rsi"].iloc[-lookback:] > 25) &
-                    (ind["rsi"].iloc[-lookback:] < 50)).any()
+        rsi_zone = ((ind["rsi"].iloc[-lookback:] > 20) &
+                    (ind["rsi"].iloc[-lookback:] < 40)).any()
         latest_rsi = round(ind["rsi"].iloc[-1], 1)
     else:
         rsi_zone = True
@@ -909,7 +963,7 @@ def strategy_bullish_engulfing(pattern_df: pd.DataFrame, indicator_df: pd.DataFr
             engulf_found = True
             break
 
-    rsi_ok = ind["rsi"].iloc[-1] < 60 if "rsi" in ind.columns else True
+    rsi_ok = ind["rsi"].iloc[-1] < 45 if "rsi" in ind.columns else True
     latest_rsi = round(ind["rsi"].iloc[-1], 1) if "rsi" in ind.columns else 0
     return _candle_strategy_result(
         "Bullish Engulfing",
@@ -943,7 +997,7 @@ def strategy_bollinger_bounce(df: pd.DataFrame) -> dict:
                df["bb_lower"].iloc[-LOOKBACK:]).any()
 
     bounced    = df["close"].iloc[-1] > df["bb_lower"].iloc[-1]
-    rsi_ok     = df["rsi"].iloc[-1] < 45
+    rsi_ok     = df["rsi"].iloc[-1] < 35
     latest_rsi = round(df["rsi"].iloc[-1], 1)
     return _indicator_strategy_result(
         "Bollinger Band Bounce",
@@ -958,7 +1012,7 @@ def strategy_volume_breakout(pattern_df: pd.DataFrame, indicator_df: pd.DataFram
     ind = indicator_df if indicator_df is not None else pattern_df
     if "avg_vol" in ind.columns:
         avg_vol   = ind["avg_vol"].iloc[-lookback:]
-        vol_spike = (ind["volume"].iloc[-lookback:] > avg_vol * 2).any()
+        vol_spike = (ind["volume"].iloc[-lookback:] > avg_vol * 2.0).any()
     else:
         vol_spike = False
 
@@ -1011,7 +1065,7 @@ def strategy_morning_star(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame =
 
 
 def strategy_three_white_soldiers(pattern_df: pd.DataFrame, indicator_df: pd.DataFrame = None, lookback: int = None) -> dict:
-    hit = _scan_pattern_in_lookback(pattern_df, detect_three_white_soldiers, lookback)
+    hit = detect_three_white_soldiers(pattern_df)
     return _candle_strategy_result("Three White Soldiers", pattern_hit=hit)
 
 
@@ -1265,6 +1319,24 @@ def condition_bullish_reversal_candle(ctx: StrategyEvaluationContext) -> dict:
     )
 
 
+def condition_obv_trending_up(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if "obv" not in df.columns:
+        return _indicator_strategy_result("OBV Trending Up", False, "OBV not ready")
+
+    lookback = ctx.get_lookback()
+    recent_obv = df["obv"].iloc[-lookback:]
+    # Check if OBV is higher than it started in the lookback window
+    started = recent_obv.iloc[0]
+    ended = recent_obv.iloc[-1]
+    trending = bool(ended > started)
+    return _indicator_strategy_result(
+        "OBV Trending Up",
+        trending,
+        f"OBV started={started:.0f}, ended={ended:.0f}",
+    )
+
+
 def condition_volume_spike(ctx: StrategyEvaluationContext) -> dict:
     df = ctx.indicator_df
     if "avg_vol" not in df.columns:
@@ -1295,8 +1367,35 @@ def condition_price_above_vwap(ctx: StrategyEvaluationContext) -> dict:
     return _price_above_column_condition(ctx.indicator_df, "vwap", "Price above VWAP")
 
 
+def condition_test_trigger(ctx: StrategyEvaluationContext) -> dict:
+    return _indicator_strategy_result("Test Trigger", True, "Forced true for testing purposes")
+
+
 def condition_price_below_vwap(ctx: StrategyEvaluationContext) -> dict:
     return _price_below_column_condition(ctx.indicator_df, "vwap", "Price below VWAP")
+
+
+def condition_rsi_crosses_35_up(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2 or "rsi" not in df.columns:
+        return _indicator_strategy_result("RSI Crosses 35 Up", False, "RSI not ready")
+
+    crossed = df["rsi"].iloc[-2] <= 35 and df["rsi"].iloc[-1] > 35
+    latest = round(float(df["rsi"].iloc[-1]), 1)
+    return _indicator_strategy_result("RSI Crosses 35 Up", crossed, f"RSI={latest}, Crossed={crossed}")
+
+
+def condition_two_green_candles(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2:
+        return _candle_strategy_result("Two Green Candles", False, False, "Not enough candles")
+
+    c1 = df.iloc[-2]
+    c2 = df.iloc[-1]
+    green1 = c1["close"] > c1["open"]
+    green2 = c2["close"] > c2["open"]
+    fired = green1 and green2
+    return _candle_strategy_result("Two Green Candles", fired, fired, f"G1={green1}, G2={green2}")
 
 
 def condition_rsi_recovering(ctx: StrategyEvaluationContext) -> dict:
@@ -1304,10 +1403,10 @@ def condition_rsi_recovering(ctx: StrategyEvaluationContext) -> dict:
     if len(df) < 2 or "rsi" not in df.columns:
         return _indicator_strategy_result("RSI recovering", False, "RSI not ready")
 
-    recent_oversold = bool((df["rsi"].iloc[-LOOKBACK:] < 40).fillna(False).any())
+    recent_oversold = bool((df["rsi"].iloc[-LOOKBACK:] < 45).fillna(False).any())
     rising = df["rsi"].iloc[-1] > df["rsi"].iloc[-2]
     latest = round(float(df["rsi"].iloc[-1]), 1)
-    fired = recent_oversold and rising and latest < 60
+    fired = recent_oversold and rising and latest < 65
     return _indicator_strategy_result(
         "RSI recovering",
         fired,
@@ -1380,11 +1479,11 @@ def condition_rsi_not_overbought(ctx: StrategyEvaluationContext) -> dict:
     if pd.isna(latest):
         return _indicator_strategy_result("RSI not overbought", False, "RSI not ready")
     latest_f = round(float(latest), 1)
-    fired = latest_f < 65.0
+    fired = latest_f < 70.0
     return _indicator_strategy_result(
         "RSI not overbought",
         fired,
-        f"RSI={latest_f} {'< 65 ✓' if fired else '>= 65 — too extended'}",
+        f"RSI={latest_f} {'< 70 ✓' if fired else '>= 70 — too extended'}",
     )
 
 
@@ -1503,6 +1602,10 @@ CONDITION_REGISTRY: dict[str, StrategyConditionFn] = {
     "macd_positive":                condition_macd_positive,
     "ema_trending_up":              condition_ema_trending_up,
     "ema9_below_ema21":             condition_ema9_below_ema21,
+    "obv_trending_up":              condition_obv_trending_up,
+    "rsi_crosses_35_up":            condition_rsi_crosses_35_up,
+    "two_green_candles":            condition_two_green_candles,
+    "test_trigger":                 condition_test_trigger,
 }
 
 
@@ -2240,7 +2343,7 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
                     "data/live_capital.json",
                     {
                         **capital_snapshot,
-                        "capital": capital_snapshot.get("available_cash"),
+                        "capital": capital_snapshot.get("free_margin"),
                         "timestamp": datetime.now().isoformat(),
                     },
                     label="live capital",

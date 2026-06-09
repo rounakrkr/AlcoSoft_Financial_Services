@@ -1,10 +1,10 @@
 {
   "risk": {
     "stop_loss_percent": 0.005,
-    "trailing_sl_percent": 0.005,
+    "trailing_sl_percent": 0.002,
     "tsl_activation_ratio": 1.4,
     "tsl_mode_after_activation": true,
-    "target_rr_ratio": 2.0,
+    "target_rr_ratio": 4.0,
     "max_risk_per_trade": 0.01,
     "math_risk_per_trade": 0.01,
     "max_daily_loss_percent": 0.05,
@@ -17,11 +17,11 @@
   },
   "strategy": {
     "strategy_type": "INTRADAY",
-    "max_open_positions": 10,
-    "min_confidence": 45,
+    "max_open_positions": 1,
+    "min_confidence": 40,
     "buy_signal_lookback_candles": 3,
     "sell_signal_lookback_candles": 1,
-    "min_ws_candles_for_patterns": 3,
+    "min_ws_candles_for_patterns": 1,
     "loop_interval_sec": 5
   },
   "screener": {
@@ -37,6 +37,7 @@
     "cognition_cycle_interval_minutes": 15
   },
   "strategy_sets": {
+    "TEST_DEBUG_STRATEGY": true,
     "BUY_RSI_MACD_REVERSAL": true,
     "BUY_EMA_TREND_PULLBACK": true,
     "BUY_EMA_VOLUME_MOMENTUM": true,
@@ -49,7 +50,16 @@
     "SELL_MACD_EMA_WEAKNESS": false,
     "SELL_EMA_CROSS_WEAKNESS": false,
     "SELL_BREAKDOWN_CONFIRMED": false,
-    "SELL_RSI_BEARISH_REVERSAL": false
+    "SELL_RSI_BEARISH_REVERSAL": false,
+    "BUY_PERFECT_TREND_PULLBACK": true,
+    "BUY_GOLDEN_CROSSOVER_SURGE": true,
+    "BUY_POWER_BREAKOUT": true,
+    "BUY_OVERSOLD_REVERSAL_WITH_VOLUME": true,
+    "BUY_VWAP_RECLAIM_POWER": true,
+    "BUY_BOLLINGER_SQUEEZE_REVERSAL": true,
+    "BUY_MORNING_STAR_DIP": true,
+    "BUY_THREE_SOLDIERS_MOMENTUM": true,
+    "BUY_RSI_35_SUPPORT_BOUNCE": true
   },
   "adaptive": {
     "last_updated": "2026-05-29T00:37:21.412622",
@@ -68,7 +78,7 @@
   },
   "_meta": {
     "version": 1,
-    "updated_at": "2026-06-06T00:06:04.828091",
+    "updated_at": "2026-06-09T11:45:24.499951",
     "updated_via": "dashboard"
   }
 }

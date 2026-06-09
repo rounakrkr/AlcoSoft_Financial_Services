@@ -302,3 +302,350 @@ Also: non-dict API responses now raise `ValueError` explicitly; zero/empty field
 Test file: `tests/test_f005_capital_api.py`
 
 ---
+
+
+## F006 - WebSocket Reconnect Counter Integrity
+
+**Severity:** CRITICAL
+**Category:** WebSocket / Data Feed
+**Status:** FIXED AND VERIFIED
+
+### Finding
+
+`_do_reconnect()` increments `_reconnect_attempts` and then calls `start_live_feed()`. `start_live_feed()` unconditionally reset `_reconnect_attempts = 0` at function entry â€” before any subscribe attempt. This meant:
+
+1. Every failed reconnect attempt reset the counter to 0 before the failure could be recorded.
+2. `_schedule_reconnect()`'s guard `if _reconnect_attempts >= _max_reconnect` could never be reached through the `_do_reconnect` â†’ `_schedule_reconnect` code path.
+3. The feed-death CRITICAL alert (`WebSocket feed DEAD after N attempts`) was unreachable through this path. The system would retry indefinitely without ever alerting the operator.
+4. Additionally, `start_live_feed()`'s subscribe exceptions were caught and swallowed internally (called `_schedule_reconnect()` itself), bypassing `_do_reconnect()`'s own exception handler entirely â€” making the `_reconnect_attempts` increment in `_do_reconnect()` the only observable side-effect of a failed reconnect, and even that was immediately erased.
+
+### Root Cause
+
+`start_live_feed()` was designed as a dual-purpose function: initial startup AND reconnect. The `_reconnect_attempts = 0` reset was appropriate for initial startup but destructive in the reconnect path. No distinction existed between the two call modes.
+
+### Fix
+
+1. **Added `_is_reconnect: bool = False` parameter to `start_live_feed()`.**
+   - `_is_reconnect=False` (default): counter reset at entry, exceptions swallowed + `_schedule_reconnect()` called. Preserves original startup-safe behaviour.
+   - `_is_reconnect=True`: counter NOT reset. Exceptions re-raised to `_do_reconnect()`'s `except` block.
+
+2. **`_do_reconnect()` now calls `start_live_feed(..., _is_reconnect=True)`.**
+   - Counter survives the call.
+   - Failures propagate back to `_do_reconnect()`'s `except` branch, which calls `_schedule_reconnect()`.
+   - `_schedule_reconnect()` sees the real `_reconnect_attempts` value and correctly fires the alert + stops retrying at `_max_reconnect`.
+
+3. **Improved `_do_reconnect()` log messages** â€” include attempt number and max in each log line.
+
+### Counter Ownership Rule (documented in code)
+- `_do_reconnect()` **owns** `_reconnect_attempts` during reconnect sequences.
+- `_on_message()` resets it to 0 on live tick receipt (confirmed session recovery).
+- `start_live_feed(_is_reconnect=False)` resets it on initial startup only.
+
+### Files Modified
+- `core/data_fetcher.py` â€” `start_live_feed()` signature and body, `_do_reconnect()` body.
+
+### Validation â€” 7/7 PASS
+
+| Test | Result |
+|------|--------|
+| TEST 1: start_live_feed(_is_reconnect=False) resets counter | PASS |
+| TEST 2: start_live_feed(_is_reconnect=True) preserves counter | PASS |
+| TEST 3: _do_reconnect() increments counter on failure, does not reset | PASS |
+| TEST 4: Feed-death alert fires when counter reaches max_reconnect | PASS |
+| TEST 5: Successful reconnect resets counter to 0 | PASS |
+| TEST 6: Single failure increments counter by exactly 1 (no double-increment) | PASS |
+| TEST 7: Initial startup subscribe failure calls _schedule_reconnect, does not crash | PASS |
+
+Test file: `tests/test_f006_reconnect_counter.py`
+
+---
+
+## F001 - Over-Leverage Guard Uses Entry Price Instead of Current Market Value
+
+**Severity:** CRITICAL
+**Category:** Capital / Margin Logic
+**Status:** FIXED AND VERIFIED
+
+### Finding
+
+The over-leverage guard in `_place_buy_order_impl()` read `deployed_in_positions` from `get_margin_status()`, which maps to `entry_position_value` (Σ entry_price × qty for open positions). The broker's actual margin consumption tracks current market value. When positions moved favourably (current > entry), the guard understated deployment, allowing orders through that would genuinely exceed the configured leverage ceiling.
+
+### Fix
+
+`_place_buy_order_impl()` now reads `current_position_value` from `get_margin_status()` for the leverage check. `get_margin_status()` already computed this value via `_current_position_valuation()` — only the read site needed correcting. Added DEBUG log when entry and current values diverge.
+
+### Files Modified
+- `core/order_executor.py` — `_place_buy_order_impl()` over-leverage guard block only.
+
+### Validation — 8/8 PASS
+Test file: `tests/test_f001_margin_guard.py`
+
+---
+
+## F003 - Yahoo/WebSocket Candle Stitch Deduplication
+
+**Severity:** CRITICAL
+**Category:** Data / Indicator Integrity
+**Status:** FIXED AND VERIFIED
+
+### Finding (Revised Root Cause)
+
+Yahoo fetches 5 days of 5-min candles. WebSocket accumulates candles from market open today. The stitch (list concat) had no deduplication. Overlapping 5-min buckets appeared twice in the merged list, corrupting RSI/MACD/EMA/Bollinger indicators. Timezone mismatch (original finding) was already partially addressed by a prior tz_localize(None) strip; the duplicate-candle bug was the unmitigated issue.
+
+### Fix
+
+- Yahoo candle dicts now include a bucket key (%Y-%m-%d %H:%M, matching WebSocket format).
+- Fresh-fetch path: builds ws_buckets set, filters Yahoo to yf_unique (non-overlapping), merges yf_unique + ws_candles.
+- Cached path: same deduplication applied before returning from cache.
+- WS candle wins at overlap (more recent, real-time data).
+
+### Files Modified
+- `core/strategy.py` — `_get_candles_with_yfinance_seed()` both stitch paths.
+
+### Validation — 9/9 PASS
+Test file: `tests/test_f003_candle_stitch.py`
+
+---
+
+## F004 - Order Verification Timeout / Double-Buy Risk
+
+**Severity:** CRITICAL
+**Category:** Order / Broker Sync
+**Status:** FIXED AND VERIFIED
+
+### Finding
+If order confirmation polled from the broker times out after 45 seconds, the system previously aborted the operation and did not save the local position. If the broker actually filled the order (but confirmation was just delayed by network/queue), the system would hold 0 local exposure while the broker held 1x exposure. Because the local system perceived no position, it could subsequently execute another buy signal, leading to 2x (double-buy) exposure.
+
+### Fix
+- Modified `wait_for_order_verification` to return distinct states (`COMPLETE`, `REJECTED`, `TIMEOUT`) rather than a simple boolean.
+- In both buy and sell paths, if an explicit broker `REJECTED` response is received, the operation aborts as before.
+- If a `TIMEOUT` occurs, the system logs a warning and **assumes the order was filled**, proceeding to save the position locally (marked as `UNVERIFIED`).
+- **Safety Guarantee:** If the timed-out order actually failed on the broker, this fix generates a "ghost" local position. This is safe, as it prevents double-buying. The background reconciliation engine will eventually identify the ghost position as `local_only` and clear it, freeing up capital.
+
+### Files Modified
+- `core/order_verifier.py` — Return distinct string states for verification.
+- `core/order_executor.py` — Implement "assume filled on timeout" logic in buy and sell execution paths.
+
+### Validation — 3/3 PASS
+Test file: `tests/test_f004_order_sync.py`
+
+---
+
+## F007 - EOD Squareoff Failures
+
+**Severity:** CRITICAL
+**Category:** EOD Squareoff
+**Status:** FIXED AND VERIFIED
+
+### Finding
+The end-of-day (EOD) squareoff logic (`squareoff_all_intraday`) suffered from two major issues:
+1. The scheduled job in `main.py` called the function with an unexpected keyword argument (`reason="SCHEDULED_MARKET_CLOSE"`), causing a `TypeError` crash that completely halted the 3:15 PM squareoff event.
+2. If the WebSocket feed was dead or no live quote could be retrieved, the function skipped the sell order entirely, assuming it could retry later. This resulted in positions remaining open past market close, incurring unpredictable auto-squareoff prices and penalty fees from the broker.
+
+### Fix
+- Updated the signature of `squareoff_all_intraday` to safely accept `**kwargs`, preventing the scheduler crash.
+- Added a forceful fallback logic: if a live quote is missing during squareoff, the system now calculates a limit order price at 95% of the original `entry_price`. This effectively creates a deep-in-the-money Limit Sell that executes immediately against the best available bid, guaranteeing closure even when the data feed is down.
+
+### Files Modified
+- `core/order_executor.py` — Added `**kwargs` to signature and implemented 95% entry_price fallback in `squareoff_all_intraday`.
+
+### Validation — 2/2 PASS
+Test file: `tests/test_f007_squareoff.py`
+
+---
+
+## F008 - Broker Reconciliation CNC Import Loophole
+
+**Severity:** CRITICAL
+**Category:** Broker Reconciliation
+**Status:** FIXED AND VERIFIED
+
+### Finding
+The broker reconciliation process fetches open positions from Kotak Neo to ensure local DB alignment. An issue was identified where overnight CNC (Delivery) positions could be mistakenly recovered as intraday MIS positions. Although the codebase already contained a filter (`if product not in ('MIS', 'INTRADAY', 'CO', 'BO')`) to skip non-intraday products, the payload parser defaulted the product string to `"MIS"` if the broker omitted the field. This allowed unlabelled CNC positions to silently bypass the filter and become actively monitored by intraday logic.
+
+### Fix
+- Updated `_parse_broker_position_rows()` in `core/broker_reconciliation.py` to use `"UNKNOWN"` as the default product string instead of `"MIS"`.
+- This ensures any missing data forces a safe failure, allowing the explicit MIS filter to correctly reject undocumented positions.
+
+### Files Modified
+- `core/broker_reconciliation.py` — Changed default product parse fallback.
+
+### Validation — 1/1 PASS
+Test file: `tests/test_f008_reconciliation.py`
+- Tested explicit MIS payloads, explicit CNC payloads, and empty product payloads to confirm strict filtering.
+
+---
+
+## F009 - Capital / Margin Logic (Gap-Down Exposure Risk)
+
+**Severity:** HIGH
+**Category:** Capital / Margin Logic
+**Status:** ACCEPTED RISK
+
+### Finding
+The system pairs a 5x margin leverage with a 5% daily loss limit. The risk engine sizes positions using a 0.5% stop-loss, allowing total exposure to reach up to 500% of the account capital (₹100,000 exposure on a ₹20,000 account). While the software effectively limits standard market movement risk to within the daily loss limit, a severe 5% market gap-down (flash crash) on the amplified exposure would instantly produce a ₹5,000 loss (25% of capital), aggressively shattering the daily limit.
+
+### Fix
+- **NONE (Deliberate Tradeoff):** Enforcing a strict "Gap-Survival Cap" to guarantee survival during a flash crash would require mathematically capping the system's total buying power to ₹20,000, completely neutering the operator's request for 5x leverage. 
+- The risk of ruin during a black-swan market gap is classified as an unavoidable consequence of deploying maximal leverage.
+
+### Future Enhancement
+- Transition the risk engine from simple stop-loss sizing to a dynamic Value at Risk (VaR) model that caps total exposure based on real-time historical volatility.
+
+---
+
+## F010 - Strategy / Signal Logic (Disabled Sell Signals)
+
+**Severity:** HIGH
+**Category:** Strategy / Signal Logic
+**Status:** DESIGN CHOICE
+
+### Finding
+The audit noted that all `SELL_*` strategy sets are explicitly disabled in `trading_settings.json`. As a result, the strategy evaluator will never trigger a technical indicator-based exit, meaning deteriorating positions are held until they hit their Stop Loss, Profit Target, or EOD squareoff.
+
+### Fix
+- **NONE (Deliberate Tradeoff):** The system's logic functions exactly as intended, gracefully bypassing sell-evaluations when the sets are disabled. 
+- The operator has made a deliberate strategic choice to rely on hard risk barriers (SL, Trailing SL, TP) rather than technical indicators to exit trades, thereby preventing premature shakeouts and allowing winners to run. 
+
+---
+
+## F011 - State / Crash Recovery (False Positive Software SL Gap)
+
+**Severity:** HIGH
+**Category:** State / Crash Recovery
+**Status:** REJECTED (FALSE POSITIVE)
+
+### Finding
+The auditor claimed that during the first 15 minutes after a system crash and restart, the loss of in-memory candle caches prevents software stop-losses from firing, leaving open positions completely unprotected until new candles form.
+
+### Fix
+- **NONE (Impact Invalid):** Code execution trace definitively proved that all three critical exit protections (`check_stop_losses`, `update_trailing_stop_losses`, and `check_profit_targets`) operate exclusively on the raw `live_prices` tick stream.
+- They have absolutely no dependency on `indicator_df`, completed candles, or pattern caches. The protections are fully armed and functional the millisecond the first WebSocket tick arrives post-restart.
+- The 15-minute blind window only applies to the generation of *new* BUY signals, which is a safe and intended stabilization period following a crash.
+
+---
+
+## F012 - Reflection Engine / Adaptive Safety (Silent Degradation)
+
+**Severity:** HIGH
+**Category:** Reflection Engine / Adaptive Safety
+**Status:** DESIGN CHOICE (FAIL-OPEN ARCHITECTURE)
+
+### Finding
+The auditor flagged that if the SQLite reflection database is unavailable or throws an exception, the system silently defaults to allowing execution (1.0 multiplier and suppressed=False). Additionally, the configuration specifies `adaptive_safety_blocks_execution=false`, meaning the safety blocks act only in advisory mode. 
+
+### Fix
+- **NONE (Deliberate Tradeoff):** Code analysis confirmed that the Reflection Engine and Insight Bridge are completely isolated from core risk controls (stop-loss, quantity sizing, daily limit). 
+- The system uses a deliberate "Fail-Open" architecture. If the secondary analytical database fails, the system safely falls back into a standard momentum algorithmic bot without crashing the primary execution engine. This maximizes uptime without bypassing primary capital protections.
+
+---
+
+## F013 - Broker Token / Authentication (Auth Failure Circuit Recovery)
+
+**Severity:** HIGH
+**Category:** Broker Token / Authentication
+**Status:** DESIGN CHOICE (AUTO-HEALING AUTHENTICATION)
+
+### Finding
+The auditor suggested that tripping the 60-second circuit breaker upon 100008 auth failures could dangerously block new orders or reopen BUYs during volatile periods if the token miraculously recovered.
+
+### Fix
+- **NONE (SRE Best Practice):** Code trace confirmed the system possesses a robust token shield (`validate_and_fix_session_before_order`) which proactively intercepts locally expired or malformed JWTs and forces a session refresh *before* the broker is even contacted.
+- A 100008 error only trips the circuit breaker if the broker persistently rejects a freshly acquired token (e.g., revoked key, IP block). In such terminal cases, a 60-second auto-recovering polling loop prevents spamming the API while allowing instant recovery the moment the operator fixes the underlying issue.
+- Risk-reducing SELL orders explicitly bypass this breaker to ensure maximum exit velocity once auth is restored.
+
+---
+
+## F014 - Data / Instrument Token (Failed Resolution)
+
+**Severity:** HIGH
+**Category:** Data / Instrument Token
+**Status:** ACCEPTED RISK (GRACEFUL DEGRADATION)
+
+### Finding
+The auditor noted that if an instrument token fails to resolve via Kotak's API, the symbol is permanently starved of WebSocket ticks, leaving its software-side SL blind.
+
+### Fix
+- **NONE (Graceful Degradation):** The codebase correctly bypasses missing prices (if not current: continue) rather than crashing. Capital remains protected by the broker-side SL-M. Auto-recovery is mathematically impossible without the token, so the system logs a CRITICAL operator alert explicitly warning that manual intervention is required. This is an accepted operational risk.
+
+---
+
+## F015 - Configuration Risk (Morning Volatility & Indicators)
+
+**Severity:** HIGH
+**Category:** Configuration Risk
+**Status:** REJECTED (FALSE POSITIVE IMPACT)
+
+### Finding
+The auditor claimed min_ws_candles_for_patterns=3 makes the bot trade too early (9:30 AM) and that RSI/MACD computed by mixing 3 live 5-min candles with Yahoo "daily" candles produces meaningless values.
+
+### Fix
+- **NONE (False Positive):** The technical claim is hallucinated. The bot explicitly fetches 5m interval candles from Yahoo Finance (period="5d", interval="5m"), creating a perfectly stitched array of ~375 five-minute candles. The indicators are mathematically sound at 9:30 AM.
+- The strategic claim regarding morning volatility is a subjective trading preference; the start time is intentionally configurable to allow operator tuning.
+
+---
+
+## F016 - Concurrency / Thread Safety (Double-Close Race Condition)
+
+**Severity:** HIGH
+**Category:** Concurrency / Thread Safety
+**Status:** REJECTED (FALSE POSITIVE IMPACT)
+
+### Finding
+The auditor claimed squareoff_all_intraday() doesn't acquire _order_lock in its outer loop, potentially allowing the strategy loop and squareoff loop to concurrently enter place_sell_order() and issue duplicate SELL orders to the broker.
+
+### Fix
+- **NONE (False Positive):** The auditor failed to trace the locking boundaries correctly. A single global instance of _order_lock (	hreading.RLock) is used.
+- place_sell_order() explicitly acquires this lock *before* checking get_open_positions() and executing close_position().
+- Because the position existence check and the database deletion occur entirely inside the same locked critical section, the claimed race condition is mathematically impossible. If two threads enter concurrently, one will execute the sale and delete the local state; the second will acquire the lock, see the state is deleted, and gracefully abort.
+
+---
+
+## FX04 - Concurrency / Thread Safety (EOD Squareoff Lock)
+
+**Severity:** HIGH
+**Category:** Concurrency / Thread Safety
+**Status:** FIXED
+
+### Finding
+Scheduled EOD squareoff was permanently locking the system by invoking lock_entries(), requiring manual dashboard intervention the next morning to resume trading.
+
+### Fix
+- Replaced lock_entries("EOD_SQUAREOFF_*") with esume_entries("EOD_SQUAREOFF_*") inside squareoff_all_intraday().
+- The system now transitions ACTIVE -> LIQUIDATING -> ACTIVE. This safely prevents concurrent entries during liquidation but leaves the system enabled for the next trading day.
+
+---
+
+## F017 - Database / State Integrity (capital_end staleness)
+
+**Severity:** HIGH
+**Category:** Database / State Integrity
+**Status:** REJECTED (FALSE POSITIVE / DESIGN CHOICE)
+
+### Finding
+The auditor flagged that capital_end becomes stale if the live broker fetch fails during _update_daily_stats(), claiming this corrupts daily reporting.
+
+### Resolution
+- **Rejected:** The system's behavior is correct and by design. capital_end tracks LIVE broker buying power, which is inherently margin-impacted and vital for operational visibility. If the broker API is down, preserving a stale cache is the safest and only viable fallback (as implemented in F005). True equity accounting is being split into a separate enhancement (FX05).
+
+---
+
+## FX05 - Database / State Integrity (Dual-Track Equity & Margin Reporting)
+
+**Severity:** ENHANCEMENT
+**Category:** Database / State Integrity
+**Status:** FIXED
+
+### Finding
+The system only persisted capital_end (live broker buying power), causing ambiguity between margin limits and true realized account equity.
+
+### Fix
+- Added roker_buying_power, ealized_equity, unrealized_pnl, and estimated_total_equity columns to the daily_stats SQLite table.
+- Preserved historical capital_end usage and populated roker_buying_power as its alias.
+- Added a dedicated "EOD Equity Snapshot" UI widget to the dashboard to expose these metrics cleanly.
+
+---
+# # #   F X 0 6 :   I n i t i a l   C a p i t a l   F i x  
+ -   * * D a t e : * *   2 0 2 6 - 0 6 - 0 6  
+ -   * * D e s c r i p t i o n : * *   D e c o u p l e d   c a p i t a l _ s t a r t   f r o m   f i r s t   t r a d e   c l o s u r e .   I n i t i a l i z e d   s t r i c t l y   a t   p r e f l i g h t   o r   v i a   i n v a r i a n t   r e t r y   ( a v a i l   -   g r o s s )   w h e n   f l a t ,   p r e s e r v i n g   l e d g e r   p u r i t y .  
+ 

@@ -61,6 +61,17 @@ async function fetchAndRender() {
     const stratBadge = document.getElementById('strategy-badge');
     if (stratBadge) stratBadge.textContent = '⚡ ' + (data.strategy || 'INTRADAY');
 
+    const btnSquareoff = document.getElementById('squareoff-btn');
+    const btnResume = document.getElementById('resume-trading-btn');
+    const sessionState = data.trading_state && data.trading_state.state ? data.trading_state.state : '';
+    if (sessionState === 'FLAT_LOCKED') {
+      if (btnSquareoff) btnSquareoff.style.display = 'none';
+      if (btnResume) btnResume.style.display = 'inline-block';
+    } else {
+      if (btnSquareoff) btnSquareoff.style.display = 'inline-block';
+      if (btnResume) btnResume.style.display = 'none';
+    }
+
     const s = data.stats || {};
     const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
 
@@ -77,10 +88,30 @@ async function fetchAndRender() {
 
     set('stat-open', (data.positions || []).length);
     const cap = data.capital_snapshot || {};
-    set('cap-starting', fmt(cap.starting_capital));
-    set('cap-available', fmt(cap.available_cash));
-    set('cap-deployed', fmt(cap.deployed_capital));
-    set('cap-equity', fmt(cap.equity));
+    set('cap-equity', fmt(cap.account_equity));
+    set('cap-exposure', fmt(cap.gross_exposure));
+    set('cap-blocked', fmt(cap.margin_blocked));
+    set('cap-free', fmt(cap.free_margin));
+    set('cap-power', fmt(cap.remaining_buying_power));
+
+    set('live-start-eq', fmt(cap.starting_capital));
+    set('live-closed-pnl', fmt(cap.closed_pnl));
+    set('live-unrealized-pnl', fmt(cap.unrealized_pnl));
+    set('live-trading-eq', fmt(cap.account_equity));
+
+    const marginCard = document.getElementById('margin-card');
+    if (marginCard && cap.margin_enabled) {
+      marginCard.style.display = 'flex';
+      set('margin-pct', (cap.margin_utilization || 0).toFixed(1) + '%');
+      set('margin-details', 'Blocked: ' + fmt(cap.margin_blocked));
+      
+      marginCard.className = 'card stat-card';
+      if (cap.margin_utilization >= 80) marginCard.classList.add('danger');
+      else if (cap.margin_utilization >= 50) marginCard.classList.add('warn');
+      else marginCard.classList.add('safe');
+    } else if (marginCard) {
+      marginCard.style.display = 'none';
+    }
 
     const posBody = document.getElementById('positions-body');
     if (posBody) {
@@ -229,12 +260,12 @@ async function updateMarginStatus() {
     const marginDetails = document.getElementById('margin-details');
     
     if (marginPct) {
-      const marginPctValue = Number(data.margin_pct || 0);
+      const marginPctValue = Number(data.margin_utilization || 0);
       marginPct.textContent = marginPctValue.toFixed(1) + '%';
       // Color based on usage
-      if (marginPctValue > 80) {
+      if (marginPctValue >= 80) {
         marginPct.style.color = '#ff4444'; // Red - dangerous
-      } else if (marginPctValue > 50) {
+      } else if (marginPctValue >= 50) {
         marginPct.style.color = '#ffaa00'; // Orange - caution
       } else {
         marginPct.style.color = '#00dd88'; // Green - safe
@@ -243,9 +274,10 @@ async function updateMarginStatus() {
     
     if (marginDetails) {
       const leverage = Number(data.margin_leverage || 1).toFixed(1);
-      const deployed = fmt(data.deployed);
-      const remaining = fmt(data.remaining_margin);
-      const status = data.is_over_leveraged ? '⚠️ OVER-LEVERAGED' : '✅ Safe';
+      const deployed = fmt(data.gross_exposure);
+      const remaining = fmt(data.remaining_buying_power);
+      const isOverLeveraged = Number(data.margin_utilization || 0) > 100;
+      const status = isOverLeveraged ? '⚠️ OVER-LEVERAGED' : '✅ Safe';
       
       let txt = `${leverage}x Leverage | Deployed: ${deployed} | Remaining: ${remaining} | ${status}`;
       if (data.forced_buy_enabled) {
@@ -254,9 +286,9 @@ async function updateMarginStatus() {
       marginDetails.textContent = txt;
       
       // Color the card border based on status
-      if (data.is_over_leveraged) {
+      if (isOverLeveraged) {
         marginCard.style.borderTop = '3px solid #ff4444';
-      } else if (Number(data.margin_pct || 0) > 50) {
+      } else if (Number(data.margin_utilization || 0) > 50) {
         marginCard.style.borderTop = '3px solid #ffaa00';
       } else {
         marginCard.style.borderTop = '3px solid #00dd88';
@@ -402,6 +434,11 @@ async function fetchAdaptiveData() {
   }
 }
 
+function getCsrfToken() {
+  const meta = document.querySelector('meta[name="csrf-token"]');
+  return meta ? meta.getAttribute('content') : '';
+}
+
 // Emergency Square Off All
 document.addEventListener('DOMContentLoaded', () => {
   const resumeBtn = document.getElementById('resume-trading-btn');
@@ -417,13 +454,16 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const res = await fetch('/api/trading-state', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'resume' }),
+          headers: { 
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCsrfToken()
+          },
+          body: JSON.stringify({ action: 'resume', confirm_action: 'RESUME' }),
         });
         const data = await res.json();
         if (data.ok) {
           alert('Trading resumed. New entries are enabled.');
-          fetchAndRender();
+          await fetchAndRender();
         } else {
           alert(`Error: ${data.error}`);
         }
@@ -447,11 +487,19 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.textContent = '⏳ Closing...';
 
       try {
-        const res = await fetch('/api/emergency-squareoff', { method: 'POST' });
+        const res = await fetch('/api/emergency-squareoff', { 
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken()
+            },
+            body: JSON.stringify({ confirm_action: 'SQUARE_OFF' })
+        });
         const data = await res.json();
 
         if (data.ok) {
           alert(`Emergency squareoff complete!\n\nClosed: ${data.closed_count}\nFailed: ${data.failed_count}`);
+          await fetchAndRender();
         } else {
           alert(`Error: ${data.error}`);
         }

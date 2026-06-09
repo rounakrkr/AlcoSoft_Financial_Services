@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -9,6 +10,8 @@ from core.safe_io import atomic_write_json, safe_float, safe_int, safe_read_json
 
 
 logger = logging.getLogger(__name__)
+
+_lock = threading.Lock()
 
 DB_PATH = "data/alcosoft.db"
 POSITIONS_PATH = "data/positions.json"
@@ -43,6 +46,31 @@ def _get_conn():
         raise
     finally:
         conn.close()
+
+
+def save_historical_candle(symbol: str, timeframe: str, bucket_time: str, open_price: float, high_price: float, low_price: float, close_price: float, volume: float):
+    """
+    Passively persists finalized OHLCV candles to the local historical database.
+    Uses UPSERT to overwrite any partial candle writes from mid-crash states.
+    """
+    _lock.acquire()
+    try:
+        with _get_conn() as conn:
+            conn.execute('''
+                INSERT INTO historical_candles 
+                (symbol, timeframe, bucket_time, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, timeframe, bucket_time) DO UPDATE SET
+                    open=excluded.open,
+                    high=excluded.high,
+                    low=excluded.low,
+                    close=excluded.close,
+                    volume=excluded.volume
+            ''', (symbol, timeframe, bucket_time, open_price, high_price, low_price, close_price, volume))
+    except Exception as e:
+        logger.error(f"Failed to persist historical candle for {symbol}: {e}")
+    finally:
+        _lock.release()
 
 
 def _add_column_if_missing(conn, table: str, column: str, col_type: str):
@@ -150,6 +178,18 @@ def initialize_db():
                 reasons      TEXT,
                 concern      TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS historical_candles (
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                bucket_time TEXT NOT NULL,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume REAL,
+                UNIQUE(symbol, timeframe, bucket_time)
+            );
         """)
 
         _add_column_if_missing(conn, "trades", "trading_symbol", "TEXT")
@@ -162,10 +202,58 @@ def initialize_db():
         _add_column_if_missing(conn, "trades", "tsl_activation_price", "REAL")
         _add_column_if_missing(conn, "trades", "tsl_mode", "TEXT DEFAULT 'trailing'")
         _add_column_if_missing(conn, "daily_stats", "agent_decision_calls", "INTEGER DEFAULT 0")
+        _add_column_if_missing(conn, "daily_stats", "broker_buying_power", "REAL")
+        _add_column_if_missing(conn, "daily_stats", "realized_equity", "REAL")
+        _add_column_if_missing(conn, "daily_stats", "unrealized_pnl", "REAL")
+        _add_column_if_missing(conn, "daily_stats", "estimated_total_equity", "REAL")
         _migrate_agent_decision_log(conn)
         _repair_invalid_open_positions(conn)
 
     logger.info("Database initialized.")
+
+
+def initialize_daily_capital():
+    """
+    FX11-D FIX: Daily Capital Re-Anchoring
+    Initializes capital_start strictly before trading begins.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        row = conn.execute("SELECT capital_start FROM daily_stats WHERE date = ?", (today,)).fetchone()
+        if row and row["capital_start"] is not None:
+            return  # Already locked in
+
+        if len(get_open_positions()) > 0:
+            logger.warning("Skipping capital_start initialization: positions are open.")
+            return
+
+        capital_start = None
+        try:
+            if os.getenv("TRADING_MODE", "PAPER") == "PAPER":
+                # FX11-D: Read yesterday's capital_end for PAPER mode to allow compounding
+                prev = conn.execute("SELECT capital_end FROM daily_stats WHERE date < ? ORDER BY date DESC LIMIT 1", (today,)).fetchone()
+                if prev and prev["capital_end"] is not None:
+                    capital_start = float(prev["capital_end"])
+                    logger.info("Re-anchored PAPER capital to previous closing equity: ₹%.2f", capital_start)
+                else:
+                    from core.trading_settings import get as cfg
+                    capital_start = float(cfg("risk", "paper_capital", 10000))
+                    logger.info("Initialized PAPER capital from config: ₹%.2f", capital_start)
+            else:
+                # LIVE mode
+                from core.order_executor import _get_available_capital
+                avail = _get_available_capital(force_refresh=True)
+                gross = get_today_gross_pnl()
+                capital_start = avail - gross
+                logger.info("Initialized LIVE capital from broker API: ₹%.2f", capital_start)
+
+            if capital_start is not None:
+                conn.execute("""
+                    INSERT INTO daily_stats (date, capital_start) VALUES (?, ?)
+                    ON CONFLICT(date) DO UPDATE SET capital_start = excluded.capital_start
+                """, (today, capital_start))
+        except Exception as e:
+            logger.critical("Failed to initialize capital_start. Left NULL. Err: %s", e)
 
 
 def _sanitize_position(row: sqlite3.Row | dict) -> dict:
@@ -439,12 +527,18 @@ def mark_position_reconciliation_pending(
     return (cursor.rowcount or 0) > 0
 
 
+def calculate_transaction_costs(entry_price: float, exit_price: float, quantity: int) -> float:
+    """Approximate Indian Equity Intraday Transaction Costs (0.03% of turnover)."""
+    turnover = (entry_price + exit_price) * quantity
+    return turnover * 0.0003
+
+
 def close_position(
     symbol: str,
     exit_price: float,
     reason: str = "SIGNAL",
     exit_price_source: str = "unknown",
-    reconciliation_status: str | None = None,
+    reconciliation_status: str | None = None
 ) -> bool:
     now = datetime.now().isoformat()
     symbol = str(symbol or "").strip().upper()
@@ -463,7 +557,15 @@ def close_position(
             logger.warning("No open position for %s", symbol)
             return False
 
-        pnl = (exit_price - safe_float(row["entry_price"], 0.0)) * safe_int(row["quantity"], 0)
+        entry_price = safe_float(row["entry_price"], 0.0)
+        quantity = safe_int(row["quantity"], 0)
+        
+        gross_pnl = (exit_price - entry_price) * quantity
+        txn_costs = calculate_transaction_costs(entry_price, exit_price, quantity)
+        pnl = gross_pnl - txn_costs
+        
+        logger.info(f"FX12 Txn Costs applied for {symbol}: Gross=₹{gross_pnl:.2f}, Costs=₹{txn_costs:.2f}, Net=₹{pnl:.2f}")
+
         status = "CLOSED"
         conn.execute("""
             UPDATE trades
@@ -618,10 +720,14 @@ def _update_daily_stats():
                 "SELECT capital_start, capital_end FROM daily_stats WHERE date = ?",
                 (today,),
             ).fetchone()
+
             capital_start = existing["capital_start"] if existing else None
-            if not capital_start:
-                from core.order_executor import _get_available_capital
-                capital_start = _get_available_capital() + gross
+            
+            # Retry initialization if we are now flat and it is still NULL
+            if capital_start is None:
+                initialize_daily_capital()
+                existing = conn.execute("SELECT capital_start, capital_end FROM daily_stats WHERE date = ?", (today,)).fetchone()
+                capital_start = existing["capital_start"] if existing else None
 
             # F017: Make capital_end fetch resilient — use last known value on failure
             capital_end = None
@@ -639,17 +745,34 @@ def _update_daily_stats():
                 else:
                     capital_end = capital_start
 
+            # FX05: Explicit Reporting Fields
+            broker_buying_power = capital_end
+            realized_equity = (capital_start + gross) if capital_start is not None else None
+            unrealized_pnl = 0.0
+            try:
+                from core.order_executor import get_margin_status
+                ms = get_margin_status()
+                unrealized_pnl = float(ms.get("unrealized_pnl", 0.0))
+            except Exception as e:
+                logger.warning("Failed to fetch unrealized_pnl for daily_stats: %s", e)
+            
+            estimated_total_equity = (realized_equity + unrealized_pnl) if realized_equity is not None else None
+
             conn.execute("""
                 INSERT INTO daily_stats
-                (date, total_trades, winning_trades, losing_trades, gross_pnl, capital_start, capital_end)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (date, total_trades, winning_trades, losing_trades, gross_pnl, capital_start, capital_end, broker_buying_power, realized_equity, unrealized_pnl, estimated_total_equity)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(date) DO UPDATE SET
                     total_trades   = excluded.total_trades,
                     winning_trades = excluded.winning_trades,
                     losing_trades  = excluded.losing_trades,
                     gross_pnl      = excluded.gross_pnl,
-                    capital_end    = excluded.capital_end
-            """, (today, total, winners, losers, gross, capital_start, capital_end))
+                    capital_end    = excluded.capital_end,
+                    broker_buying_power = excluded.broker_buying_power,
+                    realized_equity = excluded.realized_equity,
+                    unrealized_pnl = excluded.unrealized_pnl,
+                    estimated_total_equity = excluded.estimated_total_equity
+            """, (today, total, winners, losers, gross, capital_start, capital_end, broker_buying_power, realized_equity, unrealized_pnl, estimated_total_equity))
     except Exception as exc:
         logger.error("Daily stats update failed: %s", exc, exc_info=True)
 

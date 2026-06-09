@@ -177,6 +177,10 @@ async def startup():
     logger.info("[0/6] Initializing database...")
     initialize_db()
 
+    from core.state_manager import initialize_daily_capital
+    logger.info("[0.5/6] Initializing daily capital tracking...")
+    initialize_daily_capital()
+
     # STEP 1 — Preflight Checks (before any trading)
     logger.info("[1/6] Running preflight health checks...")
     from core.health_monitor import run_preflight_checks

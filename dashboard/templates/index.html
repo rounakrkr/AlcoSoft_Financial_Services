@@ -2,11 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
+  {% if request.args.get('view') == 'desktop' %}
+  <meta name="viewport" content="width=980"/>
+  {% else %}
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  {% endif %}
   <title>AlcoSoft Trading Desk</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="/static/css/style.css"/>
   <link rel="stylesheet" href="/static/css/charts.css"/>
+  <meta name="csrf-token" content="{{ csrf_token() }}"/>
 </head>
 <body>
 
@@ -15,12 +20,20 @@
   <div class="header-right">
     <a href="/" class="nav-link active">Dashboard</a>
     <a href="/cognition" class="nav-link">🧠 Cognition Lab</a>
+    {% if current_user.role in ['admin', 'emergency_admin'] %}
     <a href="/settings" class="nav-link">⚙️ Settings</a>
-    <button class="btn-resume" id="resume-trading-btn" title="Clear the flat lock and allow new entries">▶ Resume Trading</button>
+    <button class="btn-resume" id="resume-trading-btn" style="display:none;" title="Clear the flat lock and allow new entries">▶ Resume Trading</button>
     <button class="btn-emergency" id="squareoff-btn" title="Close all positions immediately">🚨 SQUARE OFF ALL</button>
+    {% endif %}
+    
     <span class="clock" id="clock">⏰ --:--:--</span>
     <span class="badge badge-paper" id="mode-badge">📋 PAPER</span>
     <span class="badge badge-green" id="strategy-badge">⚡ INTRADAY</span>
+    
+    <form method="POST" action="/logout" style="margin: 0; padding: 0; display: flex; align-items: center;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <button type="submit" class="nav-link" style="font-family:inherit; color:var(--red); font-weight:600; cursor:pointer; display:flex; align-items:center; gap:0.3rem;">🚪 Logout</button>
+    </form>
   </div>
 </header>
 
@@ -41,21 +54,32 @@
     <div class="card-sub">Today</div>
   </div>
   <div class="card stat-card">
-    <div class="card-title">💼 Open Positions</div>
-    <div class="card-value" id="stat-open">0</div>
+    <div class="card-title">💼 Broker Accounting</div>
     <div class="capital-lines" id="capital-breakdown">
-      <div><span>Starting</span><strong id="cap-starting">—</strong></div>
-      <div><span>Available</span><strong id="cap-available">—</strong></div>
-      <div><span>Deployed</span><strong id="cap-deployed">—</strong></div>
-      <div><span>Equity</span><strong id="cap-equity">—</strong></div>
+      <div><span title="Total account value including PnL">Account Equity</span><strong id="cap-equity">—</strong></div>
+      <div><span title="Total open position value">Gross Exposure</span><strong id="cap-exposure">—</strong></div>
+      <div><span title="Margin blocked by broker">Margin Blocked</span><strong id="cap-blocked">—</strong></div>
+      <div><span title="Available margin for new positions">Free Margin</span><strong id="cap-free">—</strong></div>
+      <div><span title="Estimated buying power limit">Total Buying Power</span><strong id="cap-power">—</strong></div>
     </div>
   </div>
 
   <!-- 🔥 MARGIN STATUS WIDGET -->
   <div class="card stat-card" id="margin-card" style="display:none">
-    <div class="card-title">🔥 Margin Status</div>
+    <div class="card-title">🔥 Margin Utilization</div>
     <div class="card-value" id="margin-pct" style="font-size:1.5rem">—</div>
     <div class="card-sub" id="margin-details">Margin: OFF</div>
+  </div>
+
+  <!-- 🔥 LIVE EQUITY SNAPSHOT WIDGET -->
+  <div class="card stat-card" id="daily-stats-card">
+    <div class="card-title">📉 Live Session Snapshot</div>
+    <div class="capital-lines">
+      <div><span>Starting Capital</span><strong id="live-start-eq">—</strong></div>
+      <div><span>Closed P&L</span><strong id="live-closed-pnl">—</strong></div>
+      <div><span>Unrealized P&L</span><strong id="live-unrealized-pnl">—</strong></div>
+      <div><span title="Current account equity">Account Equity</span><strong id="live-trading-eq">—</strong></div>
+    </div>
   </div>
 
   <div class="charts-row">
@@ -170,6 +194,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="/static/js/charts.js"></script>
-<script src="/static/js/app.js"></script>
+<script src="/static/js/app.js?v=3"></script>
 </body>
 </html>

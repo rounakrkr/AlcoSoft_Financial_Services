@@ -118,7 +118,7 @@ def _parse_broker_position_rows(response: Any) -> dict[str, dict]:
             "quantity": qty,
             "entry_price": entry_price,
             "trading_symbol": _trading_symbol(raw_symbol, symbol),
-            "product": str(row.get("prod") or row.get("product") or "MIS"),
+            "product": str(row.get("prod") or row.get("product") or "UNKNOWN"),
             "raw": row,
         }
     return out
@@ -537,18 +537,12 @@ def reconcile_broker_vs_local() -> dict:
 
 
 def reconcile_positions():
-    """Reconcile broker positions with internal records."""
-    import logging
-    logger = logging.getLogger(__name__)
-    
+    """
+    FX13: Reconcile broker positions with internal records.
+    Broker Truth > Local Cache > Guessing
+    """
     try:
-        from core.state_manager import get_open_positions
-        
-        positions = get_open_positions()
-        logger.info(f"Reconciling {len(positions)} positions with broker")
-        
-        # In paper trading, positions are already synced
-        return {"reconciled": len(positions), "mismatches": 0}
+        return reconcile_broker_vs_local()
     except Exception as e:
         logger.error(f"Reconciliation failed: {e}")
-        return {"reconciled": 0, "mismatches": 0, "error": str(e)}
+        return {"reconciled": 0, "mismatches": 0, "error": str(e), "ok": False}

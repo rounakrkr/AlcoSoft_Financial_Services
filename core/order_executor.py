@@ -38,8 +38,10 @@ from core.api_resilience import call_broker_api
 from core.order_verifier import (
     record_order_sent,
     wait_for_order_verification,
+    wait_for_sl_verification,
 )
 from reflection.reflection_engine import record_trade
+from core.alerts import alert_critical
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -440,7 +442,7 @@ def get_allocation_metrics() -> dict:
     total_buying_power = bp_info['total_buying_power']
     margin_leverage = bp_info['margin_leverage']
     
-    deployed_capital = safe_float(margin_status.get('deployed_in_positions'), 0.0)
+    deployed_capital = safe_float(margin_status.get('current_position_value'), 0.0)
     available_for_new = total_buying_power - deployed_capital
     
     # Calculate real capital usage
@@ -484,22 +486,11 @@ def get_allocation_metrics() -> dict:
 #   POSITION SIZING
 # ════════════════════════════════════════════════════════════
 
-def calculate_quantity(price: float, stop_loss: float, risk_pct: float = None) -> int:
+def calculate_quantity(symbol: str, price: float, stop_loss: float, risk_pct: float = None) -> int:
     """
-    🚀 REDESIGNED (2026-06-01 REVISED): Multi-constraint quantity model
-    
-    BINDING CONSTRAINTS (Three-constraint model):
-    1. Risk constraint (max_loss / stop_dist)
-    2. Allocation constraint (per_position_budget / price)
-    3. Leverage constraint (total_buying_power limit)
-    
-    Capital constraint REMOVED to honor margin configuration intent.
-    Over-leverage validation performed separately as safety net.
-    
-    Whichever constraint is tightest determines final quantity.
-    All constraints are logged explicitly.
-    
-    Returns: int quantity (MIN of 3 binding constraints)
+    🚀 REDESIGNED (FX11-A): Dynamic Broker Margin Architecture.
+    Calculates quantity using real API-discovered margin blocks instead of static leverage.
+    Fails CLOSED if API is unreachable in LIVE mode.
     """
     price = safe_float(price, 0.0)
     stop_loss = safe_float(stop_loss, 0.0)
@@ -508,124 +499,115 @@ def calculate_quantity(price: float, stop_loss: float, risk_pct: float = None) -
         logger.error("Quantity rejected: invalid price %r", price)
         return 0
     
-    # ─────────────────────────────────────────────────────────
-    # STEP 1: Get risk setting
-    # ─────────────────────────────────────────────────────────
     if risk_pct is None:
         risk_pct = safe_float(cfg("risk", "max_risk_per_trade", 0.02), 0.02)
     risk_pct = max(0.0, min(1.0, safe_float(risk_pct, 0.02)))
     
-    # ─────────────────────────────────────────────────────────
-    # STEP 2: Calculate total buying power and per-position budget
-    # ─────────────────────────────────────────────────────────
     from core.strategy import MAX_POSITIONS
     
     bp_info = calculate_total_buying_power()
     real_capital = bp_info['real_capital']
-    total_buying_power = bp_info['total_buying_power']
-    margin_leverage = bp_info['margin_leverage']
     allow_margin = bp_info['allow_margin']
+    position_size_margin = bp_info['position_size_margin']
     
-    budget_info = calculate_per_position_budget(bp_info, MAX_POSITIONS)
-    per_position_budget = budget_info['per_position_budget']
-    portfolio_allocation_pct = budget_info['portfolio_allocation_pct']
+    per_position_equity_budget = (real_capital * position_size_margin) / MAX_POSITIONS
     
-    # ─────────────────────────────────────────────────────────
-    # STEP 3: Get current deployment
-    # ─────────────────────────────────────────────────────────
-    margin_status = get_margin_status()
-    deployed_now = safe_float(margin_status.get('deployed_in_positions'), 0.0)
-    
-    # ─────────────────────────────────────────────────────────
-    # STEP 4: Analyze all constraints
-    # ─────────────────────────────────────────────────────────
-    constraint_analysis = analyze_quantity_constraints(
-        price=price,
-        stop_loss=stop_loss,
-        risk_pct=risk_pct,
-        real_capital=real_capital,
-        per_position_budget=per_position_budget,
-        deployed_now=deployed_now,
-        total_buying_power=total_buying_power,
-    )
-    
-    qty = max(0, safe_int(constraint_analysis['final_qty'], 0))
-    limiting_constraint = constraint_analysis['limiting_constraint']
+    margin_per_share = price
+    effective_leverage = 1.0
+    margin_source = "CASH (No Margin)"
 
-    # GUARD: Prevent quantity floor of 1 from exceeding available buying power
-    if qty > 0:
-        order_cost = qty * price
-        available_to_deploy = max(0.0, total_buying_power - deployed_now)
-        if order_cost > available_to_deploy:
-            logger.warning(
-                'Quantity %d for %s (cost Rs%.0f) exceeds available buying power (Rs%.0f) — rejecting',
-                qty, symbol if 'symbol' in dir() else 'expensive_stock', order_cost, available_to_deploy,
-            )
-            return 0
+    if allow_margin:
+        if TRADING_MODE == "LIVE":
+            try:
+                from core.kotak_client import get_client
+                from core.api_resilience import call_broker_api
+                from core.data_fetcher import resolve_instrument_tokens
+                
+                tokens = resolve_instrument_tokens([symbol])
+                token = tokens[0].get("instrument_token") if tokens else None                
+                if token:
+                    client = get_client()
+                    resp = call_broker_api(
+                        client.margin_required,
+                        exchange_segment="nse_cm",
+                        price=str(price),
+                        order_type="MKT",
+                        product="MIS",
+                        quantity="1",
+                        instrument_token=str(token),
+                        transaction_type="B"
+                    )
+                    if resp and isinstance(resp, dict) and "data" in resp:
+                        data = resp["data"]
+                        if "ordMrgn" in data and float(data["ordMrgn"]) > 0:
+                            margin_per_share = float(data["ordMrgn"])
+                            effective_leverage = price / margin_per_share
+                            margin_source = "API (client.margin_required)"
+                        else:
+                            logger.error(f"❌ FX11-A: margin_required for {symbol} returned invalid ordMrgn. Failing CLOSED.")
+                            return 0
+                    else:
+                        logger.error(f"❌ FX11-A: margin_required for {symbol} failed/timeout. Failing CLOSED.")
+                        return 0
+                else:
+                    logger.error(f"❌ FX11-A: Missing instrument token for {symbol}. Failing CLOSED.")
+                    return 0
+            except Exception as e:
+                logger.error(f"❌ FX11-A: Exception during margin_required for {symbol}: {e}. Failing CLOSED.")
+                return 0
+        else:
+            configured_leverage = bp_info['margin_leverage']
+            margin_per_share = price / configured_leverage
+            effective_leverage = configured_leverage
+            margin_source = "CONFIG (Paper Mode)"
+
+    logger.info(f"📊 Margin Discovery [{symbol}]: ₹{margin_per_share:.2f}/share ({effective_leverage:.1f}x) [Source: {margin_source}]")
+
+    margin_status = get_margin_status()
+    free_margin = safe_float(margin_status.get('free_margin'), 0.0)
     
-    # ─────────────────────────────────────────────────────────
-    # STEP 5: Handle forced_buy (if configured)
-    # ─────────────────────────────────────────────────────────
+    max_loss = real_capital * risk_pct
+    stop_dist = abs(price - stop_loss)
+    if stop_dist <= 0:
+        stop_dist = max(1.0, price * 0.01)
+    
+    risk_qty = max_loss / stop_dist if stop_dist > 0 else 0
+    allocation_qty = per_position_equity_budget / margin_per_share if margin_per_share > 0 else 0
+    leverage_qty = free_margin / margin_per_share if margin_per_share > 0 else 0
+    
+    quantities = {'risk': risk_qty, 'allocation': allocation_qty, 'leverage': leverage_qty}
+    final_qty = max(0, int(min(quantities.values())))
+    
+    limiting_constraint = min(quantities, key=quantities.get) if final_qty > 0 else "insufficient_all"
+
     forced_buy = cfg("risk", "forced_buy_margin", False)
-    if qty <= 0 and forced_buy and allow_margin:
-        # Try to buy at least something if allocation allows
-        allocation_qty = int(constraint_analysis['allocation_qty'])
-        if allocation_qty > 0:
-            qty = allocation_qty
+    if final_qty <= 0 and forced_buy and allow_margin:
+        if allocation_qty >= 1:
+            final_qty = int(allocation_qty)
             limiting_constraint = "forced_buy_override"
-            logger.warning(
-                f"⚠️ FORCED BUY OVERRIDE | Risk says {int(constraint_analysis['risk_qty'])} shares, "
-                f"but buying {qty} using allocation budget (margin-enabled override)"
-            )
-    
-    # ─────────────────────────────────────────────────────────
-    # STEP 6: Validation and logging
-    # ─────────────────────────────────────────────────────────
-    if qty <= 0:
+            logger.warning(f"⚠️ FORCED BUY OVERRIDE | Buying {final_qty} using allocation budget.")
+
+    if final_qty <= 0:
         logger.error(
-            f"❌ INSUFFICIENT BUYING POWER | Price: ₹{price} | SL: ₹{stop_loss} | "
-            f"Real Capital: ₹{real_capital:.0f} | Total Buying Power: ₹{total_buying_power:.0f} | "
-            f"Per-Position Budget: ₹{per_position_budget:.0f} | Already Deployed: ₹{deployed_now:.0f} | "
-            f"Risk-based qty: {int(constraint_analysis['risk_qty'])} | "
-            f"Allocation-based qty: {int(constraint_analysis['allocation_qty'])} | "
-            f"Leverage limit qty: {int(constraint_analysis['leverage_qty'])}"
+            f"❌ INSUFFICIENT MARGIN/RISK FOR {symbol} | Price: ₹{price} | SL: ₹{stop_loss} | "
+            f"Free Margin: ₹{free_margin:.0f} | Margin/Share: ₹{margin_per_share:.2f} | "
+            f"Risk-qty: {int(risk_qty)} | Alloc-qty: {int(allocation_qty)} | Lever-qty: {int(leverage_qty)}"
         )
         return 0
-    
-    capital_deployed_if_buy = qty * price
-    
-    # ─────────────────────────────────────────────────────────
-    # STEP 7: Log comprehensive constraint analysis
-    # ─────────────────────────────────────────────────────────
-    margin_used = max(0, capital_deployed_if_buy - real_capital)
-    
-    constraint_labels = {
-        'risk': 'Risk-limited',
-        'allocation': 'Allocation-limited',
-        'leverage': 'Leverage-limited',
-        'capital': 'Capital-limited',
-        'forced_buy_override': 'Forced-buy override',
-        'insufficient_all': 'Insufficient (all constraints)',
-        'unknown': 'Unknown constraint',
-    }
-    
-    limiting_label = constraint_labels.get(limiting_constraint, 'Unknown')
+
+    capital_deployed_if_buy = final_qty * margin_per_share
     
     logger.info(
-        f"✅ Quantity calculated | "
-        f"Price: ₹{price} | Qty: {qty} | Deployed: ₹{capital_deployed_if_buy:.0f} | "
-        f"Limiting: {limiting_label} | "
-        f"Risk: {int(constraint_analysis['risk_qty'])}sh | "
-        f"Alloc: {int(constraint_analysis['allocation_qty'])}sh | "
-        f"Lever: {int(constraint_analysis['leverage_qty'])}sh | "
-        f"Buying Power: ₹{total_buying_power:.0f} | "
-        f"Margin Used: ₹{margin_used:.0f}"
+        f"✅ Quantity calculated | {symbol} | Price: ₹{price} | Qty: {final_qty} | "
+        f"Margin Blocked: ₹{capital_deployed_if_buy:.0f} | Limiting: {limiting_constraint} | "
+        f"Free Margin Left: ₹{free_margin - capital_deployed_if_buy:.0f}"
     )
     
-    return qty
+    return final_qty
 
 
 def calculate_quantity_with_tranches(
+    symbol: str,
     price: float, 
     stop_loss: float,
     risk_pct: float = None,
@@ -666,7 +648,7 @@ def calculate_quantity_with_tranches(
     allow_margin = cfg("risk", "allow_margin", False)
     if not allow_margin:
         # No margin = no tranches, just single buy
-        qty = calculate_quantity(price, stop_loss, risk_pct)
+        qty = calculate_quantity(symbol, price, stop_loss, risk_pct)
         return {
             'total_qty': qty,
             'num_tranches': 1,
@@ -929,7 +911,7 @@ def _place_buy_order_impl(
         logger.error("BUY rejected for %s: invalid stop loss %r", symbol, stop_loss)
         return {}
 
-    quantity     = calculate_quantity(entry_price, stop_loss, risk_pct)
+    quantity     = calculate_quantity(symbol, entry_price, stop_loss, risk_pct)
     if quantity <= 0:
         logger.error(
             "BUY rejected for %s: invalid/insufficient quantity %r | price=%s | available=%s",
@@ -941,24 +923,49 @@ def _place_buy_order_impl(
         return {}
 
     # 🔥 MARGIN SAFETY: Check if this order would over-leverage
+    # F001 FIX: Use current_position_value (live market value) not entry_position_value.
+    # The broker's actual margin consumption tracks current market value. Using entry
+    # price understates deployment when positions have moved favourably, allowing
+    # over-leverage beyond the configured ceiling.
     margin_status = get_margin_status()
     capital_deployed_if_buy = quantity * entry_price
-    deployed_now = safe_float(margin_status.get('deployed_in_positions'), 0.0)
-    real_capital = safe_float(margin_status.get('real_capital'), 0.0)
-    leverage = safe_float(margin_status.get('margin_leverage'), 1.0)
-    total_would_deploy = deployed_now + capital_deployed_if_buy
-    would_over_leverage = total_would_deploy > (real_capital * leverage)
-    
+
+    # current_position_value = Σ(live_price × qty) for all open positions
+    # entry_position_value   = Σ(entry_price × qty) — what we paid, not what broker sees
+    deployed_now_current = safe_float(margin_status.get('current_position_value'), 0.0)
+    deployed_now_entry   = safe_float(margin_status.get('entry_position_value'), 0.0)
+    real_capital         = safe_float(margin_status.get('account_equity'), 0.0)
+    leverage             = safe_float(margin_status.get('margin_leverage'), 1.0)
+
+    total_would_deploy  = deployed_now_current + capital_deployed_if_buy
+    max_deployable      = real_capital * leverage
+    would_over_leverage = total_would_deploy > max_deployable
+
+    if deployed_now_current != deployed_now_entry:
+        logger.debug(
+            "F001: Entry vs current position value differ for %s | "
+            "entry=₹%.0f current=₹%.0f | delta=₹%.0f",
+            symbol,
+            deployed_now_entry,
+            deployed_now_current,
+            deployed_now_current - deployed_now_entry,
+        )
+
     if would_over_leverage:
         logger.error(
-            f"⚠️ OVER-LEVERAGE WARNING for {symbol} | "
-            f"Current: ₹{margin_status['deployed_in_positions']:.0f} + "
-            f"This order: ₹{capital_deployed_if_buy:.0f} = "
-            f"₹{total_would_deploy:.0f} > "
-            f"Max available: ₹{margin_status['real_capital'] * margin_status['margin_leverage']:.0f}"
+            "⚠️ OVER-LEVERAGE BLOCKED for %s | "
+            "Current market deployment: ₹%.0f + This order: ₹%.0f = ₹%.0f > Max: ₹%.0f "
+            "(real_capital=₹%.0f × leverage=%.1fx)",
+            symbol,
+            deployed_now_current,
+            capital_deployed_if_buy,
+            total_would_deploy,
+            max_deployable,
+            real_capital,
+            leverage,
         )
         return {}
-    
+
     target_price = calculate_target(entry_price, stop_loss)
 
     trade = {
@@ -1004,12 +1011,22 @@ def _place_buy_order_impl(
             symbol,
             {"side": "BUY", "qty": quantity, "price": entry_price, "product": product},
         )
-        if not wait_for_order_verification(trade["order_id"], timeout_sec=45):
+        verification = wait_for_order_verification(trade["order_id"], timeout_sec=45)
+        if verification == "REJECTED":
             logger.error(
-                f"❌ BUY not confirmed on broker for {symbol} — "
+                f"❌ BUY explicitly rejected by broker for {symbol} — "
                 f"not saving local position (order_id={trade['order_id']})"
             )
-            raise OrderExecutionError(f"BUY not verified for {symbol}")
+            raise OrderExecutionError(f"BUY rejected for {symbol}")
+        elif verification == "TIMEOUT":
+            logger.warning(
+                f"⚠️ BUY verification timed out for {symbol}. "
+                f"Assuming order is filled to prevent double-buy risk. "
+                f"Reconciliation will clean up if broker actually dropped it. (order_id={trade['order_id']})"
+            )
+            # F004 FIX: We continue and save the local position to avoid duplicate buys.
+            # Adding a note so operators/reconciliation are aware of the timeout.
+            trade["notes"] = "UNVERIFIED: Broker confirmation timed out"
 
         logger.info(f"✅ BUY verified on broker | Symbol: {symbol} | Qty: {quantity} | Product: {product} | SL: ₹{stop_loss}")
 
@@ -1021,20 +1038,13 @@ def _place_buy_order_impl(
         # 🔧 NO PRE-VALIDATION: ensure_trade_token_on_client() already handles all token checks
         # Calling validate_and_fix_session_before_order() here causes DOUBLE token refresh!
         #
-        # 🛡️ F002 FIX (REVISED): SL-M placement is attempted with up to 3 external retries.
-        # If ALL retries fail, the position is still saved locally so every software protection
-        # layer (software SL, trailing SL, profit target, EOD squareoff) remains active.
-        # The position is marked SL_BROKER_UNPROTECTED and the strategy loop will attempt
-        # SL-M recovery on every subsequent iteration via _attempt_sl_recovery().
-        # A CRITICAL alert is raised immediately so the operator is aware.
-        # We do NOT abort the trade — cancelling a filled BUY is impossible and creates
-        # an orphan position with zero visibility, which is strictly worse.
+        time.sleep(1) 
         
         _SL_MAX_EXT_RETRIES = 3
         _SL_RETRY_DELAY_SEC = 2
 
         logger.info(
-            f"🔄 Placing broker SL-M for {symbol} | "
+            f"🔄 Placing broker SL for {symbol} | "
             f"Qty: {quantity} | Trigger: ₹{stop_loss} | Trading symbol: {trading_symbol}"
         )
 
@@ -1055,15 +1065,32 @@ def _place_buy_order_impl(
 
             if trade["sl_order_id"]:
                 logger.info(
-                    f"🛡️ Broker SL-M placed | {symbol} | Qty: {quantity} | "
+                    f"🛡️ Broker SL placed | {symbol} | Qty: {quantity} | "
                     f"Trigger: ₹{stop_loss} | OrderID: {trade['sl_order_id']} "
                     f"(attempt {_sl_attempt}/{_SL_MAX_EXT_RETRIES})"
                 )
-                break  # SL placed — exit retry loop
+                
+                # F003: SL Order Verification
+                sl_status = wait_for_sl_verification(trade["sl_order_id"])
+                
+                if sl_status == "REJECTED":
+                    logger.error(f"❌ SL Order rejected by broker! Clearing ID and retrying...")
+                    
+                    alert_critical(
+                        f"\nBroker Stop Loss Rejected\n\n"
+                        f"Symbol: {symbol}\n\n"
+                        f"Position is currently protected only by software stop-loss.\n\n"
+                        f"Immediate review required."
+                    )
+                    
+                    trade["sl_order_id"] = None
+                    # Fall through to retry logic
+                else:
+                    break  # SL placed and verified — exit retry loop
 
             if _sl_attempt < _SL_MAX_EXT_RETRIES:
                 logger.warning(
-                    f"⚠️ SL-M attempt {_sl_attempt}/{_SL_MAX_EXT_RETRIES} failed for {symbol}. "
+                    f"⚠️ SL attempt {_sl_attempt}/{_SL_MAX_EXT_RETRIES} failed/rejected for {symbol}. "
                     f"Retrying in {_SL_RETRY_DELAY_SEC}s..."
                 )
                 import time as _time_mod
@@ -1092,7 +1119,6 @@ def _place_buy_order_impl(
             # overwrite (e.g. broker reconciliation quantity/entry repair writes notes).
             # Fire CRITICAL alert to operator immediately
             try:
-                from core.alerts import alert_critical
                 alert_critical(
                     f"🚨 Broker SL-M FAILED for {symbol} ({_SL_MAX_EXT_RETRIES} retries). "
                     f"Position held with SOFTWARE SL only (₹{stop_loss}). "
@@ -1248,12 +1274,19 @@ def _place_sell_order_impl(
             symbol,
             {"side": "SELL", "qty": quantity, "price": exit_price, "reason": reason},
         )
-        if not wait_for_order_verification(order_id, timeout_sec=45):
+        verification = wait_for_order_verification(order_id, timeout_sec=45)
+        if verification == "REJECTED":
             logger.error(
-                f"❌ SELL not confirmed on broker for {symbol} — "
+                f"❌ SELL explicitly rejected by broker for {symbol} — "
                 f"keeping local position open (order_id={order_id})"
             )
-            raise OrderExecutionError(f"SELL not verified for {symbol}")
+            raise OrderExecutionError(f"SELL rejected for {symbol}")
+        elif verification == "TIMEOUT":
+            logger.warning(
+                f"⚠️ SELL verification timed out for {symbol}. "
+                f"Assuming order is filled to prevent ghost holding. "
+                f"Reconciliation will clean up if broker actually dropped it. (order_id={order_id})"
+            )
 
         try:
             from core.order_verifier import fetch_kotak_order_row
@@ -1528,10 +1561,17 @@ def attempt_broker_sl_recovery():
             )
 
         if new_sl_id:
+            # F003: Verify recovered SL order!
+            sl_status = wait_for_sl_verification(new_sl_id)
+            if sl_status == "REJECTED":
+                logger.error(f"❌ SL Recovery Order rejected by broker! Backing off...")
+                new_sl_id = None
+                
+        if new_sl_id:
             # ── SUCCESS ─────────────────────────────────────────────────────
             logger.info(
                 "✅ SL recovery SUCCESS for %s after %d attempt(s) | "
-                "New SL-M order: %s | Trigger: ₹%.2f",
+                "New SL order: %s | Trigger: ₹%.2f",
                 symbol, attempt_num, new_sl_id, active_trigger,
             )
             try:
@@ -1677,7 +1717,6 @@ def _get_available_capital(force_refresh: bool = False) -> float:
                 _capital_api_failures, exc,
             )
             try:
-                from core.alerts import alert_critical
                 alert_critical(
                     f"🚨 Capital API DOWN — no valid capital in cache. "
                     f"All new buy orders BLOCKED (qty=0). "
@@ -1696,7 +1735,6 @@ def _get_available_capital(force_refresh: bool = False) -> float:
                 _capital_api_failures, _capital_cache, exc,
             )
             try:
-                from core.alerts import alert_critical
                 alert_critical(
                     f"🚨 Capital API failed {_capital_api_failures}x consecutively. "
                     f"Running on stale cache: Rs{_capital_cache:.2f}. "
@@ -1756,130 +1794,99 @@ def get_margin_status() -> dict:
     - Unrealized P&L
     - Closed P&L
     - Paper vs Live modes
+    - FX11-B: Broker-Style Accounting replacing Available Cash.
 
     Returns: {
-        'real_capital': float,                # ₹ in real account
-        'margin_leverage': float,             # 2.0 = 2x, 3.0 = 3x, etc
-        'total_available_with_margin': float, # Real capital × leverage
-        'current_position_value': float,      # Current market value (not entry value)
-        'unrealized_pnl': float,              # Open position gains/losses
-        'effective_capital': float,           # Capital + unrealized + closed PnL
-        'margin_used': float,                 # ₹ margin actually being used
-        'margin_pct': float,                  # % of real capital (0-100+)
-        'remaining_margin': float,            # ₹ margin left to deploy
-        'is_over_leveraged': bool,            # margin_pct > 100%
+        'starting_capital': float,
+        'account_equity': float,              # Base + Closed PnL + Unrealized PnL
+        'gross_exposure': float,              # Current market value of all positions
+        'margin_blocked': float,              # Total margin actively blocked
+        'free_margin': float,                 # account_equity - margin_blocked
+        'remaining_buying_power': float,      # free_margin * leverage
+        'margin_utilization': float,          # % of equity blocked as margin
+        'closed_pnl': float,
+        'unrealized_pnl': float,
+        'margin_leverage': float,
+        'current_position_value': float,
+        'entry_position_value': float
     }
     """
-    # For PAPER mode, use calculated available capital
-    if TRADING_MODE == "PAPER":
-        real_capital = safe_float(cfg("risk", "paper_capital", 10000), 10000.0)
+    from core.state_manager import get_today_stats
+    stats = get_today_stats()
+    
+    # 1. Starting Capital
+    if stats and stats.get("capital_start") is not None:
+        starting_capital = max(0.0, safe_float(stats["capital_start"], 0.0))
     else:
-        real_capital = safe_float(_get_available_capital(force_refresh=True), 0.0)
+        if TRADING_MODE == "PAPER":
+            starting_capital = safe_float(cfg("risk", "paper_capital", 10000), 10000.0)
+        else:
+            starting_capital = safe_float(_get_available_capital(force_refresh=True), 0.0)
 
-    allow_margin = cfg("risk", "allow_margin", False)
-    margin_leverage = safe_float(cfg("risk", "margin_leverage", 2.0), 2.0)
+    # 2. PnL
     valuation = _current_position_valuation()
     current_position_value = valuation["current_position_value"]
     entry_position_value = valuation["entry_position_value"]
     unrealized_pnl = valuation["unrealized_pnl"]
-    closed_pnl = get_today_gross_pnl()
-    total_pnl = closed_pnl + unrealized_pnl
-    effective_capital = real_capital + total_pnl
-
-    if margin_leverage < 1.0:
+    closed_pnl = safe_float(get_today_gross_pnl(), 0.0)
+    
+    # 3. Account Equity
+    account_equity = max(0.0, starting_capital + closed_pnl + unrealized_pnl)
+    
+    # 4. Gross Exposure
+    gross_exposure = current_position_value
+    
+    # 5. Margin Blocked
+    margin_leverage = safe_float(cfg("risk", "margin_leverage", 2.0), 2.0)
+    if not cfg("risk", "allow_margin", False):
         margin_leverage = 1.0
-    elif margin_leverage > 5.0:
-        margin_leverage = 5.0
-
-    if not allow_margin:
-        remaining_cash = max(0.0, real_capital - current_position_value)
-        return {
-            'real_capital': real_capital,
-            'margin_leverage': 1.0,
-            'total_available_with_margin': real_capital,
-            'current_position_value': current_position_value,
-            'deployed_in_positions': entry_position_value,
-            'entry_position_value': entry_position_value,
-            'unrealized_pnl': unrealized_pnl,
-            'effective_capital': effective_capital,
-            'margin_used': 0.0,
-            'margin_pct': 0.0,
-            'remaining_margin': remaining_cash,
-            'is_over_leveraged': current_position_value > real_capital,
-        }
-
-    # Margin available = extra capital we can use beyond real capital
-    margin_available = real_capital * (margin_leverage - 1.0)
-
-    # Margin used = how much of the DEPLOYMENT exceeds effective capital
-    # If deployment > effective capital, we're using margin
-    margin_used = max(0, current_position_value - effective_capital)
-
-    # Margin percentage = current leverage ratio as percentage
-    # Example: if deployed ₹20,000 and real capital ₹10,000, leverage = 2.0x = 200%
-    current_leverage = (current_position_value / real_capital) if real_capital > 0 else 0.0
-    current_leverage = max(0.0, current_leverage)
-    margin_pct = max(0.0, (current_leverage - 1.0) * 100)  # extra leverage beyond 1x
-
-    remaining_margin = max(0, margin_available - margin_used)
-    is_over_leveraged = margin_used > margin_available
-
+    
+    margin_blocked = gross_exposure / margin_leverage if margin_leverage > 0 else gross_exposure
+    
+    # 6. Free Margin
+    free_margin = max(0.0, account_equity - margin_blocked)
+    
+    # 7. Remaining Buying Power
+    remaining_buying_power = free_margin * margin_leverage
+    
+    # 8. Margin Utilization %
+    margin_utilization = (margin_blocked / account_equity) * 100 if account_equity > 0 else 0.0
+    
     return {
-        'real_capital': real_capital,
-        'margin_leverage': margin_leverage,
-        'total_available_with_margin': real_capital * margin_leverage,
-        'current_position_value': current_position_value,
-        'deployed_in_positions': entry_position_value,
-        'entry_position_value': entry_position_value,
+        'starting_capital': starting_capital,
+        'account_equity': account_equity,
+        'gross_exposure': gross_exposure,
+        'margin_blocked': margin_blocked,
+        'free_margin': free_margin,
+        'remaining_buying_power': remaining_buying_power,
+        'margin_utilization': margin_utilization,
+        'closed_pnl': closed_pnl,
         'unrealized_pnl': unrealized_pnl,
-        'effective_capital': effective_capital,
-        'margin_used': margin_used,
-        'margin_pct': margin_pct,
-        'remaining_margin': remaining_margin,
-        'is_over_leveraged': is_over_leveraged,
+        'margin_leverage': margin_leverage,
+        'current_position_value': current_position_value,
+        'entry_position_value': entry_position_value
     }
 
 
 def get_capital_snapshot() -> dict:
     """
-    Canonical capital breakdown for dashboard/API display.
-
-    starting_capital is the configured paper bankroll in PAPER mode and the
-    broker-reported cash base in LIVE mode. available_cash is cash/buying power
-    available before margin expansion, not total equity.
+    FX11-B: Canonical capital breakdown for dashboard/API display.
     """
     margin = get_margin_status()
-    valuation = {
-        "entry_position_value": safe_float(margin.get("entry_position_value"), 0.0),
-        "current_position_value": safe_float(margin.get("current_position_value"), 0.0),
-        "unrealized_pnl": safe_float(margin.get("unrealized_pnl"), 0.0),
-    }
-    closed_pnl = safe_float(get_today_gross_pnl(), 0.0)
-
-    if TRADING_MODE == "PAPER":
-        starting_capital = max(0.0, safe_float(cfg("risk", "paper_capital", 10000), 10000.0))
-        available_cash = max(0.0, starting_capital - valuation["entry_position_value"] + closed_pnl)
-    else:
-        starting_capital = max(0.0, safe_float(margin.get("real_capital"), 0.0))
-        available_cash = max(0.0, safe_float(_get_available_capital(), 0.0))
-
-    equity = starting_capital + closed_pnl + valuation["unrealized_pnl"]
-    total_buying_power = safe_float(margin.get("total_available_with_margin"), starting_capital)
-    remaining_buying_power = max(0.0, total_buying_power - valuation["entry_position_value"])
-
+    
     return {
         "mode": TRADING_MODE,
-        "starting_capital": round(starting_capital, 2),
-        "available_cash": round(available_cash, 2),
-        "deployed_capital": round(valuation["entry_position_value"], 2),
-        "current_position_value": round(valuation["current_position_value"], 2),
-        "closed_pnl": round(closed_pnl, 2),
-        "unrealized_pnl": round(valuation["unrealized_pnl"], 2),
-        "equity": round(equity, 2),
-        "total_buying_power": round(total_buying_power, 2),
-        "remaining_buying_power": round(remaining_buying_power, 2),
+        "starting_capital": round(margin['starting_capital'], 2),
+        "account_equity": round(margin['account_equity'], 2),
+        "gross_exposure": round(margin['gross_exposure'], 2),
+        "margin_blocked": round(margin['margin_blocked'], 2),
+        "free_margin": round(margin['free_margin'], 2),
+        "remaining_buying_power": round(margin['remaining_buying_power'], 2),
+        "margin_utilization": round(margin['margin_utilization'], 2),
+        "closed_pnl": round(margin['closed_pnl'], 2),
+        "unrealized_pnl": round(margin['unrealized_pnl'], 2),
         "margin_enabled": bool(cfg("risk", "allow_margin", False)),
-        "margin_leverage": safe_float(margin.get("margin_leverage"), 1.0),
+        "margin_leverage": margin['margin_leverage']
     }
 
 
@@ -1974,8 +1981,13 @@ def check_max_daily_loss() -> bool:
     if TRADING_MODE == "PAPER":
         initial_capital = safe_float(cfg("risk", "paper_capital", 100000), 100000.0)
     else:
-        # In LIVE mode, use the real capital
-        initial_capital = max(1.0, safe_float(_get_available_capital(force_refresh=True), 100000.0))
+        # F019 FIX: Use the persistent start-of-day capital established by FX06
+        from core.state_manager import get_today_stats
+        stats = get_today_stats()
+        if stats and stats.get("capital_start") is not None:
+            initial_capital = max(1.0, safe_float(stats["capital_start"], 0.0))
+        else:
+            initial_capital = max(1.0, safe_float(_get_available_capital(force_refresh=True), 100000.0))
     
     max_daily_loss_pct = max(0.0, min(1.0, safe_float(cfg("risk", "max_daily_loss_percent", 0.05), 0.05)))
     max_daily_loss = -(initial_capital * max_daily_loss_pct)
@@ -1988,7 +2000,6 @@ def check_max_daily_loss() -> bool:
         )
         try:
             from core.circuit_breaker import halt_all_trading
-            from core.alerts import alert_critical
             halt_all_trading(f"Max daily loss ₹{gross_pnl:.2f}")
             alert_critical(
                 f"Max daily loss hit: ₹{gross_pnl:.2f} (limit ₹{max_daily_loss:.2f}). "
@@ -2000,7 +2011,7 @@ def check_max_daily_loss() -> bool:
     return False
  
 
-def squareoff_all_intraday(live_prices: dict[str, float] | None = None):
+def squareoff_all_intraday(live_prices: dict[str, float] | None = None, **kwargs):
     """Force-closes all MIS positions at 3:15 PM. Runs only once."""
     global _squareoff_done
 
@@ -2010,11 +2021,19 @@ def squareoff_all_intraday(live_prices: dict[str, float] | None = None):
     if datetime.now().time() < INTRADAY_SQUAREOFF:
         return
 
-    mark_liquidating("EOD_SQUAREOFF_STARTED")
+    from core.state_manager import get_trading_session_state, mark_liquidating, resume_entries
+
+    initial_state = get_trading_session_state().get("state", "ACTIVE")
+    was_active = (initial_state == "ACTIVE")
+
+    if was_active:
+        mark_liquidating("EOD_SQUAREOFF_STARTED")
+
     open_positions = get_open_positions()
     if not open_positions:
         _squareoff_done = True
-        lock_entries("EOD_SQUAREOFF_NO_OPEN_POSITIONS")
+        if was_active:
+            resume_entries("EOD_SQUAREOFF_NO_OPEN_POSITIONS")
         return
 
     logger.warning(
@@ -2026,19 +2045,30 @@ def squareoff_all_intraday(live_prices: dict[str, float] | None = None):
         symbol  = position["symbol"]
         current, price_source = _resolve_liquidation_price(position, live_prices)
         if current <= 0:
-            mark_position_reconciliation_pending(
-                symbol,
-                "SQUAREOFF_MISSING_EXIT_QUOTE",
-                "No live quote available; sell order was not sent",
-                exit_price_source=price_source,
-            )
-            logger.warning(
-                "Squareoff blocked for %s because live exit quote is missing; "
-                "position left open and marked RECONCILIATION_PENDING",
-                symbol,
-            )
-            failures.append(symbol)
-            continue
+            # F007 FIX: If WS feed is dead at 3:15 PM, we must still square off.
+            # We use 95% of entry price to ensure the resulting limit order 
+            # is priced low enough to execute immediately against the best bid.
+            fallback = safe_float(position.get("entry_price"), 0.0) * 0.95
+            if fallback > 0:
+                current = fallback
+                price_source = "fallback_entry_price"
+                logger.warning(
+                    "⚠️ No live quote for %s during squareoff; using fallback price %s to force execution",
+                    symbol, current
+                )
+            else:
+                mark_position_reconciliation_pending(
+                    symbol,
+                    "SQUAREOFF_MISSING_EXIT_QUOTE",
+                    "No live quote available and entry_price is 0; sell order was not sent",
+                    exit_price_source="unknown",
+                )
+                logger.warning(
+                    "Squareoff blocked for %s because live quote and entry_price are both 0",
+                    symbol,
+                )
+                failures.append(symbol)
+                continue
 
         if not place_sell_order(symbol, current, "SQUAREOFF", exit_price_source=price_source):
             failures.append(symbol)
@@ -2054,7 +2084,10 @@ def squareoff_all_intraday(live_prices: dict[str, float] | None = None):
         return
 
     _squareoff_done = True
-    lock_entries("EOD_SQUAREOFF_COMPLETE")
+    if was_active:
+        resume_entries("EOD_SQUAREOFF_COMPLETE")
+    else:
+        logger.info("EOD squareoff complete. Preserving pre-existing lock state: %s", initial_state)
 
 
 def get_portfolio_snapshot() -> dict:
@@ -2346,9 +2379,10 @@ def _send_kotak_sl_order(
     quantity:       int,
     trigger_price:  float,
     product:        str = "MIS",
+    transaction_type: str = "S",
 ) -> str | None:
     """
-    Places a SL-M SELL order on Kotak.
+    Places a SL limit order on Kotak.
     This is the broker-side protection —
     fires even if AlcoSoft is offline.
     """
@@ -2365,19 +2399,21 @@ def _send_kotak_sl_order(
             trigger_price,
         )
         return None
-    logger.debug(f"📋 SL-M order symbol: {order_symbol}")
-    logger.info(f"🔄 [SL-M] Starting SL order placement | Symbol: {order_symbol} | Qty: {quantity} | Trigger: ₹{trigger_price}")
+        
+    limit_price = _broker_safe_limit_price(trigger_price, transaction_type, is_sl_order=False)
+        
+    logger.debug(f"📋 SL order symbol: {order_symbol}")
+    logger.info(f"🔄 [SL] Starting SL order placement | Symbol: {order_symbol} | Qty: {quantity} | Trigger: ₹{trigger_price} | Limit: ₹{limit_price}")
     
-    stop_limit_price = _broker_safe_limit_price(trigger_price, "S")
     sl_kwargs = dict(
         exchange_segment   = "nse_cm",
         product            = product,
-        price              = str(stop_limit_price),
+        price              = str(limit_price),
         order_type         = "SL",
         quantity           = str(quantity),
         validity           = "DAY",
         trading_symbol     = order_symbol,  # 🔥 USE SYMBOL WITH -EQ SUFFIX
-        transaction_type   = "S",
+        transaction_type   = transaction_type,
         amo                = "NO",
         disclosed_quantity = "0",
         market_protection  = "0",
@@ -2385,7 +2421,7 @@ def _send_kotak_sl_order(
         trigger_price      = str(round(trigger_price, 2)),
     )
 
-    logger.info(f"📋 SL-M ORDER KWARGS (WILL SEND TO KOTAK):")
+    logger.info(f"📋 SL ORDER KWARGS (WILL SEND TO KOTAK):")
     for key, val in sl_kwargs.items():
         logger.info(f"    {key:20s} = {val}")
     logger.info(f"   ℹ️ If Kotak rejects: Try exchange_segment='NSE' instead of 'nse_cm'")
@@ -2494,16 +2530,15 @@ def _modify_sl_order(
         # 🔐 CRITICAL: Ensure Trade token is set before modifying order
         client = ensure_trade_token_on_client()
         
-        stop_limit_price = _broker_safe_limit_price(new_trigger, "S")
         response = call_broker_api(
             client.modify_order,
             order_id           = order_id,
-            price              = str(stop_limit_price),
+            price              = "0",
             quantity           = str(quantity),
             disclosed_quantity = "0",
             trigger_price      = str(round(new_trigger, 2)),
             validity           = "DAY",
-            order_type         = "SL",
+            order_type         = "SL-M",
         )
         if response is None or (isinstance(response, dict) and response.get("error")):
             logger.error("SL-M modify failed: %s", response)

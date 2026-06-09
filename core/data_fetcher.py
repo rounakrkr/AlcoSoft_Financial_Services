@@ -254,10 +254,32 @@ def _build_candle(
     candle = _current_candle[symbol]
 
     if candle["bucket"] != bucket_key:
+        # Finalize volume using TTQ Delta method
+        if candle["end_ttq"] > 0 and candle["start_ttq"] > 0:
+            candle["volume"] = max(0.0, candle["end_ttq"] - candle["start_ttq"])
+        else:
+            candle["volume"] = 0.0
+
         # New 5-min period started — save completed candle to history
         _candle_history[symbol].append(candle)
         # ➕ ye line daalo
         logger.info(f"🕯️ Candle closed: {symbol} | {candle['bucket']} | O:{candle['open']:.2f} H:{candle['high']:.2f} L:{candle['low']:.2f} C:{candle['close']:.2f} V:{candle['volume']}")
+
+        # FX10: Passively persist finalized candle to SQLite
+        try:
+            from core.state_manager import save_historical_candle
+            save_historical_candle(
+                symbol=symbol,
+                timeframe="5m",
+                bucket_time=f"{candle['bucket']}:00",
+                open_price=candle["open"],
+                high_price=candle["high"],
+                low_price=candle["low"],
+                close_price=candle["close"],
+                volume=candle["volume"]
+            )
+        except Exception as e:
+            logger.error(f"Failed to trigger FX10 SQLite persist for {symbol}: {e}")
 
         # Start fresh candle
         _current_candle[symbol] = _new_candle(bucket_key, ltp, volume)
@@ -272,7 +294,12 @@ def _build_candle(
         candle["high"]   = max(highs)
         candle["low"]    = min(lows)
         candle["close"]  = ltp
-        candle["volume"] += volume
+        
+        # TTQ Volume Updates (Handle partial updates)
+        if volume > 0:
+            candle["end_ttq"] = volume
+            if candle["start_ttq"] == 0:
+                candle["start_ttq"] = volume
 
 
 def _new_candle(bucket_key: str, ltp: float, volume: float) -> dict:
@@ -282,7 +309,9 @@ def _new_candle(bucket_key: str, ltp: float, volume: float) -> dict:
         "high":   ltp,
         "low":    ltp,
         "close":  ltp,
-        "volume": volume,
+        "volume": 0.0,
+        "start_ttq": volume,
+        "end_ttq": volume,
     }
 
 
@@ -405,16 +434,32 @@ def _do_reconnect():
     global _reconnect_attempts, _subscribed_symbols
     with _reconnect_lock:
         _reconnect_attempts += 1
+        attempt_num = _reconnect_attempts   # snapshot inside lock for logging
         try:
-            logger.info("Reconnecting WebSocket...")
-            start_live_feed(_subscribed_symbols)  # will re-subscribe
-            _reconnect_attempts = 0  # reset on success
-            logger.info("Reconnection successful.")
+            logger.info(
+                "Reconnecting WebSocket (attempt %d/%d)...",
+                attempt_num, _max_reconnect,
+            )
+            # F006 FIX: start_live_feed() must NOT reset _reconnect_attempts.
+            # It is called here mid-reconnect-sequence; the counter must survive
+            # into the except branch so _schedule_reconnect() can correctly
+            # evaluate whether max_reconnect has been reached.
+            start_live_feed(_subscribed_symbols, _is_reconnect=True)
+            # Only reset on confirmed success (subscribe completed without exception)
+            _reconnect_attempts = 0
+            logger.info("Reconnection successful (attempt %d).", attempt_num)
         except (ConnectionError, OSError, TimeoutError) as e:
-            logger.error("WebSocket reconnect network error: %s", e)
+            logger.error(
+                "WebSocket reconnect network error (attempt %d/%d): %s",
+                attempt_num, _max_reconnect, e,
+            )
             _schedule_reconnect()
         except Exception as e:
-            logger.critical("WebSocket reconnect failed: %s", e, exc_info=True)
+            logger.critical(
+                "WebSocket reconnect failed (attempt %d/%d): %s",
+                attempt_num, _max_reconnect, e,
+                exc_info=True,
+            )
             _schedule_reconnect()
 
 
@@ -697,8 +742,18 @@ def _is_valid_equity_entry(symbol: str, entry: dict) -> bool:
 
 
 # ── Startup: Subscribe to Live Feed ──────────────────────────
-def start_live_feed(symbols: list[str]):
-    """Starts WebSocket subscription for price ticks."""
+def start_live_feed(symbols: list[str], _is_reconnect: bool = False):
+    """
+    Starts (or restarts) WebSocket subscription for price ticks.
+
+    _is_reconnect=True is set by _do_reconnect() to signal that this call is
+    part of a reconnect sequence. In that mode, _reconnect_attempts is NOT
+    reset here — _do_reconnect() owns the counter and resets it only on
+    confirmed success (after this function returns without raising).
+
+    On initial startup (_is_reconnect=False), the counter is reset here
+    because no reconnect sequence is in progress.
+    """
     global _active_client, _subscribed_symbols, _reconnect_attempts, _tick_counts
     symbols = list(dict.fromkeys(symbols))  # dedupe, preserve order
     logger.info(f"Starting live feed for {len(symbols)} symbols: {symbols}")
@@ -715,7 +770,15 @@ def start_live_feed(symbols: list[str]):
     client.on_error   = _on_error
 
     _subscribed_symbols = symbols.copy()
-    _reconnect_attempts = 0
+
+    # F006 FIX: Only reset the reconnect counter on initial startup.
+    # During a reconnect sequence (_is_reconnect=True), _do_reconnect() owns
+    # the counter. Resetting it here would erase the attempt count before the
+    # exception handler in _do_reconnect() can check it against _max_reconnect,
+    # making the feed-death alert unreachable.
+    if not _is_reconnect:
+        _reconnect_attempts = 0
+
     _publish_feed_stats(force=True)
 
     instrument_tokens = resolve_instrument_tokens(symbols)
@@ -743,6 +806,8 @@ def start_live_feed(symbols: list[str]):
             "❌ WebSocket subscribe failed (network) | symbols=%s | %s",
             len(instrument_tokens), e,
         )
+        if _is_reconnect:
+            raise   # F006: let _do_reconnect()'s except branch track the counter
         _schedule_reconnect()
     except Exception as e:
         logger.error(
@@ -750,6 +815,8 @@ def start_live_feed(symbols: list[str]):
             len(instrument_tokens), e,
             exc_info=True,
         )
+        if _is_reconnect:
+            raise   # F006: let _do_reconnect()'s except branch track the counter
         _schedule_reconnect()
 
 

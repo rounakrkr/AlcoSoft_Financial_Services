@@ -255,6 +255,11 @@ async def run_observation_cycle():
             logger.warning(f"Cognitive cycle scheduling failed (non-critical): {e}")
 
         # 1. Get market snapshot
+        from core.market_calendar import is_market_session_open
+        if not is_market_session_open():
+            logger.info("Observation loop skipping: Market is closed.")
+            return
+
         snapshot = _get_market_snapshot()
         
         if not snapshot.get("symbols_with_data"):

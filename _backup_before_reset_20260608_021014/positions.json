@@ -1,0 +1,33 @@
+[
+  {
+    "id": 27,
+    "date": "2026-06-06",
+    "symbol": "RELIANCE",
+    "trading_symbol": "RELIANCE",
+    "action": "BUY",
+    "quantity": 10,
+    "entry_price": 100.0,
+    "exit_price": null,
+    "stop_loss": 90.0,
+    "trailing_sl": 90.0,
+    "target_price": 120.0,
+    "kotak_order_id": "ORD_12345",
+    "kotak_sl_order_id": "SL_12345",
+    "pnl": null,
+    "status": "OPEN",
+    "strategy": "",
+    "confidence": 0,
+    "trading_mode": "PAPER",
+    "entry_time": "2026-06-06T19:10:42.750087",
+    "exit_time": null,
+    "notes": "UNVERIFIED: Broker confirmation timed out",
+    "exit_price_source": null,
+    "reconciliation_status": null,
+    "trailing_sl_activated": 0,
+    "trailing_sl_activation_price": null,
+    "trailing_sl_activation_time": null,
+    "tsl_activated": 0,
+    "tsl_activation_price": null,
+    "tsl_mode": "trailing"
+  }
+]

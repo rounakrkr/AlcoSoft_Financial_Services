@@ -1,0 +1,16 @@
+{
+  "mode": "PAPER",
+  "starting_capital": 100000.0,
+  "available_cash": 0.0,
+  "deployed_capital": 427134.0,
+  "current_position_value": 427874.6,
+  "closed_pnl": 304.16,
+  "unrealized_pnl": 740.6,
+  "equity": 101044.76,
+  "total_buying_power": 500000.0,
+  "remaining_buying_power": 72866.0,
+  "margin_enabled": true,
+  "margin_leverage": 5.0,
+  "capital": 0.0,
+  "timestamp": "2026-06-05T15:14:58.806713"
+}

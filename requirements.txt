@@ -1,6 +1,3 @@
-# Generated from .\alco_env\Scripts\python.exe -m pip freeze on 2026-06-02.
-# Source of truth: current local alco_env environment.
-
 annotated-types==0.7.0
 anyio==3.7.1
 appdirs==1.4.4
@@ -46,7 +43,7 @@ markdown-it-py==4.2.0
 MarkupSafe==3.0.3
 mdurl==0.1.2
 multitasking==0.0.13
-neo-api-client==2.0.0
+git+https://github.com/Kotak-Neo/Kotak-neo-api-v2.git#egg=neo_api_client
 numpy==2.1.0
 openai==1.3.0
 packaging==26.2
@@ -92,3 +89,6 @@ websockets==8.1
 Werkzeug==3.1.8
 wsproto==1.3.2
 yfinance==0.2.54
+Flask-Login==0.6.3
+Flask-WTF==1.2.1
+python-telegram-bot==21.1.1

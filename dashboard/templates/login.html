@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    {% if request.args.get('view') == 'desktop' %}
+    <meta name="viewport" content="width=980">
+    {% else %}
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% endif %}
+    <title>AlcoSoft Trading Desk - Login</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="/static/css/style.css" rel="stylesheet">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: var(--bg);
+            margin: 0;
+        }
+        .login-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 2.5rem 2rem;
+            width: 100%;
+            max-width: 380px;
+            box-shadow: var(--shadow);
+            text-align: center;
+        }
+        .login-card h2 {
+            font-size: 1.4rem;
+            color: var(--text);
+            margin-bottom: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.6rem;
+            letter-spacing: -0.5px;
+        }
+        .login-card h2 span { color: var(--accent); }
+        
+        .field {
+            text-align: left;
+            margin-bottom: 1.2rem;
+        }
+        .field label {
+            display: block;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text2);
+            margin-bottom: 0.4rem;
+        }
+        .field input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 0.9rem;
+            background: var(--card2);
+            color: var(--text);
+            font-family: inherit;
+            outline: none;
+            transition: all 0.2s;
+        }
+        .field input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(91, 98, 240, 0.1);
+        }
+        .btn-auth {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.95rem;
+            background: var(--accent);
+            color: #fff;
+            margin-top: 1rem;
+            transition: all 0.2s;
+        }
+        .btn-auth:hover {
+            background: var(--accent2);
+        }
+        .flash-msg {
+            background: rgba(224, 54, 96, 0.12);
+            color: var(--red);
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            margin-bottom: 1.5rem;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h2>🚀 <span>AlcoSoft</span> Secure Login</h2>
+        
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="flash-msg">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('login') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <div class="field">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required autocomplete="off">
+            </div>
+            <div class="field">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <button type="submit" class="btn-auth">Authorize Access</button>
+        </form>
+    </div>
+</body>
+</html>

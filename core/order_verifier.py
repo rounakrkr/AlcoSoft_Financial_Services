@@ -211,22 +211,58 @@ def wait_for_order_verification(
     order_id: str,
     timeout_sec: float = 45,
     poll_interval: float = 2.0,
-) -> bool:
-    """Poll broker until order is COMPLETE or timeout."""
+) -> str:
+    """Poll broker until order is COMPLETE, REJECTED, or TIMEOUT."""
     if str(order_id).startswith("PAPER-"):
-        return True
+        return "COMPLETE"
 
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         if verify_order(order_id):
-            return True
+            return "COMPLETE"
         pending = get_verifier().pending_orders.get(order_id, {})
         if pending.get("error"):
-            return False
+            return "REJECTED"
         time.sleep(poll_interval)
 
     logger.error(f"❌ Order {order_id} not verified within {timeout_sec}s")
-    return False
+    return "TIMEOUT"
+
+
+def wait_for_sl_verification(
+    order_id: str,
+    timeout_sec: float = 3.0,
+) -> str:
+    """
+    Poll broker until SL order is PENDING, TRIGGER_PENDING, COMPLETE, or REJECTED.
+    Returns "ACCEPTED" if it's healthy, "REJECTED" if rejected.
+    """
+    if str(order_id).startswith("PAPER-"):
+        return "ACCEPTED"
+
+    # CRITICAL: Kotak RMS rejections are asynchronous. 
+    # An order sits in "put order req received" for a split second before rejection.
+    # We MUST wait at least 1-2 seconds before checking, otherwise we get a false positive.
+    import time
+    time.sleep(1.5)
+
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        status = get_verifier()._query_broker_order(order_id, "SL-ORDER")
+        if status == "REJECTED":
+            return "REJECTED"
+        if status in ("PENDING", "COMPLETE"):
+            # Give it one more tiny wait to be absolutely sure
+            time.sleep(0.5)
+            status_check_2 = get_verifier()._query_broker_order(order_id, "SL-ORDER")
+            if status_check_2 == "REJECTED":
+                return "REJECTED"
+            return "ACCEPTED"
+            
+        time.sleep(0.5)
+        
+    return "ACCEPTED"  # If it times out without rejection, assume it's sitting in pending queue
+
 
 
 def cleanup_verification_queue():

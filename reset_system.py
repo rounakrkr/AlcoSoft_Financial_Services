@@ -53,6 +53,7 @@ def reset_json_files():
             "last_updated": None,
         },
         "data/validation_results.json": [],
+        "data/last_alert.json": {},
     }
     
     for file_path, default_content in files_reset.items():
@@ -66,13 +67,17 @@ def reset_json_files():
 
 
 def clear_databases():
-    """Delete all database files."""
-    print("\n🗄️  Clearing databases...")
+    """Delete all database files and temp files."""
+    print("\n🗄️  Clearing databases and temp files...")
     
     db_files = [
         "data/alcosoft.db",
         "data/reflection.db",
         "data/reflection_statistics.db",
+        "data/market_close_report.json",
+        "data/session_briefing_backup.json",
+        "data/test_briefing.json",
+        "data/yfinance_traces.json",
     ]
     
     for db_file in db_files:

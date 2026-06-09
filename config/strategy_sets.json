@@ -13,33 +13,33 @@
   "buy_sets": [
 
     {
-      "name": "BUY_RSI_MACD_REVERSAL",
-      "priority": 10,
-      "base_confidence": 72,
+      "name": "TEST_DEBUG_STRATEGY",
+      "priority": 1,
+      "base_confidence": 99,
       "confidence_weight": 1.0,
-      "notes": "Oversold momentum recovery confirmed by a bullish reversal candle. Classic intraday bottom reversal.",
+      "notes": "Always triggers true. Used ONLY for debugging/testing the API pipeline.",
       "_conditions_audit": {
-        "rsi_macd_momentum":     "EVENT — RSI < 35 recently + MACD cross",
-        "bullish_reversal_candle": "EVENT — candle pattern"
+        "test_trigger": "EVENT — Always True"
       },
       "conditions": [
-        "rsi_macd_momentum",
-        "bullish_reversal_candle"
+        "test_trigger"
       ]
     },
 
     {
-      "name": "BUY_EMA_TREND_PULLBACK",
-      "priority": 20,
-      "base_confidence": 74,
-      "confidence_weight": 1.0,
-      "notes": "Buy the dip in an active uptrend. EMA9 > EMA21 confirms uptrend state, RSI recovering from a mild dip, bullish candle confirms the reversal point. Removed price_above_ema20 (redundant STATE) and replaced with candle EVENT anchor.",
+      "name": "BUY_PERFECT_TREND_PULLBACK",
+      "priority": 10,
+      "base_confidence": 78,
+      "confidence_weight": 1.1,
+      "notes": "Strict trend continuation. Buys the dip only when intraday trend is up (above VWAP) AND short-term trend is up (EMA9>EMA21) AND RSI is recovering AND a bullish candle confirms the bottom.",
       "_conditions_audit": {
-        "ema_trending_up":        "STATE — filter only, EMA9 > EMA21",
-        "rsi_recovering":         "SEMI  — decays quickly",
-        "bullish_reversal_candle": "EVENT — anchor, prevents continuous firing"
+        "price_above_vwap":       "STATE — Intraday macro trend must be bullish",
+        "ema_trending_up":        "STATE — Short-term trend must be bullish",
+        "rsi_recovering":         "SEMI  — Momentum turning back up",
+        "bullish_reversal_candle": "EVENT — The exact trigger"
       },
       "conditions": [
+        "price_above_vwap",
         "ema_trending_up",
         "rsi_recovering",
         "bullish_reversal_candle"
@@ -47,97 +47,146 @@
     },
 
     {
-      "name": "BUY_EMA_VOLUME_MOMENTUM",
-      "priority": 30,
-      "base_confidence": 76,
-      "confidence_weight": 1.05,
-      "notes": "EMA 9/21 crossover with strong volume participation. MACD positive confirms bullish regime — prevents buying a dead-cat bounce where MACD is still negative.",
+      "name": "BUY_GOLDEN_CROSSOVER_SURGE",
+      "priority": 20,
+      "base_confidence": 80,
+      "confidence_weight": 1.2,
+      "notes": "Very strict crossover. EMA 9/21 cross must be accompanied by a volume spike AND must happen above VWAP. Blocks fake crossovers in downtrends.",
       "_conditions_audit": {
-        "ema_9_21_crossover": "EVENT — anchor",
-        "volume_spike":       "EVENT — anchor",
-        "macd_positive":      "STATE — regime filter only"
+        "price_above_vwap":   "STATE — Intraday macro trend must be bullish",
+        "ema_9_21_crossover": "EVENT — The crossover trigger",
+        "volume_spike":       "EVENT — Confirms institutional participation"
       },
       "conditions": [
+        "price_above_vwap",
         "ema_9_21_crossover",
-        "volume_spike",
+        "volume_spike"
+      ]
+    },
+
+    {
+      "name": "BUY_POWER_BREAKOUT",
+      "priority": 30,
+      "base_confidence": 75,
+      "confidence_weight": 1.0,
+      "notes": "High probability breakout. Price breaks recent high with volume + MACD is positive + RSI isn't overbought + Price is above VWAP + OBV is trending up.",
+      "_conditions_audit": {
+        "volume_breakout":    "EVENT — Breakout with volume and above SMA20",
+        "price_above_vwap":   "STATE — Must be an uptrend",
+        "macd_positive":      "STATE — Confirms momentum",
+        "rsi_not_overbought": "STATE — Avoid buying tops",
+        "obv_trending_up":    "STATE — Confirms volume trend"
+      },
+      "conditions": [
+        "volume_breakout",
+        "price_above_vwap",
+        "macd_positive",
+        "rsi_not_overbought",
+        "obv_trending_up"
+      ]
+    },
+
+    {
+      "name": "BUY_OVERSOLD_REVERSAL_WITH_VOLUME",
+      "priority": 40,
+      "base_confidence": 72,
+      "confidence_weight": 0.9,
+      "notes": "Bottom fishing, but made extremely strict by requiring a volume spike along with RSI < 35, MACD cross, and bullish candle. Avoids catching falling knives.",
+      "_conditions_audit": {
+        "rsi_macd_momentum":       "EVENT — RSI < 35 recently + MACD cross",
+        "bullish_reversal_candle": "EVENT — Candle pattern trigger",
+        "volume_spike":            "EVENT — Confirms smart money buying the dip"
+      },
+      "conditions": [
+        "rsi_macd_momentum",
+        "bullish_reversal_candle",
+        "volume_spike"
+      ]
+    },
+
+    {
+      "name": "BUY_VWAP_RECLAIM_POWER",
+      "priority": 50,
+      "base_confidence": 76,
+      "confidence_weight": 1.05,
+      "notes": "Price reclaims VWAP, but strictly requires volume spike and a bullish reversal candle to confirm it's not a fakeout.",
+      "_conditions_audit": {
+        "price_above_vwap":       "STATE — Reclaimed VWAP",
+        "bullish_reversal_candle": "EVENT — Reversal candle",
+        "volume_spike":           "EVENT — Must have volume to break VWAP resistance"
+      },
+      "conditions": [
+        "price_above_vwap",
+        "bullish_reversal_candle",
+        "volume_spike"
+      ]
+    },
+
+    {
+      "name": "BUY_BOLLINGER_SQUEEZE_REVERSAL",
+      "priority": 60,
+      "base_confidence": 75,
+      "confidence_weight": 1.0,
+      "notes": "Reversal from extreme Bollinger Band panic. Requires touching lower band, a bullish reversal candle, and positive MACD to confirm momentum shift.",
+      "_conditions_audit": {
+        "bollinger_band_bounce":   "EVENT — Touched bottom band and bounced",
+        "bullish_reversal_candle": "EVENT — Reversal candle",
+        "macd_positive":           "STATE — Momentum is shifting up"
+      },
+      "conditions": [
+        "bollinger_band_bounce",
+        "bullish_reversal_candle",
         "macd_positive"
       ]
     },
 
     {
-      "name": "BUY_MACD_VWAP_SURGE",
-      "priority": 40,
-      "base_confidence": 73,
-      "confidence_weight": 1.0,
-      "notes": "MACD bullish regime + price above VWAP + volume surge + bullish candle. Added bullish_reversal_candle as EVENT anchor — without it 2 STATE conditions would fire continuously on any uptrending stock.",
-      "_conditions_audit": {
-        "macd_positive":          "STATE — regime filter",
-        "price_above_vwap":       "STATE — context filter",
-        "volume_spike":           "EVENT — anchor",
-        "bullish_reversal_candle": "EVENT — second anchor"
-      },
-      "conditions": [
-        "macd_positive",
-        "price_above_vwap",
-        "volume_spike",
-        "bullish_reversal_candle"
-      ]
-    },
-
-    {
-      "name": "BUY_BREAKOUT_CONFIRMATION",
-      "priority": 50,
-      "base_confidence": 72,
-      "confidence_weight": 1.0,
-      "notes": "4-gate fakeout filter. volume_breakout is a strong EVENT anchor. price_above_ema20, price_above_vwap, rsi_not_overbought are filters that eliminate false breakouts. Note: price_above_ema20 is slightly redundant (volume_breakout already checks SMA20) but kept as extra VWAP zone filter.",
-      "_conditions_audit": {
-        "volume_breakout":   "EVENT — primary anchor (vol spike + price broke prior high + above SMA20)",
-        "price_above_ema20": "STATE — filter (breakout must be in trend)",
-        "price_above_vwap":  "STATE — filter (must be in institutional zone)",
-        "rsi_not_overbought": "STATE — filter (RSI < 65 — not buying at exhaustion)"
-      },
-      "conditions": [
-        "volume_breakout",
-        "price_above_ema20",
-        "price_above_vwap",
-        "rsi_not_overbought"
-      ]
-    },
-
-    {
-      "name": "BUY_BOLLINGER_REVERSAL",
-      "priority": 60,
-      "base_confidence": 70,
-      "confidence_weight": 1.0,
-      "notes": "Mean-reversion bounce from lower Bollinger Band with bullish candle structure confirming the reversal. Works well in ranging intraday conditions.",
-      "_conditions_audit": {
-        "bollinger_band_bounce":  "EVENT — touched lower band + bounced + RSI < 45",
-        "bullish_reversal_candle": "EVENT — candle anchor"
-      },
-      "conditions": [
-        "bollinger_band_bounce",
-        "bullish_reversal_candle"
-      ]
-    },
-
-    {
-      "name": "BUY_VWAP_REVERSAL",
+      "name": "BUY_MORNING_STAR_DIP",
       "priority": 70,
-      "base_confidence": 73,
-      "confidence_weight": 1.0,
-      "notes": "Price reclaims VWAP while RSI recovers and bullish candle structure appears. VWAP is the most important intraday reference — reclaim = trend resumption. bullish_reversal_candle is the EVENT anchor preventing noise.",
+      "base_confidence": 78,
+      "confidence_weight": 1.1,
+      "notes": "Classic Morning Star 3-candle reversal pattern on a pullback, confirmed by RSI recovering.",
       "_conditions_audit": {
-        "price_above_vwap":       "STATE — context filter",
-        "rsi_recovering":         "SEMI  — decays quickly",
-        "bullish_reversal_candle": "EVENT — anchor"
+        "morning_star":   "EVENT — High probability 3-candle reversal",
+        "rsi_recovering": "SEMI  — Pullback momentum shifting"
       },
       "conditions": [
-        "price_above_vwap",
-        "rsi_recovering",
-        "bullish_reversal_candle"
+        "morning_star",
+        "rsi_recovering"
+      ]
+    },
+
+    {
+      "name": "BUY_THREE_SOLDIERS_MOMENTUM",
+      "priority": 80,
+      "base_confidence": 74,
+      "confidence_weight": 1.0,
+      "notes": "Three White Soldiers pattern showing pure buying pressure, confirmed by OBV trending up.",
+      "_conditions_audit": {
+        "three_white_soldiers": "EVENT — Strong continuation pattern",
+        "obv_trending_up":      "STATE — Volume supports the move"
+      },
+      "conditions": [
+        "three_white_soldiers",
+        "obv_trending_up"
+      ]
+    },
+
+    {
+      "name": "BUY_RSI_35_SUPPORT_BOUNCE",
+      "priority": 90,
+      "base_confidence": 77,
+      "confidence_weight": 1.1,
+      "notes": "Custom strategy: RSI crosses 35 from below, confirmed by two back-to-back green candles acting as support.",
+      "_conditions_audit": {
+        "rsi_crosses_35_up": "EVENT — RSI breaks out of extreme oversold",
+        "two_green_candles": "EVENT — Two consecutive green candles acting as support"
+      },
+      "conditions": [
+        "rsi_crosses_35_up",
+        "two_green_candles"
       ]
     }
-
   ],
 
   "sell_sets": [

@@ -600,7 +600,7 @@ def _get_stock_market_bias(symbol: str) -> str:
 def _gemini_pick_stocks(candidates: list[dict]) -> list[dict]:
     try:
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        model = genai.GenerativeModel(model_name="gemini-flash-latest")
+        model = genai.GenerativeModel(model_name="gemini-flash-lite-latest")
 
         system_prompt = _screener_system_prompt()
         user_message  = _build_screener_message(candidates)

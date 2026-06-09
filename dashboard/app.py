@@ -7,9 +7,11 @@
 import os
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from flask_wtf.csrf import CSRFProtect
 from dotenv import load_dotenv
 
 # Project root on path (core.trading_settings)
@@ -18,6 +20,14 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 load_dotenv(os.path.join(_ROOT, ".env"))
+
+from core.auth_manager import (
+    load_user,
+    load_user_from_request,
+    authenticate_user,
+    admin_required,
+    log_auth_event
+)
 
 from core.trading_settings import (
     load_settings,
@@ -44,6 +54,25 @@ app = Flask(
 )
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
+
+app.config['SECRET_KEY'] = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+
+csrf = CSRFProtect(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
+login_manager.user_loader(load_user)
+login_manager.request_loader(load_user_from_request)
+
+@app.before_request
+def require_login():
+    # Only allow unauthenticated access to login, static files
+    if request.endpoint in ['login', 'static']:
+        return
+    if not current_user.is_authenticated:
+        return login_manager.unauthorized()
 
 # Initialize database schema on startup
 initialize_db()
@@ -159,6 +188,29 @@ def _strategy_set_performance_rows(signal_stats: list[dict], multiplier_rows: li
     return rows
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+        
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+        user = authenticate_user(username, password)
+        if user:
+            login_user(user, remember=False)
+            return redirect(url_for('index'))
+        else:
+            flash("Invalid credentials")
+    return render_template("login.html")
+
+@app.route("/logout", methods=["POST"])
+@login_required
+def logout():
+    log_auth_event("LOGOUT", current_user.username, True)
+    logout_user()
+    return redirect(url_for('login'))
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -178,6 +230,7 @@ def api_settings_get():
 
 
 @app.route("/api/settings", methods=["POST"])
+@admin_required
 def api_settings_post():
     body = request.get_json(silent=True) or {}
     cleaned, errors = validate_updates(body)
@@ -262,13 +315,16 @@ def api_status():
         capital_snapshot = {
             "mode": os.getenv("TRADING_MODE", "PAPER"),
             "starting_capital": fallback_capital,
-            "available_cash": None,
-            "deployed_capital": None,
-            "equity": None,
+            "account_equity": None,
+            "gross_exposure": None,
+            "margin_blocked": None,
+            "free_margin": None,
+            "remaining_buying_power": None,
+            "margin_utilization": None,
             "closed_pnl": stats.get("gross_pnl", 0.0),
             "unrealized_pnl": None,
-            "total_buying_power": None,
-            "remaining_buying_power": None,
+            "margin_enabled": False,
+            "margin_leverage": 1.0,
         }
 
     st = load_settings().get("strategy", {})
@@ -330,7 +386,7 @@ def api_status():
         "trading_mode": os.getenv("TRADING_MODE", "PAPER"),
         "trading_state": trading_state,
         "strategy":     st.get("strategy_type", "INTRADAY"),
-        "capital":      capital_snapshot.get("available_cash"),
+        "capital":      capital_snapshot.get("free_margin"),
         "capital_snapshot": capital_snapshot,
         "stats": {**stats, "win_rate": win_pct},
         "positions":   positions,
@@ -361,7 +417,16 @@ def api_trading_state():
     if request.method == "GET":
         return jsonify({"ok": True, "state": get_trading_session_state()})
 
+    # Ensure admin for state changes
+    if not current_user.is_authenticated or current_user.role not in ['admin', 'emergency_admin']:
+        return jsonify({"ok": False, "error": "Admin required"}), 403
+
     body = request.get_json(silent=True) or {}
+    
+    # Payload confirmation required
+    if body.get("confirm_action") not in ["RESUME", "LOCK"]:
+        return jsonify({"ok": False, "error": "Explicit confirmation payload required"}), 400
+
     action = str(body.get("action") or "").strip().lower()
     if action == "resume":
         state = resume_entries("DASHBOARD_RESUME_TRADING")
@@ -389,21 +454,14 @@ def api_margin_status():
             "ok": True,
             "margin_enabled": allow_margin,
             "forced_buy_enabled": forced_buy,
-            "real_capital": margin.get("real_capital", 0),
             "capital_snapshot": capital_snapshot,
-            "starting_capital": capital_snapshot.get("starting_capital"),
-            "available_cash": capital_snapshot.get("available_cash"),
-            "deployed_capital": capital_snapshot.get("deployed_capital"),
-            "equity": capital_snapshot.get("equity"),
+            "account_equity": margin.get("account_equity", 0),
+            "free_margin": margin.get("free_margin", 0),
+            "gross_exposure": margin.get("gross_exposure", 0),
+            "margin_blocked": margin.get("margin_blocked", 0),
+            "remaining_buying_power": margin.get("remaining_buying_power", 0),
+            "margin_utilization": round(margin.get("margin_utilization", 0), 2),
             "margin_leverage": margin.get("margin_leverage", 1.0),
-            "total_available": margin.get("total_available_with_margin", 0),
-            "deployed": margin.get("current_position_value", 0),
-            "unrealized_pnl": margin.get("unrealized_pnl", 0),
-            "effective_capital": margin.get("effective_capital", 0),
-            "margin_used": margin.get("margin_used", 0),
-            "margin_pct": round(margin.get("margin_pct", 0), 2),
-            "remaining_margin": margin.get("remaining_margin", 0),
-            "is_over_leveraged": margin.get("is_over_leveraged", False),
         })
     except Exception as e:
         return jsonify({
@@ -415,11 +473,16 @@ def api_margin_status():
 
 
 @app.route("/api/emergency-squareoff", methods=["POST"])
+@admin_required
 def api_emergency_squareoff():
     """
     🚨 EMERGENCY: Close all open positions immediately.
     Requires POST to prevent accidental clicks.
     """
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm_action") != "SQUARE_OFF":
+        return jsonify({"ok": False, "error": "Explicit confirmation payload required"}), 400
+
     trading_mode = os.getenv("TRADING_MODE", "PAPER")
 
     try:

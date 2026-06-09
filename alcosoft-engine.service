@@ -1,0 +1,14 @@
+[Unit]
+Description=AlcoSoft Trading Engine
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/alcosoft
+Environment="PATH=/home/ubuntu/alcosoft/alco_env/bin"
+ExecStart=/home/ubuntu/alcosoft/alco_env/bin/python main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

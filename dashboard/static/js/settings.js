@@ -211,9 +211,17 @@ async function saveSettings(ev) {
     }
   });
 
+  function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : '';
+  }
+
   const saveRes = await fetch('/api/settings', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'X-CSRFToken': getCsrfToken()
+    },
     body: JSON.stringify(updates),
   });
   

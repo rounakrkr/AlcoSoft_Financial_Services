@@ -2,11 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
+  {% if request.args.get('view') == 'desktop' %}
+  <meta name="viewport" content="width=980"/>
+  {% else %}
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  {% endif %}
   <title>AlcoSoft — Trading Settings</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="/static/css/style.css"/>
   <link rel="stylesheet" href="/static/css/settings.css"/>
+  <meta name="csrf-token" content="{{ csrf_token() }}"/>
 </head>
 <body>
 
@@ -17,6 +22,10 @@
     <a href="/cognition" class="nav-link">🧠 Cognition Lab</a>
     <a href="/settings" class="nav-link active">⚙️ Settings</a>
     <span class="clock" id="clock">⏰ --:--:--</span>
+    <form method="POST" action="/logout" style="margin: 0; padding: 0; display: flex; align-items: center;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <button type="submit" class="nav-link" style="font-family:inherit; color:var(--red); font-weight:600; cursor:pointer; display:flex; align-items:center; gap:0.3rem;">🚪 Logout</button>
+    </form>
   </div>
 </header>
 
@@ -111,7 +120,7 @@
 
 </main>
 
-<script src="/static/js/app.js"></script>
+<script src="/static/js/app.js?v=3"></script>
 <script src="/static/js/settings.js"></script>
 </body>
 </html>
