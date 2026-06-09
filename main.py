@@ -542,7 +542,21 @@ async def run_end_of_day_report():
         timestamp = datetime.now().isoformat()
         positions = get_open_positions() or []
         pnl = get_today_gross_pnl()
-        capital = float(cfg("capital", "paper", 100000))
+        
+        # Fetch actual capital_start locked in for today
+        import sqlite3
+        from core.state_manager import DB_PATH
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            row = conn.execute("SELECT capital_start FROM daily_stats WHERE date = ?", (datetime.now().strftime("%Y-%m-%d"),)).fetchone()
+            conn.close()
+            if row and row[0] is not None:
+                capital = float(row[0])
+            else:
+                capital = 20000.0  # Fallback
+        except Exception:
+            capital = 20000.0
+            
         positions_count = len(positions)
         
         # Check components from actual files and database state.

@@ -47,6 +47,9 @@ function exitSetName(notes) {
   return notes && notes.startsWith(prefix) ? notes.slice(prefix.length) : '';
 }
 
+let lastPositionsCount = -1;
+let lastTotalTrades = -1;
+
 async function fetchAndRender() {
   try {
     const res = await fetch('/api/status');
@@ -86,7 +89,15 @@ async function fetchAndRender() {
       pnlEl.className = 'card-value ' + (pnl >= 0 ? 'win' : 'loss');
     }
 
-    set('stat-open', (data.positions || []).length);
+    const currentPositionsCount = (data.positions || []).length;
+    set('stat-open', currentPositionsCount);
+
+    const currentTotalTrades = s.total_trades || 0;
+    if (currentPositionsCount !== lastPositionsCount || currentTotalTrades !== lastTotalTrades) {
+      lastPositionsCount = currentPositionsCount;
+      lastTotalTrades = currentTotalTrades;
+      updateMarginStatus();
+    }
     const cap = data.capital_snapshot || {};
     set('cap-equity', fmt(cap.account_equity));
     set('cap-exposure', fmt(cap.gross_exposure));
@@ -99,19 +110,7 @@ async function fetchAndRender() {
     set('live-unrealized-pnl', fmt(cap.unrealized_pnl));
     set('live-trading-eq', fmt(cap.account_equity));
 
-    const marginCard = document.getElementById('margin-card');
-    if (marginCard && cap.margin_enabled) {
-      marginCard.style.display = 'flex';
-      set('margin-pct', (cap.margin_utilization || 0).toFixed(1) + '%');
-      set('margin-details', 'Blocked: ' + fmt(cap.margin_blocked));
-      
-      marginCard.className = 'card stat-card';
-      if (cap.margin_utilization >= 80) marginCard.classList.add('danger');
-      else if (cap.margin_utilization >= 50) marginCard.classList.add('warn');
-      else marginCard.classList.add('safe');
-    } else if (marginCard) {
-      marginCard.style.display = 'none';
-    }
+    // Margin updates are handled by updateMarginStatus() based on trade activity
 
     const posBody = document.getElementById('positions-body');
     if (posBody) {
@@ -517,7 +516,5 @@ updateClock();
 setInterval(updateClock, 1000);
 fetchAndRender();
 setInterval(fetchAndRender, 5000);
-updateMarginStatus();
-setInterval(updateMarginStatus, 5000);
 fetchAdaptiveData();
 setInterval(fetchAdaptiveData, 10000);

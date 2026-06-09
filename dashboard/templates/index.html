@@ -54,6 +54,18 @@
     <div class="card-sub">Today</div>
   </div>
   <div class="card stat-card">
+    <div class="card-title">💼 Active Positions</div>
+    <div class="card-value" id="stat-open">0</div>
+    <div class="card-sub">Currently open</div>
+  </div>
+  <!-- 🔥 MARGIN STATUS WIDGET -->
+  <div class="card stat-card" id="margin-card" style="display:none">
+    <div class="card-title">🔥 Margin Utilization</div>
+    <div class="card-value" id="margin-pct" style="font-size:1.5rem">—</div>
+    <div class="card-sub" id="margin-details">Margin: OFF</div>
+  </div>
+
+  <div class="card stat-card">
     <div class="card-title">💼 Broker Accounting</div>
     <div class="capital-lines" id="capital-breakdown">
       <div><span title="Total account value including PnL">Account Equity</span><strong id="cap-equity">—</strong></div>
@@ -62,13 +74,6 @@
       <div><span title="Available margin for new positions">Free Margin</span><strong id="cap-free">—</strong></div>
       <div><span title="Estimated buying power limit">Total Buying Power</span><strong id="cap-power">—</strong></div>
     </div>
-  </div>
-
-  <!-- 🔥 MARGIN STATUS WIDGET -->
-  <div class="card stat-card" id="margin-card" style="display:none">
-    <div class="card-title">🔥 Margin Utilization</div>
-    <div class="card-value" id="margin-pct" style="font-size:1.5rem">—</div>
-    <div class="card-sub" id="margin-details">Margin: OFF</div>
   </div>
 
   <!-- 🔥 LIVE EQUITY SNAPSHOT WIDGET -->
@@ -194,6 +199,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="/static/js/charts.js"></script>
-<script src="/static/js/app.js?v=3"></script>
+<script src="/static/js/app.js?v=5"></script>
 </body>
 </html>
