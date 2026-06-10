@@ -70,6 +70,15 @@ def setup_logging():
         datefmt="%Y-%m-%d %H:%M:%S"
     ))
 
+    # ── Log Deduplication Filter ──────────────────────────────
+    from core.log_deduplicator import DuplicateFilter
+    dedup_filter = DuplicateFilter(
+        cooldown_seconds=3600,
+        target_loggers=["reflection.observation_loop"]
+    )
+    stream_handler.addFilter(dedup_filter)
+    file_handler.addFilter(dedup_filter)
+
     logging.basicConfig(
         level=getattr(logging, log_level),
         handlers=[stream_handler, file_handler],

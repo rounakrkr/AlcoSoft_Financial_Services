@@ -596,7 +596,24 @@ def calculate_quantity(symbol: str, price: float, stop_loss: float, risk_pct: fl
     allocation_qty = per_position_equity_budget / margin_per_share if margin_per_share > 0 else 0
     leverage_qty = free_margin / margin_per_share if margin_per_share > 0 else 0
     
-    quantities = {'risk': risk_qty, 'allocation': allocation_qty, 'leverage': leverage_qty}
+    enable_risk = cfg(
+        "risk",
+        "enable_risk_based_position_sizing",
+        True
+    )
+    
+    if enable_risk:
+        quantities = {
+            "risk": risk_qty,
+            "allocation": allocation_qty,
+            "leverage": leverage_qty,
+        }
+    else:
+        quantities = {
+            "allocation": allocation_qty,
+            "leverage": leverage_qty,
+        }
+    
     final_qty = max(0, int(min(quantities.values())))
     
     limiting_constraint = min(quantities, key=quantities.get) if final_qty > 0 else "insufficient_all"

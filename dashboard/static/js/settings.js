@@ -66,18 +66,28 @@ function buildForm(schema, settings) {
     // Group fields by pairs (for 2-column layout)
     const fields = bySection[section];
     const groups = [];
+    let currentPair = [];
     
     for (let i = 0; i < fields.length; i++) {
       if (fields[i].type === 'bool') {
+        // Push any pending pair first
+        if (currentPair.length > 0) {
+          groups.push(currentPair);
+          currentPair = [];
+        }
         // Boolean fields get their own full-width row
         groups.push([fields[i]]);
-      } else if (i % 2 === 0 && i + 1 < fields.length && fields[i + 1].type !== 'bool') {
-        // Pair two non-boolean fields
-        groups.push([fields[i], fields[i + 1]]);
-        i++;
       } else {
-        groups.push([fields[i]]);
+        currentPair.push(fields[i]);
+        if (currentPair.length === 2) {
+          groups.push(currentPair);
+          currentPair = [];
+        }
       }
+    }
+    // Push any remaining unpaired field
+    if (currentPair.length > 0) {
+      groups.push(currentPair);
     }
 
     // Build field groups

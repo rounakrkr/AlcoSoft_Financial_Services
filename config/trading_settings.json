@@ -1,15 +1,16 @@
 {
   "risk": {
+    "enable_risk_based_position_sizing": false,
     "stop_loss_percent": 0.01,
     "trailing_sl_percent": 0.002,
-    "tsl_activation_ratio": 1.5,
+    "tsl_activation_ratio": 1.4,
     "tsl_mode_after_activation": true,
     "target_rr_ratio": 2.0,
     "max_risk_per_trade": 0.01,
     "math_risk_per_trade": 0.01,
     "max_daily_loss_percent": 0.05,
-    "broker_sl_trigger_buffer_pct": 0.01,
-    "broker_sl_limit_offset_pct": 0.0005,
+    "broker_sl_trigger_buffer_pct": 0.013,
+    "broker_sl_limit_offset_pct": 0.001,
     "paper_capital": 20000,
     "allow_margin": true,
     "forced_buy_margin": false,
@@ -19,12 +20,12 @@
   },
   "strategy": {
     "strategy_type": "INTRADAY",
-    "max_open_positions": 1,
+    "max_open_positions": 2,
     "min_confidence": 40,
     "buy_signal_lookback_candles": 3,
     "sell_signal_lookback_candles": 1,
-    "min_ws_candles_for_patterns": 1,
-    "loop_interval_sec": 1
+    "min_ws_candles_for_patterns": 2,
+    "loop_interval_sec": 2
   },
   "screener": {
     "screener_total_stocks": 30,
@@ -39,7 +40,7 @@
     "cognition_cycle_interval_minutes": 15
   },
   "strategy_sets": {
-    "TEST_DEBUG_STRATEGY": true,
+    "TEST_DEBUG_STRATEGY": false,
     "BUY_RSI_MACD_REVERSAL": true,
     "BUY_EMA_TREND_PULLBACK": true,
     "BUY_EMA_VOLUME_MOMENTUM": true,
@@ -53,15 +54,15 @@
     "SELL_EMA_CROSS_WEAKNESS": false,
     "SELL_BREAKDOWN_CONFIRMED": false,
     "SELL_RSI_BEARISH_REVERSAL": false,
-    "BUY_PERFECT_TREND_PULLBACK": true,
-    "BUY_GOLDEN_CROSSOVER_SURGE": true,
-    "BUY_POWER_BREAKOUT": true,
-    "BUY_OVERSOLD_REVERSAL_WITH_VOLUME": true,
-    "BUY_VWAP_RECLAIM_POWER": true,
-    "BUY_BOLLINGER_SQUEEZE_REVERSAL": true,
-    "BUY_MORNING_STAR_DIP": true,
-    "BUY_THREE_SOLDIERS_MOMENTUM": true,
-    "BUY_RSI_35_SUPPORT_BOUNCE": true,
+    "BUY_PERFECT_TREND_PULLBACK": false,
+    "BUY_GOLDEN_CROSSOVER_SURGE": false,
+    "BUY_POWER_BREAKOUT": false,
+    "BUY_OVERSOLD_REVERSAL_WITH_VOLUME": false,
+    "BUY_VWAP_RECLAIM_POWER": false,
+    "BUY_BOLLINGER_SQUEEZE_REVERSAL": false,
+    "BUY_MORNING_STAR_DIP": false,
+    "BUY_THREE_SOLDIERS_MOMENTUM": false,
+    "BUY_RSI_35_SUPPORT_BOUNCE": false,
     "BUY_STEADY_MOMENTUM_TREND": true
   },
   "adaptive": {
@@ -81,7 +82,7 @@
   },
   "_meta": {
     "version": 1,
-    "updated_at": "2026-06-10T23:09:05.055135",
+    "updated_at": "2026-06-11T00:46:59.354906",
     "updated_via": "dashboard"
   }
 }

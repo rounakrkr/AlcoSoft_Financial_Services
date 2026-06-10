@@ -26,6 +26,7 @@ _mtime: float | None = None
 
 DEFAULTS: dict = {
     "risk": {
+        "enable_risk_based_position_sizing": True,
         "stop_loss_percent": 0.01,
         "trailing_sl_percent": 0.008,
         "tsl_activation_ratio": 1.4,
@@ -78,6 +79,7 @@ DEFAULTS: dict = {
 
 # UI schema for dashboard forms
 BASE_FIELD_SCHEMA: list[dict] = [
+    {"section": "risk", "key": "enable_risk_based_position_sizing", "label": "Enable Risk-Based Position Sizing", "type": "bool", "hint": "When disabled, Rule B (risk-based quantity sizing) is ignored and quantity is calculated using only allocation and available margin limits."},
     {"section": "risk", "key": "stop_loss_percent", "label": "Stop loss (%)", "type": "percent", "min": 0.1, "max": 10, "step": 0.1, "hint": "Hard SL distance below entry (e.g. 1 = 1%)"},
     {"section": "risk", "key": "trailing_sl_percent", "label": "Trailing SL (%)", "type": "percent", "min": 0.1, "max": 5, "step": 0.1, "hint": "Trail distance from peak price"},
     

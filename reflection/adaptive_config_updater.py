@@ -13,7 +13,7 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime
 
-from core.safe_io import atomic_write_json, safe_float, safe_read_json
+from core.safe_io import atomic_write_json, safe_float, safe_int, safe_read_json
 from reflection.reflection_engine import (
     DB_PATH,
     get_all_signal_stats,
