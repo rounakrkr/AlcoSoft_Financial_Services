@@ -1,10 +1,10 @@
 {
   "risk": {
-    "stop_loss_percent": 0.005,
+    "stop_loss_percent": 0.01,
     "trailing_sl_percent": 0.002,
-    "tsl_activation_ratio": 1.4,
+    "tsl_activation_ratio": 1.5,
     "tsl_mode_after_activation": true,
-    "target_rr_ratio": 4.0,
+    "target_rr_ratio": 2.0,
     "max_risk_per_trade": 0.01,
     "math_risk_per_trade": 0.01,
     "max_daily_loss_percent": 0.05,
@@ -47,7 +47,7 @@
     "BUY_BREAKOUT_CONFIRMATION": true,
     "BUY_BOLLINGER_REVERSAL": true,
     "BUY_VWAP_REVERSAL": true,
-    "SELL_EMA_MOMENTUM_LOSS": false,
+    "SELL_EMA_MOMENTUM_LOSS": true,
     "SELL_VWAP_RSI_REVERSAL": false,
     "SELL_MACD_EMA_WEAKNESS": false,
     "SELL_EMA_CROSS_WEAKNESS": false,
@@ -61,7 +61,8 @@
     "BUY_BOLLINGER_SQUEEZE_REVERSAL": true,
     "BUY_MORNING_STAR_DIP": true,
     "BUY_THREE_SOLDIERS_MOMENTUM": true,
-    "BUY_RSI_35_SUPPORT_BOUNCE": true
+    "BUY_RSI_35_SUPPORT_BOUNCE": true,
+    "BUY_STEADY_MOMENTUM_TREND": true
   },
   "adaptive": {
     "last_updated": "2026-06-09T15:35:00.889022",
@@ -80,7 +81,7 @@
   },
   "_meta": {
     "version": 1,
-    "updated_at": "2026-06-09T11:45:24.499951",
+    "updated_at": "2026-06-10T23:09:05.055135",
     "updated_via": "dashboard"
   }
 }

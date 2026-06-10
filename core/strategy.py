@@ -869,10 +869,12 @@ def _build_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["rsi"]        = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
     df["avg_vol"]    = df["volume"].rolling(20).mean()
+    df["median_price"] = (df["high"] + df["low"]) / 2
+    df["median_sma14"] = df["median_price"].rolling(14).mean()
     typical_price    = (df["high"] + df["low"] + df["close"]) / 3
     # Intraday VWAP must reset daily. Group by date.
-    if "timestamp" in df.columns:
-        dt_series = pd.to_datetime(df["timestamp"])
+    if "bucket" in df.columns:
+        dt_series = pd.to_datetime(df["bucket"])
         df["vwap"] = (typical_price * df["volume"]).groupby(dt_series.dt.date).cumsum() / df["volume"].groupby(dt_series.dt.date).cumsum()
     elif isinstance(df.index, pd.DatetimeIndex):
         df["vwap"] = (typical_price * df["volume"]).groupby(df.index.date).cumsum() / df["volume"].groupby(df.index.date).cumsum()
@@ -1370,8 +1372,53 @@ def condition_price_below_ema20(ctx: StrategyEvaluationContext) -> dict:
     return _price_below_column_condition(ctx.indicator_df, "ema20", "Price below EMA20")
 
 
+def condition_close_2_below_ema20(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    # iloc[-1] is current candle, iloc[-2] is 1 candle ago, iloc[-3] is 2 candles ago (Close(2) in Streak)
+    if len(df) < 3 or "ema20" not in df.columns or pd.isna(df["ema20"].iloc[-1]):
+        return _indicator_strategy_result("Close(2) < EMA20", False, "Indicators not ready")
+    return _indicator_strategy_result(
+        "Close(2) < EMA20",
+        df["close"].iloc[-3] < df["ema20"].iloc[-1],
+        f"Close(2): {df['close'].iloc[-3]:.2f}, EMA20: {df['ema20'].iloc[-1]:.2f}"
+    )
+
+
 def condition_price_above_vwap(ctx: StrategyEvaluationContext) -> dict:
     return _price_above_column_condition(ctx.indicator_df, "vwap", "Price above VWAP")
+
+
+def condition_median_price_above_vwap(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if "median_sma14" not in df.columns or "vwap" not in df.columns or pd.isna(df["median_sma14"].iloc[-1]) or pd.isna(df["vwap"].iloc[-1]):
+        return _indicator_strategy_result("Median Price > VWAP", False, "Indicators not ready")
+    return _indicator_strategy_result(
+        "Median Price > VWAP",
+        df["median_sma14"].iloc[-1] > df["vwap"].iloc[-1],
+        f"Median SMA14: {df['median_sma14'].iloc[-1]:.2f}, VWAP: {df['vwap'].iloc[-1]:.2f}"
+    )
+
+
+def condition_median_price_above_ema20(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if "median_sma14" not in df.columns or "ema20" not in df.columns or pd.isna(df["median_sma14"].iloc[-1]) or pd.isna(df["ema20"].iloc[-1]):
+        return _indicator_strategy_result("Median Price > EMA20", False, "Indicators not ready")
+    return _indicator_strategy_result(
+        "Median Price > EMA20",
+        df["median_sma14"].iloc[-1] > df["ema20"].iloc[-1],
+        f"Median SMA14: {df['median_sma14'].iloc[-1]:.2f}, EMA20: {df['ema20'].iloc[-1]:.2f}"
+    )
+
+
+def condition_prev_close_above_ema20(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2 or "ema20" not in df.columns or pd.isna(df["ema20"].iloc[-1]):
+        return _indicator_strategy_result("Prev Close > EMA20", False, "Indicators not ready")
+    return _indicator_strategy_result(
+        "Prev Close > EMA20",
+        df["close"].iloc[-2] > df["ema20"].iloc[-1],
+        f"Prev Close: {df['close'].iloc[-2]:.2f}, EMA20: {df['ema20'].iloc[-1]:.2f}"
+    )
 
 
 def condition_test_trigger(ctx: StrategyEvaluationContext) -> dict:
@@ -1446,7 +1493,7 @@ def condition_macd_bearish_cross(ctx: StrategyEvaluationContext) -> dict:
 
 
 def condition_bearish_pattern(ctx: StrategyEvaluationContext) -> dict:
-    return strategy_sell_bearish_engulfing(ctx.indicator_df)
+    return strategy_sell_bearish_engulfing(ctx.pattern_df)
 
 
 def condition_ema20_breakdown(ctx: StrategyEvaluationContext) -> dict:
@@ -1576,44 +1623,11 @@ def condition_ema9_below_ema21(ctx: StrategyEvaluationContext) -> dict:
     )
 
 
-CONDITION_REGISTRY: dict[str, StrategyConditionFn] = {
-    # ── existing buy conditions ──────────────────────────────────────────
-    "rsi_macd_momentum":            condition_rsi_macd_momentum,
-    "ema_9_21_crossover":           condition_ema_9_21_crossover,
-    "bollinger_band_bounce":        condition_bollinger_band_bounce,
-    "hammer_reversal":              condition_hammer_reversal,
-    "bullish_engulfing":            condition_bullish_engulfing,
-    "inverted_hammer":              condition_inverted_hammer,
-    "dragonfly_doji":               condition_dragonfly_doji,
-    "bullish_marubozu":             condition_bullish_marubozu,
-    "piercing_line":                condition_piercing_line,
-    "bullish_harami":               condition_bullish_harami,
-    "morning_star":                 condition_morning_star,
-    "three_white_soldiers":         condition_three_white_soldiers,
-    "volume_breakout":              condition_volume_breakout,
-    "bullish_reversal_candle":      condition_bullish_reversal_candle,
-    "volume_spike":                 condition_volume_spike,
-    "price_above_ema20":            condition_price_above_ema20,
-    "price_below_ema20":            condition_price_below_ema20,
-    "price_above_vwap":             condition_price_above_vwap,
-    "price_below_vwap":             condition_price_below_vwap,
-    "rsi_recovering":               condition_rsi_recovering,
-    "rsi_weakening":                condition_rsi_weakening,
-    "rsi_overbought":               condition_rsi_overbought,
-    "macd_bearish_cross":           condition_macd_bearish_cross,
-    "bearish_pattern":              condition_bearish_pattern,
-    "ema20_breakdown":              condition_ema20_breakdown,
-    "price_below_recent_support":   condition_price_below_recent_support,
-    # ── NEW conditions (v2 — added for strategy_sets.json v2) ────────────
-    "rsi_not_overbought":           condition_rsi_not_overbought,
-    "macd_positive":                condition_macd_positive,
-    "ema_trending_up":              condition_ema_trending_up,
-    "ema9_below_ema21":             condition_ema9_below_ema21,
-    "obv_trending_up":              condition_obv_trending_up,
-    "rsi_crosses_35_up":            condition_rsi_crosses_35_up,
-    "two_green_candles":            condition_two_green_candles,
-    "test_trigger":                 condition_test_trigger,
-}
+CONDITION_REGISTRY: dict[str, StrategyConditionFn] = {}
+for _name, _func in list(globals().items()):
+    if _name.startswith("condition_") and callable(_func):
+        _key = _name.replace("condition_", "")
+        CONDITION_REGISTRY[_key] = _func
 
 
 class StrategySetEvaluator:

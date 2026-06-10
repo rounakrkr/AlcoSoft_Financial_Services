@@ -186,6 +186,26 @@
         "rsi_crosses_35_up",
         "two_green_candles"
       ]
+    },
+
+    {
+      "name": "BUY_STEADY_MOMENTUM_TREND",
+      "priority": 100,
+      "base_confidence": 78,
+      "confidence_weight": 1.1,
+      "notes": "Custom Streak strategy: 14-period SMA of median price > VWAP and EMA20, plus prev close > EMA20 and current close > VWAP. Very strong trend continuation filter.",
+      "_conditions_audit": {
+        "median_price_above_vwap": "STATE — 14-period median SMA is above VWAP",
+        "median_price_above_ema20": "STATE — 14-period median SMA is above EMA20",
+        "prev_close_above_ema20": "STATE — Previous candle closed above EMA20",
+        "price_above_vwap": "STATE — Current candle closed above VWAP"
+      },
+      "conditions": [
+        "median_price_above_vwap",
+        "median_price_above_ema20",
+        "prev_close_above_ema20",
+        "price_above_vwap"
+      ]
     }
   ],
 
@@ -196,14 +216,12 @@
       "priority": 10,
       "base_confidence": 70,
       "confidence_weight": 1.0,
-      "notes": "Early exit. Price breaks below EMA20 (EVENT) and RSI confirms weakening momentum (SEMI). Fast, reliable, no candle dependency.",
+      "notes": "Custom exit. Close(2) breaks below EMA20. Fast, reliable trailing stop.",
       "_conditions_audit": {
-        "ema20_breakdown": "EVENT — anchor (price crossed below EMA20 in lookback window)",
-        "rsi_weakening":   "SEMI  — confirms momentum loss"
+        "close_2_below_ema20": "EVENT — Close(2) fell below current EMA20"
       },
       "conditions": [
-        "ema20_breakdown",
-        "rsi_weakening"
+        "close_2_below_ema20"
       ]
     },
 
