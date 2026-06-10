@@ -127,16 +127,16 @@
       "priority": 60,
       "base_confidence": 75,
       "confidence_weight": 1.0,
-      "notes": "Reversal from extreme Bollinger Band panic. Requires touching lower band, a bullish reversal candle, and positive MACD to confirm momentum shift.",
+      "notes": "Reversal from extreme Bollinger Band panic. Requires touching lower band, a bullish reversal candle, and RSI recovering to confirm momentum shift.",
       "_conditions_audit": {
         "bollinger_band_bounce":   "EVENT — Touched bottom band and bounced",
         "bullish_reversal_candle": "EVENT — Reversal candle",
-        "macd_positive":           "STATE — Momentum is shifting up"
+        "rsi_recovering":          "STATE — Momentum is shifting up"
       },
       "conditions": [
         "bollinger_band_bounce",
         "bullish_reversal_candle",
-        "macd_positive"
+        "rsi_recovering"
       ]
     },
 

@@ -870,8 +870,15 @@ def _build_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["rsi"]        = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
     df["avg_vol"]    = df["volume"].rolling(20).mean()
     typical_price    = (df["high"] + df["low"] + df["close"]) / 3
-    cumulative_vol   = df["volume"].replace(0, pd.NA).cumsum()
-    df["vwap"]       = (typical_price * df["volume"]).cumsum() / cumulative_vol
+    # Intraday VWAP must reset daily. Group by date.
+    if "timestamp" in df.columns:
+        dt_series = pd.to_datetime(df["timestamp"])
+        df["vwap"] = (typical_price * df["volume"]).groupby(dt_series.dt.date).cumsum() / df["volume"].groupby(dt_series.dt.date).cumsum()
+    elif isinstance(df.index, pd.DatetimeIndex):
+        df["vwap"] = (typical_price * df["volume"]).groupby(df.index.date).cumsum() / df["volume"].groupby(df.index.date).cumsum()
+    else:
+        cumulative_vol = df["volume"].replace(0, pd.NA).cumsum()
+        df["vwap"] = (typical_price * df["volume"]).cumsum() / cumulative_vol
 
     macd_obj         = ta.trend.MACD(df["close"], window_slow=26,
                                       window_fast=12, window_sign=9)

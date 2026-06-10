@@ -82,7 +82,7 @@ function renderWinLoss(charts) {
   winChart = new Chart(canvas, {
     type: 'doughnut',
     data: {
-      labels: ['Wins', 'Losses'],
+      labels: ['Gross Profit ₹', 'Gross Loss ₹'],
       datasets: [{
         data: [wins, losses],
         backgroundColor: [CHART_COLORS.green, CHART_COLORS.red],
@@ -96,7 +96,7 @@ function renderWinLoss(charts) {
         legend: { position: 'bottom', labels: { color: CHART_COLORS.text, boxWidth: 12 } },
         title: {
           display: true,
-          text: 'Win / Loss',
+          text: 'Profit vs Loss',
           color: CHART_COLORS.text,
           font: { size: 11 },
         },

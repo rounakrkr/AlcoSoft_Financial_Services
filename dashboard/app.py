@@ -341,12 +341,18 @@ def api_status():
 
     labels, pnls, cumulative = [], [], []
     running = 0.0
+    gross_profit = 0.0
+    gross_loss = 0.0
     for i, t in enumerate(chart_trades):
         pnl = float(t.get("pnl") or 0)
         labels.append(t.get("symbol", f"T{i+1}"))
         pnls.append(round(pnl, 2))
         running += pnl
         cumulative.append(round(running, 2))
+        if pnl > 0:
+            gross_profit += pnl
+        else:
+            gross_loss += abs(pnl)
 
     circuit_breakers = {}
     market_msg = ""
@@ -398,8 +404,8 @@ def api_status():
             "trade_labels":    labels,
             "trade_pnl":       pnls,
             "cumulative_pnl":  cumulative,
-            "wins":            stats.get("winning_trades", 0),
-            "losses":          stats.get("losing_trades", 0),
+            "wins":            round(gross_profit, 2),
+            "losses":          round(gross_loss, 2),
             "circuit_breakers": circuit_breakers,
             "market_status":   market_msg,
             "order_verify":    order_verify,

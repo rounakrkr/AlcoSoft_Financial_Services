@@ -50,6 +50,27 @@ logger = logging.getLogger(__name__)
 class OrderExecutionError(Exception):
     """Raised when a LIVE broker order fails — trips order circuit breaker."""
 
+def get_nse_tick_size(price: float) -> float:
+    """Returns the NSE tick size based on the revised 2025 rules."""
+    if price < 250:
+        return 0.01
+    elif price <= 1000:
+        return 0.05
+    elif price <= 5000:
+        return 0.10
+    elif price <= 10000:
+        return 0.50
+    elif price <= 20000:
+        return 1.00
+    else:
+        return 5.00
+
+def round_to_tick(price: float) -> float:
+    """Rounds a price to its nearest valid NSE tick size."""
+    tick = get_nse_tick_size(price)
+    return round(price / tick) * tick
+
+
 # ── Secrets / mode stay in .env ───────────────────────────────
 TRADING_MODE = os.getenv("TRADING_MODE", "PAPER")
 INTRADAY_SQUAREOFF = dt_time(15, 15)
@@ -707,8 +728,10 @@ def calculate_stop_loss(price: float, direction: str = "BUY") -> float:
     price = safe_float(price, 0.0)
     pct = max(0.0001, min(0.20, safe_float(cfg("risk", "stop_loss_percent", 0.01), 0.01)))
     if direction == "BUY":
-        return round(price * (1 - pct), 2)
-    return round(price * (1 + pct), 2)
+        raw = price * (1 - pct)
+    else:
+        raw = price * (1 + pct)
+    return round_to_tick(raw)
 
 
 def calculate_target(entry: float, stop_loss: float) -> float:
@@ -717,7 +740,8 @@ def calculate_target(entry: float, stop_loss: float) -> float:
     stop_loss = safe_float(stop_loss, entry)
     risk   = abs(entry - stop_loss)
     rr     = max(0.1, min(10.0, safe_float(cfg("risk", "target_rr_ratio", 2.0), 2.0)))
-    return round(entry + (risk * rr), 2)
+    raw = entry + (risk * rr)
+    return round_to_tick(raw)
 
 
 def _market_protection_pct(price: float) -> float:
@@ -751,7 +775,7 @@ def _broker_safe_limit_price(ltp: float, transaction: str, is_sl_order: bool = F
     
     # Round to nearest 0.05 multiple (NSE requirement)
     # e.g., 1198.97 → 1199.00, 1198.94 → 1198.95
-    rounded = round(adjusted * 20) / 20
+    rounded = round_to_tick(adjusted)
     return max(0.05, rounded)
 
 
@@ -2011,7 +2035,8 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
             
             if tsl_mode == "trailing":
                 # Trailing mode: SL moves up with price, never down
-                new_tsl = round(current * (1 - tsl_pct), 2)
+                raw_tsl = current * (1 - tsl_pct)
+                new_tsl = round_to_tick(raw_tsl)
                 
                 if new_tsl > current_tsl:
                     update_trailing_sl(symbol, new_tsl)
@@ -2257,7 +2282,7 @@ def _send_kotak_order(
         return None
 
     normalized_order_type = str(order_type).upper()
-    order_price = round(safe_float(price, 0.0), 2)
+    order_price = round_to_tick(safe_float(price, 0.0))
     if quantity <= 0 or order_price <= 0:
         logger.error(
             "Invalid broker order payload | symbol=%s transaction=%s qty=%r price=%r",
@@ -2470,8 +2495,12 @@ def _send_kotak_sl_order(
     trigger_buffer_pct = safe_float(cfg("risk", "broker_sl_trigger_buffer_pct", 0.01), 0.01)
     limit_offset_pct = safe_float(cfg("risk", "broker_sl_limit_offset_pct", 0.0005), 0.0005)
     
-    broker_trigger_price = round(software_trigger_price * (1.0 - trigger_buffer_pct), 2)
-    broker_limit_price = round(broker_trigger_price * (1.0 - limit_offset_pct), 2)
+    broker_trigger_price_raw = software_trigger_price * (1.0 - trigger_buffer_pct)
+    broker_limit_price_raw = broker_trigger_price_raw * (1.0 - limit_offset_pct)
+    
+    # Round to nearest valid tick size based on NSE dynamic pricing rules
+    broker_trigger_price = round_to_tick(broker_trigger_price_raw)
+    broker_limit_price = round_to_tick(broker_limit_price_raw)
         
     logger.debug(f"📋 SL order symbol: {order_symbol}")
     logger.info(
@@ -2483,7 +2512,7 @@ def _send_kotak_sl_order(
     sl_kwargs = dict(
         exchange_segment   = "nse_cm",
         product            = product,
-        price              = str(broker_limit_price),
+        price              = f"{broker_limit_price:.2f}",
         order_type         = "SL",
         quantity           = str(quantity),
         validity           = "DAY",
@@ -2493,7 +2522,7 @@ def _send_kotak_sl_order(
         disclosed_quantity = "0",
         market_protection  = "0",
         pf                 = "N",
-        trigger_price      = str(broker_trigger_price),
+        trigger_price      = f"{broker_trigger_price:.2f}",
     )
 
     logger.info(f"📋 SL ORDER KWARGS (WILL SEND TO KOTAK):")
@@ -2607,8 +2636,8 @@ def _modify_sl_order(
         trigger_buffer_pct = safe_float(cfg("risk", "broker_sl_trigger_buffer_pct", 0.01), 0.01)
         limit_offset_pct = safe_float(cfg("risk", "broker_sl_limit_offset_pct", 0.0005), 0.0005)
         
-        broker_trigger_price = round(new_trigger * (1.0 - trigger_buffer_pct), 2)
-        broker_limit_price = round(broker_trigger_price * (1.0 - limit_offset_pct), 2)
+        broker_trigger_price = round_to_tick(new_trigger * (1.0 - trigger_buffer_pct))
+        broker_limit_price = round_to_tick(broker_trigger_price * (1.0 - limit_offset_pct))
 
         # 🔐 CRITICAL: Ensure Trade token is set before modifying order
         client = ensure_trade_token_on_client()
