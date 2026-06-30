@@ -1,0 +1,1946 @@
+[
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": 34.19,
+        "win_rate": 45.08,
+        "trades": 1941
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": 26.69,
+        "win_rate": 45.08,
+        "trades": 1941
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": 20.86,
+        "win_rate": 45.08,
+        "trades": 1941
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": 17.84,
+        "win_rate": 46.75,
+        "trades": 1987
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": 15.62,
+        "win_rate": 45.93,
+        "trades": 1681
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": 15.41,
+        "win_rate": 45.93,
+        "trades": 1681
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": 15.41,
+        "win_rate": 45.93,
+        "trades": 1681
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": 10.34,
+        "win_rate": 46.75,
+        "trades": 1987
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": 3.61,
+        "win_rate": 46.75,
+        "trades": 1987
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -27.32,
+        "win_rate": 46.54,
+        "trades": 1605
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -27.32,
+        "win_rate": 46.54,
+        "trades": 1605
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -27.32,
+        "win_rate": 46.54,
+        "trades": 1605
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -32.28,
+        "win_rate": 47.05,
+        "trades": 1643
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -32.28,
+        "win_rate": 47.05,
+        "trades": 1643
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -32.28,
+        "win_rate": 47.05,
+        "trades": 1643
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -33.87,
+        "win_rate": 46.69,
+        "trades": 1615
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -33.87,
+        "win_rate": 46.69,
+        "trades": 1615
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -33.87,
+        "win_rate": 46.69,
+        "trades": 1615
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -39.5,
+        "win_rate": 49.49,
+        "trades": 2043
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -47.0,
+        "win_rate": 49.49,
+        "trades": 2043
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -48.16,
+        "win_rate": 46.44,
+        "trades": 1712
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -48.36,
+        "win_rate": 46.44,
+        "trades": 1712
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -48.36,
+        "win_rate": 46.44,
+        "trades": 1712
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -53.73,
+        "win_rate": 49.49,
+        "trades": 2043
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -71.9,
+        "win_rate": 46.5,
+        "trades": 1602
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -71.9,
+        "win_rate": 46.5,
+        "trades": 1602
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -71.9,
+        "win_rate": 46.5,
+        "trades": 1602
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -75.45,
+        "win_rate": 47.18,
+        "trades": 1899
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -75.45,
+        "win_rate": 47.18,
+        "trades": 1899
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -75.45,
+        "win_rate": 47.18,
+        "trades": 1899
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -83.32,
+        "win_rate": 45.97,
+        "trades": 1673
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -84.53,
+        "win_rate": 45.97,
+        "trades": 1673
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -84.53,
+        "win_rate": 45.97,
+        "trades": 1673
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -87.98,
+        "win_rate": 46.68,
+        "trades": 1613
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -87.98,
+        "win_rate": 46.68,
+        "trades": 1613
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -87.98,
+        "win_rate": 46.68,
+        "trades": 1613
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -103.16,
+        "win_rate": 47.13,
+        "trades": 1827
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -103.16,
+        "win_rate": 47.13,
+        "trades": 1827
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -103.16,
+        "win_rate": 47.13,
+        "trades": 1827
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -114.5,
+        "win_rate": 47.23,
+        "trades": 1789
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -114.5,
+        "win_rate": 47.23,
+        "trades": 1789
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -114.5,
+        "win_rate": 47.23,
+        "trades": 1789
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -116.1,
+        "win_rate": 47.12,
+        "trades": 1634
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -116.1,
+        "win_rate": 47.12,
+        "trades": 1634
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -116.1,
+        "win_rate": 47.12,
+        "trades": 1634
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -123.0,
+        "win_rate": 47.19,
+        "trades": 1759
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -123.0,
+        "win_rate": 47.19,
+        "trades": 1759
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -123.0,
+        "win_rate": 47.19,
+        "trades": 1759
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -127.41,
+        "win_rate": 45.02,
+        "trades": 1899
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -128.43,
+        "win_rate": 45.0,
+        "trades": 1900
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -138.12,
+        "win_rate": 45.0,
+        "trades": 1900
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -150.25,
+        "win_rate": 44.89,
+        "trades": 1987
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -150.25,
+        "win_rate": 44.89,
+        "trades": 1987
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -150.25,
+        "win_rate": 44.89,
+        "trades": 1987
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -163.69,
+        "win_rate": 43.93,
+        "trades": 2547
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -167.22,
+        "win_rate": 43.93,
+        "trades": 2547
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -176.02,
+        "win_rate": 47.59,
+        "trades": 1866
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -176.02,
+        "win_rate": 47.59,
+        "trades": 1866
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -176.02,
+        "win_rate": 47.59,
+        "trades": 1866
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -176.18,
+        "win_rate": 47.06,
+        "trades": 1785
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -176.18,
+        "win_rate": 47.06,
+        "trades": 1785
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -176.18,
+        "win_rate": 47.06,
+        "trades": 1785
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -178.61,
+        "win_rate": 43.93,
+        "trades": 2547
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -183.64,
+        "win_rate": 47.27,
+        "trades": 1813
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -183.64,
+        "win_rate": 47.27,
+        "trades": 1813
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -183.64,
+        "win_rate": 47.27,
+        "trades": 1813
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -185.33,
+        "win_rate": 46.42,
+        "trades": 1702
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -186.54,
+        "win_rate": 46.42,
+        "trades": 1702
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -186.54,
+        "win_rate": 46.42,
+        "trades": 1702
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -219.03,
+        "win_rate": 46.7,
+        "trades": 1942
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -225.53,
+        "win_rate": 46.68,
+        "trades": 1943
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -225.92,
+        "win_rate": 46.06,
+        "trades": 2655
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -229.46,
+        "win_rate": 46.06,
+        "trades": 2655
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -229.74,
+        "win_rate": 46.68,
+        "trades": 1943
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -240.84,
+        "win_rate": 46.06,
+        "trades": 2655
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -249.1,
+        "win_rate": 45.36,
+        "trades": 1940
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -249.1,
+        "win_rate": 45.36,
+        "trades": 1940
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -249.1,
+        "win_rate": 45.36,
+        "trades": 1940
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -268.63,
+        "win_rate": 45.49,
+        "trades": 2049
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -268.63,
+        "win_rate": 45.49,
+        "trades": 2049
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -268.63,
+        "win_rate": 45.49,
+        "trades": 2049
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -278.72,
+        "win_rate": 46.96,
+        "trades": 1742
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -278.72,
+        "win_rate": 46.96,
+        "trades": 1742
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -278.72,
+        "win_rate": 46.96,
+        "trades": 1742
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -292.5,
+        "win_rate": 49.45,
+        "trades": 2795
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -297.04,
+        "win_rate": 49.45,
+        "trades": 2795
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -300.92,
+        "win_rate": 49.47,
+        "trades": 1979
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -305.53,
+        "win_rate": 47.54,
+        "trades": 2154
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -305.53,
+        "win_rate": 47.54,
+        "trades": 2154
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -305.53,
+        "win_rate": 47.54,
+        "trades": 2154
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -306.6,
+        "win_rate": 49.45,
+        "trades": 2795
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -310.48,
+        "win_rate": 49.44,
+        "trades": 1980
+    },
+    {
+        "strategy": "BUY_VOLUME_SURGE_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -311.64,
+        "win_rate": 49.44,
+        "trades": 1980
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -319.84,
+        "win_rate": 46.12,
+        "trades": 2088
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -319.84,
+        "win_rate": 46.12,
+        "trades": 2088
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -319.84,
+        "win_rate": 46.12,
+        "trades": 2088
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -373.16,
+        "win_rate": 46.14,
+        "trades": 2085
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -373.16,
+        "win_rate": 46.14,
+        "trades": 2085
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -373.16,
+        "win_rate": 46.14,
+        "trades": 2085
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -378.53,
+        "win_rate": 45.71,
+        "trades": 1995
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -378.53,
+        "win_rate": 45.71,
+        "trades": 1995
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -378.53,
+        "win_rate": 45.71,
+        "trades": 1995
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -383.02,
+        "win_rate": 43.84,
+        "trades": 2411
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -389.84,
+        "win_rate": 46.35,
+        "trades": 2123
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -389.84,
+        "win_rate": 46.35,
+        "trades": 2123
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -389.84,
+        "win_rate": 46.35,
+        "trades": 2123
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -406.43,
+        "win_rate": 43.74,
+        "trades": 2405
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -409.01,
+        "win_rate": 43.72,
+        "trades": 2406
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -419.34,
+        "win_rate": 46.46,
+        "trades": 2469
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -430.59,
+        "win_rate": 46.41,
+        "trades": 2463
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -433.17,
+        "win_rate": 46.39,
+        "trades": 2464
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -442.85,
+        "win_rate": 47.45,
+        "trades": 2076
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -442.85,
+        "win_rate": 47.45,
+        "trades": 2076
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -442.85,
+        "win_rate": 47.45,
+        "trades": 2076
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -448.81,
+        "win_rate": 45.2,
+        "trades": 2241
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -448.81,
+        "win_rate": 45.2,
+        "trades": 2241
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -448.81,
+        "win_rate": 45.2,
+        "trades": 2241
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -464.7,
+        "win_rate": 46.32,
+        "trades": 2120
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -464.7,
+        "win_rate": 46.32,
+        "trades": 2120
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -464.7,
+        "win_rate": 46.32,
+        "trades": 2120
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -481.91,
+        "win_rate": 46.63,
+        "trades": 2168
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -481.91,
+        "win_rate": 46.63,
+        "trades": 2168
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -481.91,
+        "win_rate": 46.63,
+        "trades": 2168
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -541.62,
+        "win_rate": 45.17,
+        "trades": 2234
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -541.62,
+        "win_rate": 45.17,
+        "trades": 2234
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -541.62,
+        "win_rate": 45.17,
+        "trades": 2234
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -543.58,
+        "win_rate": 45.5,
+        "trades": 2301
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -543.58,
+        "win_rate": 45.5,
+        "trades": 2301
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -543.58,
+        "win_rate": 45.5,
+        "trades": 2301
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -545.3,
+        "win_rate": 42.56,
+        "trades": 3080
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -550.3,
+        "win_rate": 42.56,
+        "trades": 3080
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -556.38,
+        "win_rate": 42.56,
+        "trades": 3080
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -583.09,
+        "win_rate": 46.53,
+        "trades": 2164
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -583.09,
+        "win_rate": 46.53,
+        "trades": 2164
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.015,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -583.09,
+        "win_rate": 46.53,
+        "trades": 2164
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -591.55,
+        "win_rate": 49.71,
+        "trades": 2559
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -593.02,
+        "win_rate": 46.18,
+        "trades": 2421
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -593.02,
+        "win_rate": 46.18,
+        "trades": 2421
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -593.02,
+        "win_rate": 46.18,
+        "trades": 2421
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -596.86,
+        "win_rate": 49.65,
+        "trades": 2564
+    },
+    {
+        "strategy": "BUY_ADX_TREND_BREAKOUT",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -597.1,
+        "win_rate": 49.69,
+        "trades": 2560
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -640.3,
+        "win_rate": 44.66,
+        "trades": 3242
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -644.05,
+        "win_rate": 45.43,
+        "trades": 2289
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -644.05,
+        "win_rate": 45.43,
+        "trades": 2289
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -644.05,
+        "win_rate": 45.43,
+        "trades": 2289
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -645.3,
+        "win_rate": 44.66,
+        "trades": 3242
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -651.93,
+        "win_rate": 44.66,
+        "trades": 3242
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -709.47,
+        "win_rate": 42.46,
+        "trades": 3038
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -743.59,
+        "win_rate": 46.19,
+        "trades": 2399
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -743.59,
+        "win_rate": 46.19,
+        "trades": 2399
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.01,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -743.59,
+        "win_rate": 46.19,
+        "trades": 2399
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -744.03,
+        "win_rate": 42.44,
+        "trades": 3037
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.4
+        },
+        "return_pct": -744.3,
+        "win_rate": 42.44,
+        "trades": 3037
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -763.16,
+        "win_rate": 47.37,
+        "trades": 3447
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -765.66,
+        "win_rate": 47.37,
+        "trades": 3447
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.002,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -769.79,
+        "win_rate": 47.37,
+        "trades": 3447
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -828.9,
+        "win_rate": 44.56,
+        "trades": 3180
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -853.02,
+        "win_rate": 44.56,
+        "trades": 3180
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.2
+        },
+        "return_pct": -853.29,
+        "win_rate": 44.56,
+        "trades": 3180
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 3.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -946.07,
+        "win_rate": 47.14,
+        "trades": 3339
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 4.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -968.84,
+        "win_rate": 47.14,
+        "trades": 3339
+    },
+    {
+        "strategy": "BUY_VWAP_EMA_PULLBACK",
+        "params": {
+            "sl_pct": 0.005,
+            "rr_ratio": 5.0,
+            "tsl_pct": 0.004,
+            "tsl_ratio": 1.0
+        },
+        "return_pct": -971.07,
+        "win_rate": 47.14,
+        "trades": 3339
+    }
+]

@@ -78,6 +78,7 @@ function buildForm(schema, settings) {
         // Boolean fields get their own full-width row
         groups.push([fields[i]]);
       } else {
+        // Includes bool-inline
         currentPair.push(fields[i]);
         if (currentPair.length === 2) {
           groups.push(currentPair);
@@ -98,10 +99,10 @@ function buildForm(schema, settings) {
       group.forEach((field) => {
         const val = settings[section]?.[field.key];
         
-        if (field.type === 'bool') {
-          // Toggle field (full width)
+        if (field.type.startsWith('bool')) {
+          // Toggle field
           const div = document.createElement('div');
-          div.className = 'settings-field-toggle';
+          div.className = field.type === 'bool-inline' ? 'settings-field-toggle inline' : 'settings-field-toggle';
           
           const info = document.createElement('div');
           info.className = 'settings-toggle-info';
@@ -135,14 +136,17 @@ function buildForm(schema, settings) {
           const div = document.createElement('div');
           div.className = 'settings-field';
           
-          const inputType = 'number';
+          const inputType = field.type === 'text' ? 'text' : 'number';
           const step = field.step || (field.type === 'int' ? 1 : 0.01);
           
+          let attrStr = `type="${inputType}" id="f-${field.section}-${field.key}" value="${displayValue(field, val)}"`;
+          if (inputType === 'number') {
+            attrStr += ` min="${field.min ?? ''}" max="${field.max ?? ''}" step="${step}"`;
+          }
+
           let fieldHtml = `
             <label class="settings-field-label" for="f-${field.section}-${field.key}">${field.label}</label>
-            <input type="${inputType}" id="f-${field.section}-${field.key}"
-              value="${displayValue(field, val)}"
-              min="${field.min ?? ''}" max="${field.max ?? ''}" step="${step}"/>
+            <input ${attrStr}/>
           `;
           
           if (field.hint) {

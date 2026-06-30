@@ -1,0 +1,128 @@
+{
+  "version": 3,
+  "_legend": {
+    "condition_types": {
+      "EVENT": "Fires at a specific moment — tight, precise",
+      "STATE": "Can be true for hours — use only as filter, never alone",
+      "SEMI": "Decays quickly — acceptable as secondary"
+    },
+    "rule": "Every set must have at least 1 EVENT condition as anchor"
+  },
+  "buy_sets": [
+    {
+      "name": "TEST_DEBUG_STRATEGY",
+      "priority": 1,
+      "base_confidence": 99,
+      "confidence_weight": 1.0,
+      "notes": "Always triggers true. Used ONLY for debugging/testing the API pipeline.",
+      "_conditions_audit": {
+        "test_trigger": "EVENT — Always True"
+      },
+      "conditions": [
+        "test_trigger"
+      ]
+    },
+    {
+      "name": "BUY_STEADY_MOMENTUM_TREND",
+      "priority": 100,
+      "base_confidence": 78,
+      "confidence_weight": 1.1,
+      "notes": "Custom Streak strategy: 14-period SMA of median price > VWAP and EMA20, plus prev close > EMA20 and current close > VWAP. Very strong trend continuation filter.",
+      "_conditions_audit": {
+        "median_price_above_vwap": "STATE — 14-period median SMA is above VWAP",
+        "median_price_above_ema20": "STATE — 14-period median SMA is above EMA20",
+        "prev_close_above_ema20": "STATE — Previous candle closed above EMA20",
+        "price_above_vwap": "STATE — Current candle closed above VWAP"
+      },
+      "conditions": [
+        "median_price_above_vwap",
+        "median_price_above_ema20",
+        "prev_close_above_ema20",
+        "price_above_vwap"
+      ]
+    },
+    {
+      "name": "BUY_STREAK_MOMENTUM_BREAKOUT",
+      "priority": 90,
+      "base_confidence": 85,
+      "confidence_weight": 1.1,
+      "notes": "Mixed timeframe strategy from Streak. Uses previous closed candle for indicator stability (VWAP, EMA20, RSI) and current live candle for Breakout trigger over the previous 10 candle high.",
+      "_conditions_audit": {
+        "streak_close_1_above_vwap_0": "STATE — Close(1) > VWAP(0)",
+        "streak_ema20_1_above_vwap_0": "STATE — EMA(20, 1) > VWAP(0)",
+        "streak_rsi_1_above_61": "STATE — RSI(14, 1) > 61",
+        "streak_close_0_above_period_max_10": "EVENT — Close(0) > Period max(10, High(-1))"
+      },
+      "conditions": [
+        "streak_close_1_above_vwap_0",
+        "streak_ema20_1_above_vwap_0",
+        "streak_rsi_1_above_61",
+        "streak_close_0_above_period_max_10"
+      ]
+    },
+    {
+      "name": "SHORT_STREAK_MOMENTUM_BREAKDOWN",
+      "priority": 90,
+      "base_confidence": 85,
+      "confidence_weight": 1.1,
+      "notes": "EXACT MIRROR of BUY_STREAK_MOMENTUM_BREAKOUT for short selling. Uses previous closed candle for indicator stability and current live candle for Breakdown trigger BELOW the previous 10 candle low. Use ONLY on gap-down stocks to avoid clashing with long strategy.",
+      "_conditions_audit": {
+        "streak_close_1_below_vwap_0": "STATE — Close(1) < VWAP(0) [mirror of close_1_above_vwap_0]",
+        "streak_ema20_1_below_vwap_0": "STATE — EMA(20, 1) < VWAP(0) [mirror of ema20_1_above_vwap_0]",
+        "streak_rsi_1_below_39": "STATE — RSI(14, 1) < 39 [mirror of rsi_1_above_61]",
+        "streak_close_0_below_period_min_10": "EVENT — Close(0) < Period min(10, Low(-1)) [mirror of close_0_above_period_max_10]",
+        "streak_close_0_not_reversing": "EVENT — Close(0) <= High(-1) [Short-cover reversal blocker]",
+        "streak_close_0_near_vwap": "STATE — Close(0) >= VWAP(0) * 0.988 [Late-entry blocker]"
+      },
+      "conditions": [
+        "streak_close_1_below_vwap_0",
+        "streak_ema20_1_below_vwap_0",
+        "streak_rsi_1_below_39",
+        "streak_close_0_below_period_min_10",
+        "streak_close_0_not_reversing",
+        "streak_close_0_near_vwap"
+      ]
+    }
+  ],
+  "sell_sets": [
+    {
+      "name": "SELL_EMA_MOMENTUM_LOSS",
+      "priority": 10,
+      "base_confidence": 70,
+      "confidence_weight": 1.0,
+      "notes": "Custom exit for LONG positions. Close(1) breaks below EMA21. Fast, reliable trailing stop.",
+      "_conditions_audit": {
+        "close_1_below_ema21": "EVENT — Close(1) fell below current EMA21"
+      },
+      "conditions": [
+        "close_1_below_ema21"
+      ]
+    },
+    {
+      "name": "SHORT_STREAK_MOMENTUM_RECOVERY",
+      "priority": 10,
+      "base_confidence": 70,
+      "confidence_weight": 1.0,
+      "notes": "EXACT MIRROR of SELL_EMA_MOMENTUM_LOSS for short cover exit. Close(1) crossed ABOVE EMA21 — momentum recovering upward, cover the short. Use ONLY for exiting short positions.",
+      "_conditions_audit": {
+        "close_1_above_ema21": "EVENT — Close(1) crossed above current EMA21 [mirror of close_1_below_ema21]"
+      },
+      "conditions": [
+        "close_1_above_ema21"
+      ]
+    },
+    {
+      "name": "SHORT_SAVIOR_EXIT",
+      "priority": 100,
+      "base_confidence": 100,
+      "confidence_weight": 1.0,
+      "notes": "Dynamic bail-out for Short Engine when price recovers above EMA9. Extremely fast SL alternative.",
+      "_conditions_audit": {
+        "close_0_above_ema9": "EVENT — Close(0) > EMA(9) [Savior exit triggered]"
+      },
+      "conditions": [
+        "close_0_above_ema9"
+      ]
+    }
+  ]
+}

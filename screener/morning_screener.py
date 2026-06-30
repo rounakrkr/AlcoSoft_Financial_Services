@@ -22,7 +22,6 @@ import asyncio
 import time
 from datetime import datetime
 from urllib.parse import quote
-import yfinance as yf
 import pandas as pd
 import requests
 import ta
@@ -36,29 +35,34 @@ from core.trading_settings import get as cfg
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-YAHOO_CHART_URL = "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
-YAHOO_HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-}
-YAHOO_CACHE_TTL_SEC = 300
-YAHOO_FAILURE_COOLDOWN_SEC = 30
-_YAHOO_HISTORY_CACHE: dict[tuple[str, str, str], tuple[float, pd.DataFrame]] = {}
-_YAHOO_FAILED_UNTIL: dict[tuple[str, str, str], float] = {}
+UPSTOX_TOKENS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "upstox_tokens.json")
+UPSTOX_CACHE_TTL_SEC    = 300
+UPSTOX_FAILURE_COOLDOWN_SEC = 30
+_UPSTOX_HISTORY_CACHE: dict[tuple[str, str], tuple[float, pd.DataFrame]] = {}
+_UPSTOX_FAILED_UNTIL:  dict[str, float] = {}
+_screener_instrument_cache: dict[str, str] = {}
+_screener_instrument_cache_loaded: bool = False
+
+import niftystocks.ns as ns
 
 # ── Stock Universe (Configurable) ────────────────────────────
-# Add or remove stocks here — screener auto-adjusts
-NIFTY_50 = [
-    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
-    "HINDUNILVR", "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK",
-    "LT", "HCLTECH", "AXISBANK", "ASIANPAINT", "MARUTI",
-    "SUNPHARMA", "TITAN", "ULTRACEMCO", "WIPRO", "NESTLEIND",
-    "TECHM", "POWERGRID", "NTPC", "ONGC", "BAJFINANCE",
-    "BAJAJFINSV", "ADANIENT", "ADANIPORTS", "DIVISLAB", "DRREDDY",
-    "EICHERMOT", "GRASIM", "HEROMOTOCO", "HINDALCO", "INDUSINDBK",
-    "JSWSTEEL", "M&M", "SBILIFE", "TATACONSUM", "TATAMOTOR",
-    "TATASTEEL", "BRITANNIA", "CIPLA", "COALINDIA", "HDFCLIFE",
-    "LTIMINDTREE", "BPCL", "UPL", "APOLLOHOSP", "BAJAJ-AUTO",
-]
+try:
+    MIDCAP_50 = ns.get_nifty_midcap50()
+    
+    # Translation mapping for companies that have changed ticker symbols on Upstox
+    _symbol_translation = {
+        "AMARAJABAT": "ARE&M",
+        "SRTRANSFIN": "SHRIRAMFIN",
+        "L&TFH": "LTF",
+        "GMRINFRA": "GMRAIRPORT"
+    }
+    MIDCAP_50 = [_symbol_translation.get(sym, sym) for sym in MIDCAP_50 if sym != "IBULHSGFIN"]
+    
+except Exception as e:
+    logger.error(f"Failed to fetch Midcap 50 from niftystocks: {e}")
+    MIDCAP_50 = [
+        "VODAFONE IDEA", "YESBANK", "IDFCFIRSTB", "PNB", "BANKBARODA", "BHEL", "SAIL", "ZOMATO", "UNIONBANK", "INDIANB", "GMRINFRA", "NHPC", "SUZLON", "TVSMOTOR", "ASHOKLEY", "BANDHANBNK", "FEDERALBNK", "L&TFH", "ABCAPITAL", "M&MFIN", "CHOLAFIN", "RECLTD", "PFC", "LICHSGFIN", "SRF", "AUBANK", "VOLTAS", "CUMMINSIND", "BHARATFORG", "ASTRAL", "BALKRISIND", "GODREJPROP", "OBEROIRLTY", "PERSISTENT", "COFORGE", "MPHASIS", "LTTS", "TATACOMM", "JUBLFOOD", "ESCORTS", "POLYCAB", "APOLLOTYRE", "MRF", "PAGEIND", "PIIND", "TRENT", "COROMANDEL", "MAXHEALTH", "SYNGENE", "LAURUSLABS"
+    ]
 
 def _screener_counts():
     total = int(cfg("screener", "screener_total_stocks", 25))
@@ -98,7 +102,7 @@ def run_morning_screener():
     """
     Called at 8:45 AM.
 
-    Step 1: Fetch indicators for all available stocks (NIFTY_50 list).
+    Step 1: Fetch indicators for all available stocks (MIDCAP_50 list).
     Step 2: Score every stock mathematically.
     Step 3: Gemini picks N best from ALL stocks (N = cognition_picks setting, configurable).
     Step 4: From remaining stocks, pick best (screener_total - N) by math score.
@@ -332,110 +336,141 @@ def _drop_incomplete_candle_if_present(hist: pd.DataFrame, interval: str | None 
     return hist
 
 
-def _fetch_yahoo_history(symbol: str, period: str, interval: str, timeout: float = 8.0) -> pd.DataFrame:
-    """
-    Fetch candles from Yahoo's chart endpoint without yfinance's crumb flow.
 
-    yfinance can poison the crumb as "Edge: Too Many Requests"; the chart endpoint
-    itself still returns valid OHLCV JSON without that crumb.
+def _load_screener_instrument_keys() -> dict[str, str]:
+    """Load Upstox instrument keys from data/upstox_tokens.json."""
+    global _screener_instrument_cache, _screener_instrument_cache_loaded
+    if _screener_instrument_cache_loaded:
+        return _screener_instrument_cache
+    try:
+        with open(UPSTOX_TOKENS_PATH, "r") as f:
+            import json as _json
+            data = _json.load(f)
+        if isinstance(data, dict) and data:
+            _screener_instrument_cache = {k.upper(): v for k, v in data.items()}
+            _screener_instrument_cache_loaded = True
+            return _screener_instrument_cache
+    except Exception as e:
+        logger.warning("[Screener/Upstox] Could not load upstox_tokens.json: %s", e)
+    try:
+        import gzip
+        from io import BytesIO
+        resp = requests.get(
+            "https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz",
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=20,
+        )
+        resp.raise_for_status()
+        with gzip.open(BytesIO(resp.content), "rt") as f:
+            import csv as _csv
+            reader = _csv.DictReader(f)
+            mapping: dict[str, str] = {}
+            sym_col = None
+            for row in reader:
+                if sym_col is None:
+                    sym_col = "tradingsymbol" if "tradingsymbol" in row else "trading_symbol"
+                sym = str(row.get(sym_col, "")).replace("-EQ", "").upper()
+                key = str(row.get("instrument_key", ""))
+                if sym and key and "NSE" in key:
+                    mapping[sym] = key
+        _screener_instrument_cache = mapping
+        _screener_instrument_cache_loaded = True
+        logger.info("[Screener/Upstox] Downloaded %d instrument keys.", len(mapping))
+    except Exception as e:
+        logger.error("[Screener/Upstox] Instrument key download failed: %s", e)
+    return _screener_instrument_cache
+
+
+def _fetch_yahoo_history(symbol: str, period: str = "30d", interval: str = "1d", timeout: float = 8.0) -> pd.DataFrame:
     """
-    cache_key = (str(symbol or "").upper(), period, interval)
+    MIGRATED: Now fetches daily candles from Upstox v2 Historical Candle API.
+    'period' is mapped to a day-count window. 'interval' must be '1d' for daily.
+    Kept same signature for backward compatibility with all callers.
+    """
+    # Map Yahoo period strings to day counts
+    _period_days = {
+        "1d": 2, "5d": 7, "30d": 35, "60d": 65, "90d": 95, "6mo": 185, "1y": 370,
+    }
+    days = _period_days.get(period.lower(), 35)
+    clean_sym = symbol.upper().replace(".NS", "").replace("^", "")
+
+    # Special handling for NIFTY 50 index (^NSEI)
+    if symbol.startswith("^") or "NSEI" in symbol.upper():
+        clean_sym = "NIFTY"  # map to NIFTY index instrument key
+
+    cache_key = (clean_sym, interval)
     now_ts = time.time()
-    cached = _YAHOO_HISTORY_CACHE.get(cache_key)
-    if cached and now_ts - cached[0] < YAHOO_CACHE_TTL_SEC:
+    cached = _UPSTOX_HISTORY_CACHE.get(cache_key)
+    if cached and now_ts - cached[0] < UPSTOX_CACHE_TTL_SEC:
         return cached[1].copy()
 
-    failed_until = _YAHOO_FAILED_UNTIL.get(cache_key, 0.0)
+    failed_until = _UPSTOX_FAILED_UNTIL.get(clean_sym, 0.0)
     if failed_until > now_ts:
-        raise RuntimeError(f"Yahoo chart cooldown active for {symbol}")
+        raise RuntimeError(f"[Screener/Upstox] Cooldown active for {clean_sym}")
 
-    yahoo_symbol = _yahoo_chart_symbol(symbol)
-    response = None
-    last_error = None
-    for attempt in range(3):
+    keys = _load_screener_instrument_keys()
+    instrument_key = keys.get(clean_sym)
+    if not instrument_key:
+        raise RuntimeError(f"[Screener/Upstox] No instrument_key for {symbol} (tried '{clean_sym}')")
+
+    from datetime import timedelta
+    _UPSTOX_TOKEN = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip("'\" ")
+    _headers = {"Accept": "application/json", "Authorization": f"Bearer {_UPSTOX_TOKEN}"}
+    to_date   = datetime.now().strftime("%Y-%m-%d")
+    from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    upstox_interval = "day" if interval == "1d" else "5minute"
+    url = f"https://api.upstox.com/v2/historical-candle/{instrument_key}/{upstox_interval}/{to_date}/{from_date}"
+
+    try:
+        resp = requests.get(url, headers=_headers, timeout=timeout)
+    except requests.exceptions.RequestException as e:
+        _UPSTOX_FAILED_UNTIL[clean_sym] = now_ts + UPSTOX_FAILURE_COOLDOWN_SEC
+        raise RuntimeError(f"[Screener/Upstox] Network error for {symbol}: {e}")
+
+    if resp.status_code == 401:
+        raise RuntimeError(f"[Screener/Upstox] Auth error — check UPSTOX_ACCESS_TOKEN")
+    if resp.status_code == 429:
+        _UPSTOX_FAILED_UNTIL[clean_sym] = now_ts + 60
+        raise RuntimeError(f"[Screener/Upstox] Rate limited for {symbol}")
+    if resp.status_code != 200:
+        _UPSTOX_FAILED_UNTIL[clean_sym] = now_ts + UPSTOX_FAILURE_COOLDOWN_SEC
+        raise RuntimeError(f"[Screener/Upstox] HTTP {resp.status_code} for {symbol}")
+
+    candles = (resp.json().get("data") or {}).get("candles") or []
+    if not candles:
+        return _empty_history_frame()
+
+    rows = []
+    for c in candles:
         try:
-            response = requests.get(
-                YAHOO_CHART_URL.format(symbol=quote(yahoo_symbol, safe="")),
-                params={
-                    "range": period,
-                    "interval": interval,
-                    "includePrePost": "false",
-                    "events": "div,splits,capitalGains",
-                },
-                headers=YAHOO_HEADERS,
-                timeout=timeout,
-            )
-            if response.status_code == 429:
-                raise RuntimeError("Too Many Requests. Rate limited.")
-            response.raise_for_status()
-            break
-        except Exception as exc:
-            last_error = exc
-            if attempt < 2:
-                time.sleep(0.35 * (2 ** attempt))
-    else:
-        _YAHOO_FAILED_UNTIL[cache_key] = time.time() + YAHOO_FAILURE_COOLDOWN_SEC
-        raise RuntimeError(f"Yahoo chart request failed for {symbol}: {last_error}")
+            ts = pd.to_datetime(c[0]).tz_convert("Asia/Kolkata").tz_localize(None)
+            rows.append({"Open": float(c[1]), "High": float(c[2]), "Low": float(c[3]),
+                         "Close": float(c[4]), "Volume": float(c[5]), "_ts": ts})
+        except Exception:
+            continue
 
-    chart = response.json().get("chart", {})
-    error = chart.get("error")
-    if error:
-        raise RuntimeError(error.get("description") or error.get("code") or "Yahoo chart error")
-
-    results = chart.get("result") or []
-    if not results:
+    if not rows:
         return _empty_history_frame()
 
-    result = results[0]
-    timestamps = result.get("timestamp") or []
-    quote_rows = ((result.get("indicators") or {}).get("quote") or [{}])
-    quote_data = quote_rows[0] if quote_rows else {}
-    if not timestamps or not quote_data:
-        return _empty_history_frame()
-
-    arrays = {
-        "open": quote_data.get("open") or [],
-        "high": quote_data.get("high") or [],
-        "low": quote_data.get("low") or [],
-        "close": quote_data.get("close") or [],
-        "volume": quote_data.get("volume") or [],
-    }
-    lengths = {"timestamp": len(timestamps), **{name: len(values) for name, values in arrays.items()}}
-    if any(length != len(timestamps) for length in lengths.values()):
-        raise RuntimeError(f"Yahoo chart length mismatch for {symbol}: {lengths}")
-
-    index = pd.to_datetime(timestamps, unit="s", utc=True)
-    exchange_tz = ((result.get("meta") or {}).get("exchangeTimezoneName") or "Asia/Kolkata")
-    index = index.tz_convert(exchange_tz)
-
-    frame = pd.DataFrame(
-        {
-            "Open": arrays["open"],
-            "High": arrays["high"],
-            "Low": arrays["low"],
-            "Close": arrays["close"],
-            "Volume": arrays["volume"],
-        },
-        index=index,
-    )
-    for column in ("Open", "High", "Low", "Close", "Volume"):
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    frame = _drop_incomplete_candle_if_present(frame.dropna(subset=["Close"]), interval=interval)
-    _YAHOO_HISTORY_CACHE[cache_key] = (time.time(), frame.copy())
+    frame = pd.DataFrame(rows).set_index("_ts").sort_index()
+    frame = frame[~frame.index.duplicated(keep="first")].dropna(subset=["Close"])
+    frame = _drop_incomplete_candle_if_present(frame, interval=interval)
+    _UPSTOX_HISTORY_CACHE[cache_key] = (time.time(), frame.copy())
+    logger.debug("[Screener/Upstox] %s — fetched %d daily candles", symbol, len(frame))
     return frame
+
 
 
 def _fetch_all_summaries() -> list[dict]:
     """
-    Fetches OHLCV + indicators for all NIFTY_50 stocks.
+    Fetches OHLCV + indicators for all MIDCAP_50 stocks.
     FIX 1: ticker variable properly passed into thread via default arg.
     FIX 2: news fetch separated with its own timeout.
-    FIX 3: TATAMOTOR → TATAMOTORS, LTIMINDTREE → LTIM in NIFTY_50 list.
+    FIX 3: TATAMOTOR → TATAMOTORS, LTIMINDTREE → LTIM in MIDCAP_50 list.
     """
     summaries = []
     failed_symbols = []
     timeout_symbols = []
-    logger.info(f"Fetching Yahoo Finance data for {len(NIFTY_50)} stocks (8s timeout per stock)...")
+    logger.info(f"Fetching Upstox historical data for {len(MIDCAP_50)} stocks (8s timeout per stock)...")
 
     def _fetch_one(sym, result):
         try:
@@ -444,7 +479,7 @@ def _fetch_all_summaries() -> list[dict]:
         except Exception as e:
             result["error"] = str(e)
 
-    for symbol in NIFTY_50:
+    for symbol in MIDCAP_50:
         result = {}
         th = threading.Thread(target=_fetch_one, args=(symbol, result), daemon=True)
         th.start()
@@ -482,27 +517,7 @@ def _fetch_all_summaries() -> list[dict]:
             ema20     = ta.trend.EMAIndicator(close, window=20).ema_indicator().iloc[-1]
             above_ema = latest_close > float(ema20)
 
-            # News fetch — separate 4s timeout
             headline = "No news"
-            news_result = {}
-
-            def _fetch_news(sym=symbol, nr=news_result):
-                try:
-                    t2 = yf.Ticker(f"{sym}.NS")
-                    news = t2.news
-                    if news:
-                        nr["title"] = (
-                            news[0].get("title")
-                            or (news[0].get("content") or {}).get("title")
-                            or ""
-                        )[:80]
-                except Exception:
-                    pass
-
-            nth = threading.Thread(target=_fetch_news, daemon=True)
-            nth.start()
-            nth.join(timeout=4.0)
-            headline = news_result.get("title", "No news") or "No news"
 
             summaries.append({
                 "symbol":      symbol,
@@ -517,7 +532,7 @@ def _fetch_all_summaries() -> list[dict]:
         except Exception as e:
             failed_symbols.append(f"{symbol}({str(e)[:40]})")
 
-    logger.info(f"✅ Fetched: {len(summaries)}/{len(NIFTY_50)} stocks")
+    logger.info(f"✅ Fetched: {len(summaries)}/{len(MIDCAP_50)} stocks")
     if timeout_symbols:
         logger.warning(f"⚠️  Timeouts ({len(timeout_symbols)}): {timeout_symbols}")
     if failed_symbols:

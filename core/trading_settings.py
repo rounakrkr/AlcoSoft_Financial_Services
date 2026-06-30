@@ -27,11 +27,21 @@ _mtime: float | None = None
 DEFAULTS: dict = {
     "risk": {
         "enable_risk_based_position_sizing": True,
-        "stop_loss_percent": 0.01,
+        "long_stop_loss_percent": 0.008,
+        "long_profit_target_percent": 0.015,
+        "short_stop_loss_percent": 0.005,
+        "short_profit_target_percent": 0.025,
+        "regime_filter_enabled": True,
+        "regime_bull_gap_pct": 0.006,
+        "regime_bear_gap_pct": -0.006,
+        "regime_strong_gap_min_pct": 0.40,
+        "regime_bull_breadth_pct": 0.30,
+        "regime_bear_breadth_pct": 0.50,
+        "long_exclude_gap_threshold": -0.008,
+        "short_target_gap_threshold": -0.008,
         "trailing_sl_percent": 0.008,
         "tsl_activation_ratio": 1.4,
         "tsl_mode_after_activation": True,
-        "target_rr_ratio": 2.0,
         "max_risk_per_trade": 0.02,
         "math_risk_per_trade": 0.05,
         "max_daily_loss_percent": 0.05,
@@ -42,7 +52,16 @@ DEFAULTS: dict = {
         "forced_buy_margin": False,
         "adaptive_safety_blocks_execution": False,
         "margin_leverage": 2.0,
-        "position_size_margin": 0.75,
+        "position_size_margin": 1.0,
+        "partial_exit_rsi_enabled": True,
+        "long_rsi_exit_threshold": 72.0,
+        "short_rsi_exit_threshold": 17.0,
+        "partial_exit_fraction": 1.0,
+        "partial_exit_mode": "full",
+        "disable_once_per_day_rule": True,
+        "partial_profit_booking_enabled": True,
+        "partial_profit_target_pct": 0.015,
+        "partial_profit_fraction": 1.0,
     },
     "strategy": {
         "strategy_type": "INTRADAY",
@@ -80,17 +99,34 @@ DEFAULTS: dict = {
 # UI schema for dashboard forms
 BASE_FIELD_SCHEMA: list[dict] = [
     {"section": "risk", "key": "enable_risk_based_position_sizing", "label": "Enable Risk-Based Position Sizing", "type": "bool", "hint": "When disabled, Rule B (risk-based quantity sizing) is ignored and quantity is calculated using only allocation and available margin limits."},
-    {"section": "risk", "key": "stop_loss_percent", "label": "Stop loss (%)", "type": "percent", "min": 0.1, "max": 10, "step": 0.1, "hint": "Hard SL distance below entry (e.g. 1 = 1%)"},
+    {"section": "risk", "key": "long_stop_loss_percent", "label": "🟢 Long Stop Loss (%)", "type": "percent", "min": 0.1, "max": 5.0, "step": 0.1, "hint": "Holy Grail Baseline: 0.8%"},
+    {"section": "risk", "key": "long_profit_target_percent", "label": "🟢 Long Profit Target (%)", "type": "percent", "min": 0.1, "max": 10.0, "step": 0.1, "hint": "Holy Grail Baseline: 1.5%"},
+    {"section": "risk", "key": "short_stop_loss_percent", "label": "🔴 Short Stop Loss (%)", "type": "percent", "min": 0.1, "max": 5.0, "step": 0.1, "hint": "Holy Grail Baseline: 0.5%"},
+    {"section": "risk", "key": "short_profit_target_percent", "label": "🔴 Short Profit Target (%)", "type": "percent", "min": 0.1, "max": 10.0, "step": 0.1, "hint": "Holy Grail Baseline: 2.5%"},
+    {"section": "risk", "key": "regime_bull_gap_pct", "label": "🐂 Bull Regime Index Gap (%)", "type": "percent", "min": 0.1, "max": 5.0, "step": 0.1, "hint": "Minimum stock UP gap required. Optimized: 0.6%"},
+    {"section": "risk", "key": "regime_bear_gap_pct", "label": "🐻 Bear Regime Index Gap (%)", "type": "percent", "min": -5.0, "max": -0.1, "step": 0.1, "hint": "Minimum stock DOWN gap required. Baseline: -0.6%"},
+    {"section": "risk", "key": "regime_bull_breadth_pct", "label": "🐂 Bull Regime Breadth (%)", "type": "percent", "min": 10, "max": 100, "step": 5, "hint": "% of Nifty50 stocks that must gap UP. Optimized: 30%"},
+    {"section": "risk", "key": "regime_bear_breadth_pct", "label": "🐻 Bear Regime Breadth (%)", "type": "percent", "min": 10, "max": 100, "step": 5, "hint": "% of Nifty50 stocks that must gap DOWN. Optimized: 50%"},
+    {"section": "risk", "key": "long_exclude_gap_threshold", "label": "No-Clash Long Exclude (%)", "type": "percent", "min": -5.0, "max": 0, "step": 0.1, "hint": "Long avoids stock if gap <= this. Baseline: -0.8%"},
+    {"section": "risk", "key": "short_target_gap_threshold", "label": "No-Clash Short Target (%)", "type": "percent", "min": -5.0, "max": 0, "step": 0.1, "hint": "Short requires stock gap <= this. Baseline: -0.8%"},
     {"section": "risk", "key": "trailing_sl_percent", "label": "Trailing SL (%)", "type": "percent", "min": 0.1, "max": 5, "step": 0.1, "hint": "Trail distance from peak price"},
-    
-    {"section": "risk", "key": "target_rr_ratio", "label": "Profit target (R:R)", "type": "float", "min": 1, "max": 5, "step": 0.1, "hint": "Target = risk × this ratio"},
     {"section": "risk", "key": "max_daily_loss_percent", "label": "Max daily loss (%)", "type": "percent", "min": 1, "max": 20, "step": 0.5, "hint": "Circuit breaker — stops ALL trading if daily P&L falls below this"},
     {"section": "risk", "key": "broker_sl_trigger_buffer_pct", "label": "Broker SL Buffer (%)", "type": "percent", "min": 0.1, "max": 5.0, "step": 0.1, "hint": "Distance from entry for the broker disaster SL trigger."},
     {"section": "risk", "key": "broker_sl_limit_offset_pct", "label": "Broker SL Limit Offset (%)", "type": "percent", "min": 0.01, "max": 2.0, "step": 0.01, "hint": "Distance below trigger for the limit price of the disaster SL."},
     {"section": "risk", "key": "max_risk_per_trade", "label": "AI agent risk / trade (%)", "type": "percent", "min": 0.5, "max": 10, "step": 0.5, "hint": "Max capital % risked per AI agent trade (cognitive signals)"},
+    {"section": "risk", "key": "partial_exit_rsi_enabled", "label": "Enable RSI Partial Exits", "type": "bool", "hint": "If true, exits partial position when RSI crosses extreme thresholds."},
+    {"section": "risk", "key": "long_rsi_exit_threshold", "label": "🟢 Long RSI Exit Threshold", "type": "float", "min": 50, "max": 95, "step": 1, "hint": "Exit Long if RSI >= this. Holy Grail Baseline: 72.0"},
+    {"section": "risk", "key": "short_rsi_exit_threshold", "label": "🔴 Short RSI Exit Threshold", "type": "float", "min": 5, "max": 50, "step": 1, "hint": "Exit Short if RSI <= this. Holy Grail Baseline: 17.0"},
+    {"section": "risk", "key": "partial_exit_fraction", "label": "RSI Exit Quantity Fraction", "type": "float", "min": 0.1, "max": 1.0, "step": 0.1, "hint": "Fraction of position to exit (1.0 = Full exit)."},
+    {"section": "risk", "key": "partial_exit_mode", "label": "RSI Partial Exit Mode", "type": "str", "hint": "full / half / dynamic"},
+    {"section": "risk", "key": "disable_once_per_day_rule", "label": "Disable Once-per-day Rule", "type": "bool", "hint": "Allow multiple trades per day on the same stock if true."},
+    {"section": "risk", "key": "partial_profit_booking_enabled", "label": "Enable Partial Profit Targets", "type": "bool", "hint": "If true, exits partial quantity at defined profit percentage."},
+    {"section": "risk", "key": "partial_profit_target_pct", "label": "Partial Profit Target (%)", "type": "percent", "min": 0.1, "max": 10.0, "step": 0.1, "hint": "Profit % to trigger partial exit."},
+    {"section": "risk", "key": "partial_profit_fraction", "label": "Profit Target Exit Fraction", "type": "float", "min": 0.1, "max": 1.0, "step": 0.1, "hint": "Quantity fraction to exit at profit target (1.0 = Full exit)."},
     {"section": "risk", "key": "math_risk_per_trade", "label": "Math watchlist risk / trade (%)", "type": "percent", "min": 0.5, "max": 10, "step": 0.5, "hint": "Max capital % risked per math/technical trade (slower orders)"},
     {"section": "risk", "key": "tsl_activation_ratio", "label": "TSL activation ratio", "type": "float", "min": 1.0, "max": 2.0, "step": 0.1, "hint": "TSL activates when profit reaches SL% × this ratio. Example: SL 0.5% + ratio 1.4 = activate at 0.7% profit"},
     {"section": "risk", "key": "paper_capital", "label": "Paper capital (₹)", "type": "int", "min": 1000, "max": 10000000, "step": 1000, "hint": "Total bankroll available for trading (used for position sizing)"},
+    {"section": "risk", "key": "regime_filter_enabled", "label": "Enable Market Regime Filter", "type": "bool-inline", "hint": "If ON, Longs only allowed on Bull days, Shorts only on Bear days."},
     {"section": "risk", "key": "tsl_mode_after_activation", "label": "TSL trailing mode (ON=Trailing, OFF=Locked)", "type": "bool", "hint": "ON: TSL moves up with price (trailing). OFF: TSL stays fixed at activation price (locked)."},
     {"section": "risk", "key": "adaptive_safety_blocks_execution", "label": "Adaptive safety blocks execution", "type": "bool", "hint": "ON lets adaptive safety suppress flagged strategy sets. OFF keeps alerts visible only, without blocking BUY/SELL execution."},
     {"section": "risk", "key": "allow_margin", "label": "🔴 Allow margin", "type": "bool", "hint": "⚠️ Turn this ON to use broker margin. Turn it OFF to trade with real capital only (recommended for safe mode)."},
@@ -251,7 +287,10 @@ def validate_updates(updates: dict) -> tuple[dict, list[str]]:
 
 def _coerce(spec: dict, raw: Any) -> Any:
     t = spec["type"]
-    if t == "bool":
+    if t == "text":
+        return str(raw).strip()
+
+    if t == "bool" or t == "bool-inline":
         if isinstance(raw, bool):
             return raw
         return str(raw).lower() in ("1", "true", "yes", "on")
@@ -263,9 +302,9 @@ def _coerce(spec: dict, raw: Any) -> Any:
 
     if t == "percent":
         v = float(raw)
-        if v > 1 and v <= 100:
+        if v > 1 or v < -1:
             v = v / 100.0
-        _range_check(spec, v * 100 if spec.get("max", 1) > 1 else v)
+        _range_check(spec, v * 100.0)
         return round(v, 6)
 
     if t == "float":

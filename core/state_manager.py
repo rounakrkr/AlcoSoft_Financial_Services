@@ -241,6 +241,15 @@ def initialize_daily_capital():
                     logger.info("Initialized PAPER capital from config: ₹%.2f", capital_start)
             else:
                 # LIVE mode
+                # ── Off-Market Bypass for LIVE Mode ──
+                from core.market_calendar import is_trading_day
+                from datetime import time as dt_time
+                now = datetime.now()
+                t = now.time()
+                if not is_trading_day(now.date()) or not (dt_time(8, 45) <= t <= dt_time(15, 30)):
+                    # Outside market hours: skip broker API fetch to prevent stale errors/log spam
+                    return
+
                 from core.order_executor import _get_available_capital
                 avail = _get_available_capital(force_refresh=True)
                 gross = get_today_gross_pnl()
@@ -413,7 +422,7 @@ def save_open_position(trade_data: dict):
                 datetime.now().strftime("%Y-%m-%d"),
                 symbol,
                 trade_data.get("trading_symbol", symbol),
-                "BUY",
+                trade_data.get("action", "LONG"),
                 quantity,
                 entry_price,
                 stop_loss,
@@ -559,8 +568,9 @@ def close_position(
 
         entry_price = safe_float(row["entry_price"], 0.0)
         quantity = safe_int(row["quantity"], 0)
+        direction = row["action"] if "action" in row.keys() else "LONG"
         
-        gross_pnl = (exit_price - entry_price) * quantity
+        gross_pnl = (exit_price - entry_price) * quantity if direction == "LONG" else (entry_price - exit_price) * quantity
         txn_costs = calculate_transaction_costs(entry_price, exit_price, quantity)
         pnl = gross_pnl - txn_costs
         
@@ -594,6 +604,83 @@ def close_position(
         pnl,
         reason,
         exit_price_source,
+    )
+    return True
+
+
+def partial_close_position(
+    symbol: str,
+    exit_price: float,
+    exit_qty: int,
+    reason: str = "PARTIAL_EXIT",
+    exit_price_source: str = "unknown",
+    reconciliation_status: str | None = None
+) -> bool:
+    now = datetime.now().isoformat()
+    symbol = str(symbol or "").strip().upper()
+    exit_price = safe_float(exit_price, 0.0)
+    exit_qty = safe_int(exit_qty, 0)
+    if not symbol or exit_qty <= 0:
+        return False
+
+    with _get_conn() as conn:
+        row = conn.execute("""
+            SELECT * FROM trades
+            WHERE symbol = ? AND status = 'OPEN'
+            ORDER BY id DESC LIMIT 1
+        """, (symbol,)).fetchone()
+
+        if not row:
+            logger.warning("No open position for %s", symbol)
+            return False
+
+        entry_price = safe_float(row["entry_price"], 0.0)
+        current_qty = safe_int(row["quantity"], 0)
+        
+        if exit_qty >= current_qty:
+            logger.warning("partial_close_position called with exit_qty >= current_qty. Deferring to full close.")
+            return close_position(symbol, exit_price, reason, exit_price_source, reconciliation_status)
+            
+        remaining_qty = current_qty - exit_qty
+        direction = row["action"] if "action" in row.keys() else "LONG"
+        
+        gross_pnl = (exit_price - entry_price) * exit_qty if direction == "LONG" else (entry_price - exit_price) * exit_qty
+        txn_costs = calculate_transaction_costs(entry_price, exit_price, exit_qty)
+        pnl = gross_pnl - txn_costs
+        
+        logger.info(f"FX12 Txn Costs applied for {symbol} (Partial): Gross=₹{gross_pnl:.2f}, Costs=₹{txn_costs:.2f}, Net=₹{pnl:.2f}")
+
+        # Reduce existing open row
+        conn.execute("""
+            UPDATE trades
+            SET quantity = ?
+            WHERE id = ?
+        """, (remaining_qty, row["id"]))
+        
+        # Insert closed row for the partial exit
+        conn.execute("""
+            INSERT INTO trades (
+                date, time, symbol, status,
+                entry_price, quantity,
+                stop_loss, exit_price, pnl,
+                strategy,
+                exit_time, confidence, notes,
+                trading_symbol, exit_price_source, reconciliation_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            row["date"], row["time"], row["symbol"], "CLOSED",
+            row["entry_price"], exit_qty,
+            row["stop_loss"], exit_price, pnl,
+            row["strategy"],
+            now, row["confidence"], (str(row["notes"] or "") + f" | {reason}").strip(" | "),
+            row["trading_symbol"], exit_price_source, reconciliation_status
+        ))
+
+    _update_positions_json()
+    _update_daily_stats()
+    logger.info(
+        "Position partially closed: %s | %s | Qty: %d/%d | P&L: %.2f | %s | price_source=%s",
+        symbol, exit_price, exit_qty, current_qty, pnl, reason, exit_price_source
     )
     return True
 
@@ -799,12 +886,30 @@ def get_today_gross_pnl() -> float:
     return safe_float(get_today_stats().get("gross_pnl"), 0.0)
 
 
+def has_completed_trade_today(symbol: str) -> bool:
+    """Check if the given symbol has a fully completed trade cycle today."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    symbol = str(symbol or "").strip().upper()
+    try:
+        with _get_conn() as conn:
+            row = conn.execute("""
+                SELECT 1 FROM trades
+                WHERE symbol = ? AND date = ? AND action IN ('LONG', 'SHORT', 'BUY')
+                AND status IN ('CLOSED', 'STOPPED', 'BROKER_RECONCILED_CLOSED', 'SL_PLACEMENT_FAILED')
+                LIMIT 1
+            """, (symbol, today)).fetchone()
+            return row is not None
+    except sqlite3.DatabaseError as exc:
+        logger.error("Completed trade check failed for %s: %s", symbol, exc)
+        return True
+
+
 def get_recent_trades(days: int = 7) -> list[dict]:
     try:
         with _get_conn() as conn:
             rows = conn.execute("""
                 SELECT * FROM trades
-                WHERE status IN ('CLOSED', 'STOPPED')
+                WHERE status IN ('CLOSED', 'STOPPED', 'BROKER_RECONCILED_CLOSED', 'SL_PLACEMENT_FAILED')
                 ORDER BY id DESC LIMIT ?
             """, (safe_int(days, 7) * 10,)).fetchall()
             return [dict(row) for row in rows]
@@ -921,14 +1026,18 @@ def validate_briefing(briefing: dict | None) -> tuple[bool, str]:
             logger.warning(f"[BRIEFING] Validation REJECTED: watchlist[{i}] is not a dict")
             return False, f"Stock {i} in watchlist must be dict"
     
-    # F018: Check briefing staleness — reject briefings older than 14 hours
+    # F018: Check briefing staleness — only alert on trading days if >24 hours old
     generated_at = briefing.get('generated_at') or briefing.get('timestamp')
     if generated_at:
         try:
-            from datetime import datetime
+            from datetime import date
+            from core.market_calendar import is_trading_day
+            
             gen_time = datetime.fromisoformat(str(generated_at))
             age_hours = (datetime.now() - gen_time).total_seconds() / 3600
-            if age_hours > 14:
+            
+            # Only alert on trading days (not weekends or NSE holidays)
+            if is_trading_day(date.today()) and age_hours > 24:
                 logger.warning(
                     '[BRIEFING] STALE: Generated %.1f hours ago (%s). '
                     'Screener may have failed to run today.',
@@ -942,7 +1051,10 @@ def validate_briefing(briefing: dict | None) -> tuple[bool, str]:
                     )
                 except Exception:
                     pass
-                # Don't reject — but flag it so the system can be more conservative
+                briefing.setdefault('_stale_warning', True)
+            elif not is_trading_day(date.today()) and age_hours > 24:
+                # Silently flag on weekends/holidays — screener doesn't run anyway
+                logger.debug('[BRIEFING] Briefing %.1f hours old (non-trading day, expected).', age_hours)
                 briefing.setdefault('_stale_warning', True)
         except Exception as e:
             logger.debug('Could not parse briefing timestamp: %s', e)

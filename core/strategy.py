@@ -38,7 +38,7 @@ from core.data_fetcher import (
     has_enough_history,
 )
 from core.order_executor import (
-    place_buy_order,
+    place_entry_order,
     place_sell_order,
     check_stop_losses,
     check_profit_targets,
@@ -47,11 +47,13 @@ from core.order_executor import (
     check_max_daily_loss,
     attempt_broker_sl_recovery,  # F002: retry missing broker SL orders each loop
 )
+from core.regime_filter import is_bull_day as _regime_is_bull_day, is_bear_day as _regime_is_bear_day
 from core.state_manager import (
     load_briefing,
     get_open_positions,
     entries_are_enabled,
     get_trading_session_state,
+    has_completed_trade_today,
 )
 from core.trading_settings import get as cfg, get_section
 from core.safe_io import atomic_write_json, safe_float, safe_int
@@ -386,125 +388,179 @@ def _mark_yfinance_failed(symbol: str, reason: str) -> None:
 
 
 # ════════════════════════════════════════════════════════════
-#   YFINANCE CANDLE SOURCE - FIXED FOR .NS SYMBOLS
-#   Uses multiple retry strategies to fetch historical data.
-#   Critical for building indicators (RSI, MACD, EMA, Bollinger).
+#   UPSTOX CANDLE SOURCE  (replaces Yahoo Finance)
+#
+#   Uses Upstox v2 Historical Candle API:
+#   GET https://api.upstox.com/v2/historical-candle/{key}/5minute/{to}/{from}
+#
+#   Instrument keys loaded from data/upstox_tokens.json.
+#   UPSTOX_ACCESS_TOKEN from .env.
+#
+#   Drop-in replacement for _fetch_yahoo_history + _fetch_yfinance_with_retry.
+#   Return format: pd.DataFrame with columns Open/High/Low/Close/Volume (TZ-naive IST).
 # ════════════════════════════════════════════════════════════
-def _yahoo_chart_symbol(symbol: str) -> str:
-    symbol = str(symbol or "").strip().upper()
-    if symbol.startswith("^") or "." in symbol:
-        return symbol
-    return f"{symbol}.NS"
+
+_UPSTOX_TOKEN: str = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip("'\" ")
+_UPSTOX_HEADERS: dict = {
+    "Accept": "application/json",
+    "Authorization": f"Bearer {_UPSTOX_TOKEN}",
+}
+
+# Instrument key cache: {"RELIANCE": "NSE_EQ|INE002A01018", ...}
+_instrument_key_cache: dict[str, str] = {}
+_instrument_key_cache_loaded: bool = False
 
 
-def _fetch_yahoo_history(symbol: str, period: str, interval: str, timeout: float = 8.0) -> pd.DataFrame:
-    """
-    Fetch candles from Yahoo's chart endpoint without yfinance's crumb flow.
+def _load_instrument_keys() -> dict[str, str]:
+    """Load instrument key map from data/upstox_tokens.json.
+    Falls back to downloading from Upstox if file is missing or empty."""
+    global _instrument_key_cache, _instrument_key_cache_loaded
+    if _instrument_key_cache_loaded:
+        return _instrument_key_cache
 
-    yfinance can poison the crumb as "Edge: Too Many Requests"; the chart endpoint
-    itself still returns valid OHLCV JSON without that crumb.
-    """
-    yahoo_symbol = _yahoo_chart_symbol(symbol)
-    response = requests.get(
-        YAHOO_CHART_URL.format(symbol=quote(yahoo_symbol, safe="")),
-        params={
-            "range": period,
-            "interval": interval,
-            "includePrePost": "false",
-            "events": "div,splits,capitalGains",
-        },
-        headers=YAHOO_HEADERS,
-        timeout=timeout,
+    tokens_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data", "upstox_tokens.json"
     )
+    try:
+        with open(tokens_path, "r") as f:
+            import json as _json
+            data = _json.load(f)
+        if isinstance(data, dict) and data:
+            _instrument_key_cache = {k.upper(): v for k, v in data.items()}
+            _instrument_key_cache_loaded = True
+            logger.info("[Upstox] Loaded %d instrument keys from tokens file.", len(_instrument_key_cache))
+            return _instrument_key_cache
+    except Exception as e:
+        logger.warning("[Upstox] Could not load upstox_tokens.json: %s — will attempt live download.", e)
+
+    # Fallback: download from Upstox instruments CSV
+    try:
+        import gzip
+        from io import BytesIO
+        resp = requests.get(
+            "https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz",
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=15,
+        )
+        resp.raise_for_status()
+        with gzip.open(BytesIO(resp.content), "rt") as f:
+            import csv as _csv
+            reader = _csv.DictReader(f)
+            mapping: dict[str, str] = {}
+            sym_col = None
+            for row in reader:
+                if sym_col is None:
+                    sym_col = "tradingsymbol" if "tradingsymbol" in row else "trading_symbol"
+                sym = str(row.get(sym_col, "")).replace("-EQ", "").upper()
+                key = str(row.get("instrument_key", ""))
+                if sym and key and "NSE" in key:
+                    mapping[sym] = key
+        _instrument_key_cache = mapping
+        _instrument_key_cache_loaded = True
+        logger.info("[Upstox] Downloaded %d instrument keys.", len(mapping))
+    except Exception as e:
+        logger.error("[Upstox] Instrument key download failed: %s", e)
+
+    return _instrument_key_cache
+
+
+def _get_upstox_instrument_key(symbol: str) -> str | None:
+    """Resolve NSE symbol to Upstox instrument_key. e.g. 'RELIANCE' → 'NSE_EQ|INE002A01018'."""
+    clean = symbol.upper().replace(".NS", "")
+    keys  = _load_instrument_keys()
+    return keys.get(clean)
+
+
+def _fetch_upstox_history(symbol: str, days: int = 5, interval: str = "5minute") -> pd.DataFrame:
+    """
+    Fetch historical candles from Upstox API for indicator seeding.
+    Returns pd.DataFrame with columns: Open, High, Low, Close, Volume (TZ-naive IST index).
+    Raises RuntimeError on failure so callers can mark the symbol WAIT.
+    """
+    instrument_key = _get_upstox_instrument_key(symbol)
+    if not instrument_key:
+        raise RuntimeError(f"[Upstox] No instrument_key found for {symbol}. Check upstox_tokens.json.")
+
+    from datetime import timedelta
+    to_date   = datetime.now().strftime("%Y-%m-%d")
+    from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    # Upstox API v2 no longer natively supports "5minute", so we fetch 1minute and resample.
+    api_interval = "1minute" if interval == "5minute" else interval
+
+    url = f"https://api.upstox.com/v2/historical-candle/{instrument_key}/{api_interval}/{to_date}/{from_date}"
+    try:
+        response = requests.get(url, headers=_UPSTOX_HEADERS, timeout=10)
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"[Upstox] Network error fetching {symbol}: {e}")
+
+    if response.status_code == 401:
+        raise RuntimeError(f"[Upstox] Auth error for {symbol} — check UPSTOX_ACCESS_TOKEN in .env")
     if response.status_code == 429:
-        raise RuntimeError("Too Many Requests. Rate limited.")
-    response.raise_for_status()
+        raise RuntimeError(f"[Upstox] Rate limited for {symbol}")
+    if response.status_code != 200:
+        raise RuntimeError(f"[Upstox] HTTP {response.status_code} for {symbol}")
 
-    chart = response.json().get("chart", {})
-    error = chart.get("error")
-    if error:
-        raise RuntimeError(error.get("description") or error.get("code") or "Yahoo chart error")
+    data = response.json()
+    candles = (data.get("data") or {}).get("candles") or []
+    if not candles:
+        raise RuntimeError(f"[Upstox] Empty candle response for {symbol}")
 
-    results = chart.get("result") or []
-    if not results:
-        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+    # Candle format: [timestamp, open, high, low, close, volume, oi]
+    rows = []
+    for c in candles:
+        try:
+            ts  = pd.to_datetime(c[0]).tz_convert("Asia/Kolkata").tz_localize(None)
+            rows.append({
+                "Open":   float(c[1]),
+                "High":   float(c[2]),
+                "Low":    float(c[3]),
+                "Close":  float(c[4]),
+                "Volume": float(c[5]),
+                "_ts":    ts,
+            })
+        except Exception:
+            continue
 
-    result = results[0]
-    timestamps = result.get("timestamp") or []
-    quote_rows = ((result.get("indicators") or {}).get("quote") or [{}])
-    quote_data = quote_rows[0] if quote_rows else {}
-    if not timestamps or not quote_data:
-        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+    if not rows:
+        raise RuntimeError(f"[Upstox] Could not parse any candles for {symbol}")
 
-    arrays = {
-        "open": quote_data.get("open") or [],
-        "high": quote_data.get("high") or [],
-        "low": quote_data.get("low") or [],
-        "close": quote_data.get("close") or [],
-        "volume": quote_data.get("volume") or [],
-    }
-    lengths = {"timestamp": len(timestamps), **{name: len(values) for name, values in arrays.items()}}
-    if any(length != len(timestamps) for length in lengths.values()):
-        raise RuntimeError(f"Yahoo chart length mismatch for {symbol}: {lengths}")
-
-    index = pd.to_datetime(timestamps, unit="s", utc=True)
-    exchange_tz = ((result.get("meta") or {}).get("exchangeTimezoneName") or "Asia/Kolkata")
-    index = index.tz_convert(exchange_tz)
-    # F003: Normalize to tz-naive to prevent mismatch with WebSocket candles
-    if hasattr(index, 'tz') and index.tz is not None:
-        index = index.tz_localize(None)
-
-    frame = pd.DataFrame(
-        {
-            "Open": arrays["open"],
-            "High": arrays["high"],
-            "Low": arrays["low"],
-            "Close": arrays["close"],
-            "Volume": arrays["volume"],
-        },
-        index=index,
-    )
-    for column in ("Open", "High", "Low", "Close", "Volume"):
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    frame = frame.dropna(subset=["Close"])
-    return _drop_incomplete_candle_if_present(frame, interval=interval)
+    df = pd.DataFrame(rows).set_index("_ts").sort_index()
+    df = df[~df.index.duplicated(keep="first")]
+    df = df.dropna(subset=["Close"])
+    
+    # Resample to 5-minute if requested
+    if interval == "5minute":
+        df = df.resample("5min").agg({
+            "Open": "first",
+            "High": "max",
+            "Low": "min",
+            "Close": "last",
+            "Volume": "sum"
+        }).dropna(subset=["Close"])
+        
+    logger.info("[Upstox] %s — fetched %d %s candles", symbol, len(df), interval)
+    return df
 
 
 def _fetch_yfinance_with_retry(symbol: str, max_attempts: int = 2) -> pd.DataFrame:
     """
-    Fetch Yahoo chart data with multiple retry strategies for Yahoo .NS symbols.
-
-    Attempt 1: period="5d", interval="5m" (preferred)
-    Attempt 2: period="1d", interval="1h" (shorter retry window)
-
-    REQUIREMENT: Gets historical data from the same chart JSON source used by
-    the morning screener, without yfinance's crumb flow.
+    MIGRATED: Now fetches from Upstox instead of Yahoo Finance.
+    Kept same name for backward compatibility with all callers.
+    Tries 5-day 5-minute data first; falls back to 7-day if empty.
     """
-    attempts = [
-        ("5d", "5m"),   # 5 days of 5-min candles (preferred)
-        ("1d", "1h"),   # 1 day of hourly candles (shorter retry window)
-    ]
-
-    last_error = None
-    for attempt_num, (period, interval) in enumerate(attempts[:max_attempts], 1):
+    for days in [5, 7]:
         try:
-            hist = _fetch_yahoo_history(symbol, period=period, interval=interval)
-            if not hist.empty:
-                logger.info(f"✅ {symbol} — Yahoo chart fetched {len(hist)} {interval} candles (attempt {attempt_num})")
-                return hist
-            else:
-                last_error = ValueError(f"Empty result for {symbol}: period={period}, interval={interval}")
-        except Exception as e:
-            last_error = e
-            logger.debug(f"  {symbol} Yahoo chart attempt {attempt_num} failed: {type(e).__name__}")
+            df = _fetch_upstox_history(symbol, days=days, interval="5minute")
+            if not df.empty:
+                logger.info("✅ %s — Upstox chart fetched %d 5min candles (%dd window)", symbol, len(df), days)
+                return df
+        except RuntimeError as e:
+            logger.debug("  %s Upstox attempt (days=%d) failed: %s", symbol, days, e)
             continue
 
-    logger.critical(
-        f"{symbol} - No historical data available from Yahoo chart | Last error: {type(last_error).__name__}: {str(last_error)}"
-    )
     raise RuntimeError(
-        f"{symbol}: Cannot bootstrap indicators - Yahoo chart failed. "
-        f"Last error: {type(last_error).__name__}: {str(last_error)}"
+        f"{symbol}: Cannot bootstrap indicators — Upstox fetch failed for all window sizes."
     )
 
 
@@ -514,10 +570,10 @@ def _get_candles_with_yfinance_seed(symbol: str) -> list[dict]:
 
     Priority:
     1. Use completed live WebSocket candles if enough are already available.
-    2. Use cached yfinance seed data.
-    3. Fetch fresh yfinance seed data with retries.
+    2. Use cached Upstox seed data.
+    3. Fetch fresh Upstox seed data with retries.
 
-    No secondary market-data provider is used. If yfinance cannot provide data,
+    No secondary market-data provider is used. If Upstox cannot provide data,
     the caller marks the symbol WAIT instead of placing a trade.
     """
     candles = get_candle_history(symbol)
@@ -527,34 +583,29 @@ def _get_candles_with_yfinance_seed(symbol: str) -> list[dict]:
         _yfinance_cache.pop(symbol, None)  # Clear cache, we're self-sufficient
         return candles
 
-    # If we have cached yfinance data, use it (F003: deduplicate at stitch boundary)
+    # If we have cached Upstox seed data, use it (deduplicate at stitch boundary)
     if symbol in _yfinance_cache:
-        cached_yf = _yfinance_cache[symbol]
-        ws_buckets = {c["bucket"] for c in candles if c.get("bucket")}
-        yf_unique  = [c for c in cached_yf if c.get("bucket") not in ws_buckets]
-        merged = yf_unique + candles
+        cached_seed = _yfinance_cache[symbol]
+        ws_buckets  = {c["bucket"] for c in candles if c.get("bucket")}
+        seed_unique = [c for c in cached_seed if c.get("bucket") not in ws_buckets]
+        merged = seed_unique + candles
         if len(merged) >= 26:
             return merged
 
-    # If Yahoo failed recently, avoid hammering it every strategy loop.
+    # If Upstox fetch failed recently, avoid hammering it every strategy loop.
     if _is_yfinance_on_cooldown(symbol):
         return candles
 
-    # Try to fetch fresh yfinance data with proper retry logic.
+    # Fetch fresh Upstox data
     hist = _fetch_yfinance_with_retry(symbol, max_attempts=2)
 
     if not hist.empty:
-        # Convert to our candle format (drop any still-building candle)
         hist = _drop_incomplete_candle_if_present(hist)
 
-        # F003 FIX: Include bucket timestamp in Yahoo candle dicts.
-        # This enables deduplication at the stitch boundary where Yahoo 5m
-        # candles overlap with WebSocket candles built since market open.
-        # Without deduplication, indicators (RSI/MACD/EMA/BB) receive repeated
-        # rows which corrupts all values computed on the merged history.
-        yf_candles = [
+        # Convert to our candle format with bucket key for deduplication
+        seed_candles = [
             {
-                "bucket": ts.strftime("%Y-%m-%d %H:%M"),   # matches WebSocket bucket_key format
+                "bucket": ts.strftime("%Y-%m-%d %H:%M"),
                 "open":   float(row["Open"]),
                 "high":   float(row["High"]),
                 "low":    float(row["Low"]),
@@ -564,33 +615,26 @@ def _get_candles_with_yfinance_seed(symbol: str) -> list[dict]:
             for ts, row in hist.iterrows()
         ]
 
-        # Cache it (with bucket keys so cached-path stitch also deduplicates)
-        _yfinance_cache[symbol] = yf_candles
+        _yfinance_cache[symbol] = seed_candles
 
-        # Stitch: WebSocket candles take priority at the overlap boundary.
-        # Build a set of WebSocket buckets, then filter Yahoo candles to
-        # exclude any bucket already covered by a WebSocket candle.
-        ws_buckets = {c["bucket"] for c in candles if c.get("bucket")}
-        yf_unique  = [c for c in yf_candles if c.get("bucket") not in ws_buckets]
-
-        merged  = yf_unique + candles
-        dropped = len(yf_candles) - len(yf_unique)
+        ws_buckets  = {c["bucket"] for c in candles if c.get("bucket")}
+        seed_unique = [c for c in seed_candles if c.get("bucket") not in ws_buckets]
+        merged  = seed_unique + candles
+        dropped = len(seed_candles) - len(seed_unique)
         logger.info(
-            "📦 %s — Combined: %d yfinance + %d WebSocket = %d total candles "
-            "(dropped %d duplicate Yahoo candles at stitch boundary)",
-            symbol, len(yf_unique), len(candles), len(merged), dropped,
+            "📦 %s — Combined: %d Upstox + %d WebSocket = %d total candles "
+            "(dropped %d duplicate candles at stitch boundary)",
+            symbol, len(seed_unique), len(candles), len(merged), dropped,
         )
         return merged
     else:
-        # Empty result means yfinance did not raise, but still returned no data.
-        # This is still a failure condition - don't continue
         logger.critical(
-            f"❌ {symbol} — yfinance returned empty DataFrame (symbol may not exist on Yahoo Finance). "
-            f"Marking symbol WAIT due to insufficient historical data."
+            "❌ %s — Upstox returned empty DataFrame. Marking symbol WAIT.", symbol
         )
         raise RuntimeError(
-            f"{symbol}: yfinance returned empty result. Cannot proceed without historical data for indicators."
+            f"{symbol}: Upstox returned empty result. Cannot proceed without historical data for indicators."
         )
+
 
 
 def _get_indicator_df(symbol: str) -> pd.DataFrame | None:
@@ -627,9 +671,7 @@ def _get_indicator_df(symbol: str) -> pd.DataFrame | None:
 def _get_pattern_df(symbol: str) -> pd.DataFrame | None:
     """Candlestick patterns — WebSocket-built candles only (real-time)."""
     ws_candles = get_candle_history(symbol, include_current=False)
-    # F028: Need at least 6 candles for reliable pattern detection
-    min_required = max(MIN_WS_CANDLES_FOR_PATTERNS, 6)
-    if len(ws_candles) < min_required:
+    if len(ws_candles) < MIN_WS_CANDLES_FOR_PATTERNS:
         return None
     return pd.DataFrame(ws_candles).astype({
         "open": float, "high": float,
@@ -1372,20 +1414,224 @@ def condition_price_below_ema20(ctx: StrategyEvaluationContext) -> dict:
     return _price_below_column_condition(ctx.indicator_df, "ema20", "Price below EMA20")
 
 
-def condition_close_2_below_ema20(ctx: StrategyEvaluationContext) -> dict:
+def condition_close_1_below_ema21(ctx: StrategyEvaluationContext) -> dict:
     df = ctx.indicator_df
-    # iloc[-1] is current candle, iloc[-2] is 1 candle ago, iloc[-3] is 2 candles ago (Close(2) in Streak)
-    if len(df) < 3 or "ema20" not in df.columns or pd.isna(df["ema20"].iloc[-1]):
-        return _indicator_strategy_result("Close(2) < EMA20", False, "Indicators not ready")
+    # iloc[-1] is current live candle, iloc[-2] is the last completed candle (Close(1))
+    if len(df) < 2 or "ema21" not in df.columns or pd.isna(df["ema21"].iloc[-2]):
+        return _indicator_strategy_result("Close(1) < EMA21", False, "Indicators not ready")
     return _indicator_strategy_result(
-        "Close(2) < EMA20",
-        df["close"].iloc[-3] < df["ema20"].iloc[-1],
-        f"Close(2): {df['close'].iloc[-3]:.2f}, EMA20: {df['ema20'].iloc[-1]:.2f}"
+        "Close(1) < EMA21",
+        df["close"].iloc[-2] < df["ema21"].iloc[-2],
+        f"Close(1): {df['close'].iloc[-2]:.2f}, EMA21: {df['ema21'].iloc[-2]:.2f}"
     )
 
 
 def condition_price_above_vwap(ctx: StrategyEvaluationContext) -> dict:
     return _price_above_column_condition(ctx.indicator_df, "vwap", "Price above VWAP")
+
+
+def condition_price_above_vwap_closed(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2 or "close" not in df.columns or "vwap" not in df.columns or pd.isna(df["close"].iloc[-2]) or pd.isna(df["vwap"].iloc[-2]):
+        return _indicator_strategy_result("Close(Closed) > VWAP", False, "Indicators not ready")
+    close_2 = df["close"].iloc[-2]
+    vwap_2 = df["vwap"].iloc[-2]
+    return _indicator_strategy_result(
+        "Close(Closed) > VWAP",
+        bool(close_2 > vwap_2),
+        f"Close(Closed)={close_2:.2f}, VWAP={vwap_2:.2f}"
+    )
+
+
+def condition_ema20_above_vwap(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2 or "ema20" not in df.columns or "vwap" not in df.columns or pd.isna(df["ema20"].iloc[-2]) or pd.isna(df["vwap"].iloc[-2]):
+        return _indicator_strategy_result("EMA20 > VWAP", False, "Indicators not ready")
+    
+    ema20 = df["ema20"].iloc[-2]
+    vwap = df["vwap"].iloc[-2]
+    return _indicator_strategy_result(
+        "EMA20 > VWAP",
+        bool(ema20 > vwap),
+        f"EMA20(Closed)={ema20:.2f}, VWAP={vwap:.2f}"
+    )
+
+
+def condition_price_breakout_10(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 12 or "close" not in df.columns or "high" not in df.columns:
+        return _indicator_strategy_result("Close > Highest(High, 10)", False, "Not enough data")
+    
+    # Evaluate on the closed candle
+    closed_close = df["close"].iloc[-2]
+    # Highest high of the 10 candles BEFORE the closed candle
+    highest_10 = df["high"].iloc[-12:-2].max()
+    
+    return _indicator_strategy_result(
+        "Close > Highest(High, 10)",
+        bool(closed_close > highest_10),
+        f"Close(Closed)={closed_close:.2f}, Highest_10={highest_10:.2f}"
+    )
+
+
+def condition_rsi_above_60(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2 or "rsi" not in df.columns or pd.isna(df["rsi"].iloc[-2]):
+        return _indicator_strategy_result("RSI > 60", False, "RSI not ready")
+    
+    rsi = df["rsi"].iloc[-2]
+    return _indicator_strategy_result(
+        "RSI > 60",
+        bool(rsi > 60),
+        f"RSI(Closed)={rsi:.2f}"
+    )
+
+
+def condition_streak_close_1_above_vwap_0(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2 or "close" not in df.columns or "vwap" not in df.columns or pd.isna(df["close"].iloc[-2]) or pd.isna(df["vwap"].iloc[-1]):
+        return _indicator_strategy_result("Close(1) > VWAP(0)", False, "Indicators not ready")
+    close_1 = df["close"].iloc[-2]
+    vwap_0 = df["vwap"].iloc[-1]
+    return _indicator_strategy_result(
+        "Close(1) > VWAP(0)",
+        bool(close_1 > vwap_0),
+        f"Close(1)={close_1:.2f}, VWAP(0)={vwap_0:.2f}"
+    )
+
+
+def condition_streak_close_0_above_period_max_10(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 12 or "close" not in df.columns or "high" not in df.columns:
+        return _indicator_strategy_result("Close(0) > Max(High(-1), 10)", False, "Not enough data")
+    
+    close_0 = df["close"].iloc[-1]
+    # Highest high of 10 candles ending at the previous candle (-1)
+    # The previous candle is at index -2. 10 candles before it is -12 to -2
+    highest_10_prev = df["high"].iloc[-12:-2].max()
+    
+    return _indicator_strategy_result(
+        "Close(0) > Max(High(-1), 10)",
+        bool(close_0 > highest_10_prev),
+        f"Close(0)={close_0:.2f}, Max_High={highest_10_prev:.2f}"
+    )
+
+
+def condition_pullback_to_ema20_rejection(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 4 or "ema20" not in df.columns or "low" not in df.columns or "close" not in df.columns:
+        return _indicator_strategy_result("EMA20 Pullback Reject", False, "Not ready")
+    
+    # Low touched or dipped below EMA20 in the last 3 candles
+    recent_lows = df["low"].iloc[-4:-1]
+    recent_emas = df["ema20"].iloc[-4:-1]
+    touched_ema = bool((recent_lows <= recent_emas).any())
+    
+    # Current close is above EMA20
+    closed_above = df["close"].iloc[-1] > df["ema20"].iloc[-1]
+    
+    fired = touched_ema and closed_above
+    return _indicator_strategy_result("EMA20 Pullback Reject", fired, f"Touched: {touched_ema}, Closed Above: {closed_above}")
+
+
+def condition_close_above_open(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 1 or "close" not in df.columns or "open" not in df.columns:
+        return _indicator_strategy_result("Close > Open", False, "Not ready")
+    
+    close_val = df["close"].iloc[-1]
+    open_val = df["open"].iloc[-1]
+    fired = close_val > open_val
+    return _indicator_strategy_result("Close > Open", bool(fired), f"Close={close_val:.2f}, Open={open_val:.2f}")
+
+
+def condition_rsi_cooled_down(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 4 or "rsi" not in df.columns:
+        return _indicator_strategy_result("RSI Cooled Down", False, "Not ready")
+    
+    # RSI dipped below 55 recently, but is now ticking up
+    recent_rsi = df["rsi"].iloc[-4:-1]
+    dipped = bool((recent_rsi <= 55).any())
+    ticking_up = df["rsi"].iloc[-1] > df["rsi"].iloc[-2]
+    
+    fired = dipped and ticking_up
+    return _indicator_strategy_result("RSI Cooled Down", fired, f"Dipped<55: {dipped}, Ticking Up: {ticking_up}")
+
+
+def condition_volume_surge_3x(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2 or "volume" not in df.columns or "avg_vol" not in df.columns:
+        return _indicator_strategy_result("Volume 3x Surge", False, "Not ready")
+    
+    vol = df["volume"].iloc[-1]
+    avg_vol = df["avg_vol"].iloc[-1]
+    if pd.isna(avg_vol) or avg_vol == 0:
+        return _indicator_strategy_result("Volume 3x Surge", False, "Avg Vol is 0")
+        
+    surge = vol > (avg_vol * 3.0)
+    return _indicator_strategy_result("Volume 3x Surge", bool(surge), f"Vol: {vol}, Avg: {avg_vol}")
+
+
+def condition_macd_hist_rejection_bounce(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 4 or "macd" not in df.columns or "macd_signal" not in df.columns:
+        return _indicator_strategy_result("MACD Hist Reject", False, "Not ready")
+    
+    hist = df["macd"] - df["macd_signal"]
+    # hist(0) > hist(1), hist(1) < hist(2) -> It was dropping but bounced
+    hist_0 = hist.iloc[-1]
+    hist_1 = hist.iloc[-2]
+    hist_2 = hist.iloc[-3]
+    
+    bounced = (hist_0 > hist_1) and (hist_1 < hist_2)
+    above_zero = hist_0 > 0
+    
+    fired = bounced and above_zero
+    return _indicator_strategy_result("MACD Hist Reject", bool(fired), f"Bounced: {bounced}, >0: {above_zero}")
+
+
+def condition_streak_ema20_1_above_vwap_0(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2 or "ema20" not in df.columns or "vwap" not in df.columns or pd.isna(df["ema20"].iloc[-2]) or pd.isna(df["vwap"].iloc[-1]):
+        return _indicator_strategy_result("EMA20(1) > VWAP(0)", False, "Indicators not ready")
+    ema20_1 = df["ema20"].iloc[-2]
+    vwap_0 = df["vwap"].iloc[-1]
+    return _indicator_strategy_result(
+        "EMA20(1) > VWAP(0)",
+        bool(ema20_1 > vwap_0),
+        f"EMA20(1)={ema20_1:.2f}, VWAP(0)={vwap_0:.2f}"
+    )
+
+
+def condition_streak_rsi_1_above_61(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2 or "rsi" not in df.columns or pd.isna(df["rsi"].iloc[-2]):
+        return _indicator_strategy_result("RSI(1) > 61", False, "Indicators not ready")
+    rsi_1 = df["rsi"].iloc[-2]
+    return _indicator_strategy_result(
+        "RSI(1) > 61",
+        bool(rsi_1 > 61),
+        f"RSI(1)={rsi_1:.2f}"
+    )
+
+
+def condition_streak_close_0_above_period_max_10(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 12 or "close" not in df.columns or "high" not in df.columns:
+        return _indicator_strategy_result("Close(0) > Max(High(-1), 10)", False, "Not enough data")
+    
+    close_0 = df["close"].iloc[-1]
+    # Highest high of 10 candles ending at the previous candle (-1)
+    # The previous candle is at index -2. 10 candles before it is -12 to -2
+    highest_10_prev = df["high"].iloc[-12:-2].max()
+    
+    return _indicator_strategy_result(
+        "Close(0) > Max(High(-1), 10)",
+        bool(close_0 > highest_10_prev),
+        f"Close(0)={close_0:.2f}, Max_High={highest_10_prev:.2f}"
+    )
+
 
 
 def condition_median_price_above_vwap(ctx: StrategyEvaluationContext) -> dict:
@@ -1493,6 +1739,8 @@ def condition_macd_bearish_cross(ctx: StrategyEvaluationContext) -> dict:
 
 
 def condition_bearish_pattern(ctx: StrategyEvaluationContext) -> dict:
+    if ctx.pattern_df is None or ctx.pattern_df.empty:
+        return _indicator_strategy_result("Bearish Pattern", False, "Not enough pattern data")
     return strategy_sell_bearish_engulfing(ctx.pattern_df)
 
 
@@ -1621,6 +1869,264 @@ def condition_ema9_below_ema21(ctx: StrategyEvaluationContext) -> dict:
         fired,
         f"EMA9={ema9_f}, EMA21={ema21_f} — {'bearish structure ✓' if fired else 'still bullish'}",
     )
+
+
+# ── SHORT SELLING CONDITIONS ─────────────────────────────────────────────────
+# Mirror of BUY_STREAK_MOMENTUM_BREAKOUT — same strictness, downside direction.
+# Used by SHORT_STREAK_MOMENTUM_BREAKDOWN (entry) and SHORT_STREAK_MOMENTUM_RECOVERY (cover).
+
+
+def condition_streak_close_1_below_vwap_0(ctx: StrategyEvaluationContext) -> dict:
+    """STATE — Close(1) < VWAP(0): Previous closed candle below VWAP (mirror of close_1_above_vwap_0)"""
+    df = ctx.indicator_df
+    if len(df) < 2 or "close" not in df.columns or "vwap" not in df.columns or pd.isna(df["close"].iloc[-2]) or pd.isna(df["vwap"].iloc[-1]):
+        return _indicator_strategy_result("Close(1) < VWAP(0)", False, "Indicators not ready")
+    close_1 = df["close"].iloc[-2]
+    vwap_0  = df["vwap"].iloc[-1]
+    return _indicator_strategy_result(
+        "Close(1) < VWAP(0)",
+        bool(close_1 < vwap_0),
+        f"Close(1)={close_1:.2f}, VWAP(0)={vwap_0:.2f}"
+    )
+
+
+def condition_streak_ema20_1_below_vwap_0(ctx: StrategyEvaluationContext) -> dict:
+    """STATE — EMA20(1) < VWAP(0): Previous EMA20 below VWAP (mirror of ema20_1_above_vwap_0)"""
+    df = ctx.indicator_df
+    if len(df) < 2 or "ema20" not in df.columns or "vwap" not in df.columns or pd.isna(df["ema20"].iloc[-2]) or pd.isna(df["vwap"].iloc[-1]):
+        return _indicator_strategy_result("EMA20(1) < VWAP(0)", False, "Indicators not ready")
+    ema20_1 = df["ema20"].iloc[-2]
+    vwap_0  = df["vwap"].iloc[-1]
+    return _indicator_strategy_result(
+        "EMA20(1) < VWAP(0)",
+        bool(ema20_1 < vwap_0),
+        f"EMA20(1)={ema20_1:.2f}, VWAP(0)={vwap_0:.2f}"
+    )
+
+
+def condition_streak_rsi_1_below_39(ctx: StrategyEvaluationContext) -> dict:
+    """STATE — RSI(1) < 39: Previous candle RSI below 39 (mirror of rsi_1_above_61)"""
+    df = ctx.indicator_df
+    if len(df) < 2 or "rsi" not in df.columns or pd.isna(df["rsi"].iloc[-2]):
+        return _indicator_strategy_result("RSI(1) < 39", False, "Indicators not ready")
+    rsi_1 = df["rsi"].iloc[-2]
+    return _indicator_strategy_result(
+        "RSI(1) < 39",
+        bool(rsi_1 < 39),
+        f"RSI(1)={rsi_1:.2f}"
+    )
+
+
+def condition_close_0_above_ema9(ctx: StrategyEvaluationContext) -> dict:
+    """EVENT — Close(0) > EMA(9): Short engine dynamic bail-out (Savior Exit)."""
+    df = ctx.indicator_df
+    if len(df) < 1 or "close" not in df.columns or "ema9" not in df.columns or pd.isna(df["ema9"].iloc[-1]):
+        return _indicator_strategy_result("Close(0) > EMA(9)", False, "Indicators not ready")
+    close_0 = df["close"].iloc[-1]
+    ema9_0 = df["ema9"].iloc[-1]
+    return _indicator_strategy_result(
+        "Close(0) > EMA(9)",
+        bool(close_0 > ema9_0),
+        f"Close(0)={close_0:.2f}, EMA9(0)={ema9_0:.2f}"
+    )
+
+def condition_streak_close_0_below_period_min_10(ctx: StrategyEvaluationContext) -> dict:
+    """EVENT — Close(0) < Min(Low(-1), 10): Current candle broke 10-period low (mirror of close_0_above_period_max_10).
+    This is the GATEKEEPER — same strictness as HIGH break for longs."""
+    df = ctx.indicator_df
+    if len(df) < 12 or "close" not in df.columns or "low" not in df.columns:
+        return _indicator_strategy_result("Close(0) < Min(Low(-1), 10)", False, "Not enough data")
+    close_0 = df["close"].iloc[-1]
+    # Lowest low of 10 candles ending at the previous candle (-1)
+    # The previous candle is at index -2. 10 candles before it is -11 to -1
+    lowest_10_prev = df["low"].iloc[-11:-1].min()
+    return _indicator_strategy_result(
+        "Close(0) < Min(Low(-1), 10)",
+        bool(close_0 < lowest_10_prev),
+        f"Close(0)={close_0:.2f}, Min_Low={lowest_10_prev:.2f}"
+    )
+
+
+def condition_streak_close_0_not_reversing(ctx: StrategyEvaluationContext) -> dict:
+    """EVENT — Close(0) <= High(-1): Current candle is not reversing upward against the short trend."""
+    df = ctx.indicator_df
+    if len(df) < 2 or "close" not in df.columns or "high" not in df.columns:
+        return _indicator_strategy_result("Close(0) <= High(-1)", False, "Not enough data")
+    close_0 = df["close"].iloc[-1]
+    high_1 = df["high"].iloc[-2]
+    return _indicator_strategy_result(
+        "Close(0) <= High(-1)",
+        bool(close_0 <= high_1),
+        f"Close(0)={close_0:.2f}, High(-1)={high_1:.2f}"
+    )
+
+
+def condition_streak_close_0_near_vwap(ctx: StrategyEvaluationContext) -> dict:
+    """STATE — Close(0) >= VWAP(0) * 0.988: Block late entries when price is too stretched from VWAP."""
+    df = ctx.indicator_df
+    if len(df) < 1 or "close" not in df.columns or "vwap" not in df.columns or pd.isna(df["vwap"].iloc[-1]):
+        return _indicator_strategy_result("Close(0) >= VWAP(0) * 0.988", False, "Indicators not ready")
+    close_0 = df["close"].iloc[-1]
+    vwap_0 = df["vwap"].iloc[-1]
+    limit_price = vwap_0 * 0.988
+    return _indicator_strategy_result(
+        "Close(0) >= VWAP(0) * 0.988",
+        bool(close_0 >= limit_price),
+        f"Close(0)={close_0:.2f}, Limit={limit_price:.2f}"
+    )
+
+
+def condition_close_1_above_ema21(ctx: StrategyEvaluationContext) -> dict:
+    """EVENT — Close(1) rose above EMA21: Short cover signal (mirror of close_1_below_ema21 for longs).
+    Fires when the previous closed candle crossed above EMA21 — momentum recovering upward."""
+    df = ctx.indicator_df
+    if len(df) < 3 or "close" not in df.columns or "ema21" not in df.columns or pd.isna(df["ema21"].iloc[-1]):
+        return _indicator_strategy_result("Close(1) crossed above EMA21", False, "Indicators not ready")
+    close_1     = df["close"].iloc[-2]
+    close_2     = df["close"].iloc[-3]
+    ema21_now   = df["ema21"].iloc[-1]
+    # Crossed: prev-prev was below EMA21, prev closed above EMA21
+    crossed_up  = (close_2 <= ema21_now) and (close_1 > ema21_now)
+    return _indicator_strategy_result(
+        "Close(1) crossed above EMA21",
+        bool(crossed_up),
+        f"Close(1)={close_1:.2f}, Close(2)={close_2:.2f}, EMA21={ema21_now:.2f}"
+    )
+
+
+# ── END SHORT SELLING CONDITIONS ──────────────────────────────────────────────
+
+
+# ══════════════════════════════════════════════════════════════
+#   R7_COMB_486 CONDITIONS — VARIANT_D Long Entry + EMA50 Exit
+#
+#   These conditions implement the research-validated R7_COMB_486
+#   strategy (272.71% net return, Jan 2024 - Jun 2026).
+#
+#   Long Entry (VARIANT_D) logic:
+#     Price < VWAP           → stock is in a dip (buy the dip)
+#     EMA9 < EMA21           → short-term bearish structure (buying reversal)
+#     Close > Close(-1)      → current candle is green (reversal trigger)
+#     Close < EMA9           → entry is still at the bottom (not chasing)
+#     RSI rising AND RSI<50  → momentum turning up from oversold zone
+#
+#   Dynamic Exit (EMA50):
+#     Close < EMA50          → support lost, exit remaining position
+#     (min_hold_time enforced separately in order_executor.py)
+# ══════════════════════════════════════════════════════════════
+
+def condition_r7_price_below_vwap(ctx: StrategyEvaluationContext) -> dict:
+    """STATE — Close(0) < VWAP(0): Price is in an intraday dip below VWAP.
+    R7 VARIANT_D buys the pullback, not the breakout."""
+    df = ctx.indicator_df
+    if len(df) < 1 or "close" not in df.columns or "vwap" not in df.columns:
+        return _indicator_strategy_result("R7: Price below VWAP", False, "Indicators not ready")
+    close_0 = df["close"].iloc[-1]
+    vwap_0  = df["vwap"].iloc[-1]
+    if pd.isna(close_0) or pd.isna(vwap_0):
+        return _indicator_strategy_result("R7: Price below VWAP", False, "Indicators not ready")
+    fired = bool(close_0 < vwap_0)
+    return _indicator_strategy_result(
+        "R7: Price below VWAP",
+        fired,
+        f"Close={close_0:.2f}, VWAP={vwap_0:.2f} — {'dip ✓' if fired else 'above VWAP — not a dip'}",
+    )
+
+
+def condition_r7_ema9_below_ema21(ctx: StrategyEvaluationContext) -> dict:
+    """STATE — EMA9(0) < EMA21(0): Short-term trend structure is bearish.
+    R7 VARIANT_D specifically buys reversals in a weak trend, not confirmed uptrends."""
+    df = ctx.indicator_df
+    if "ema9" not in df.columns or "ema21" not in df.columns:
+        return _indicator_strategy_result("R7: EMA9 < EMA21", False, "EMA not ready")
+    ema9 = df["ema9"].iloc[-1]
+    ema21 = df["ema21"].iloc[-1]
+    if pd.isna(ema9) or pd.isna(ema21):
+        return _indicator_strategy_result("R7: EMA9 < EMA21", False, "EMA not ready")
+    fired = bool(float(ema9) < float(ema21))
+    return _indicator_strategy_result(
+        "R7: EMA9 < EMA21",
+        fired,
+        f"EMA9={ema9:.2f}, EMA21={ema21:.2f} — {'weak structure (buy dip) ✓' if fired else 'uptrend — not a dip entry'}",
+    )
+
+
+def condition_r7_green_reversal_candle(ctx: StrategyEvaluationContext) -> dict:
+    """EVENT — Close(0) > Close(-1): Current candle is green (bullish reversal signal).
+    This is the primary EVENT trigger for R7 VARIANT_D — the actual reversal bar."""
+    df = ctx.indicator_df
+    if len(df) < 2 or "close" not in df.columns:
+        return _indicator_strategy_result("R7: Green reversal candle", False, "Not enough data")
+    close_0 = df["close"].iloc[-1]
+    close_1 = df["close"].iloc[-2]
+    if pd.isna(close_0) or pd.isna(close_1):
+        return _indicator_strategy_result("R7: Green reversal candle", False, "Not enough data")
+    fired = bool(float(close_0) > float(close_1))
+    return _indicator_strategy_result(
+        "R7: Green reversal candle",
+        fired,
+        f"Close(0)={close_0:.2f}, Close(-1)={close_1:.2f} — {'green ✓' if fired else 'red — no reversal'}",
+    )
+
+
+def condition_r7_close_below_ema9(ctx: StrategyEvaluationContext) -> dict:
+    """STATE — Close(0) < EMA9(0): Entry is still at the bottom, not chasing a fast move.
+    Prevents entering after a fast spike that already bounced through EMA9."""
+    df = ctx.indicator_df
+    if len(df) < 1 or "close" not in df.columns or "ema9" not in df.columns:
+        return _indicator_strategy_result("R7: Close below EMA9", False, "Indicators not ready")
+    close_0 = df["close"].iloc[-1]
+    ema9_0  = df["ema9"].iloc[-1]
+    if pd.isna(close_0) or pd.isna(ema9_0):
+        return _indicator_strategy_result("R7: Close below EMA9", False, "Indicators not ready")
+    fired = bool(float(close_0) < float(ema9_0))
+    return _indicator_strategy_result(
+        "R7: Close below EMA9",
+        fired,
+        f"Close={close_0:.2f}, EMA9={ema9_0:.2f} — {'entry at bottom ✓' if fired else 'above EMA9 — chasing'}",
+    )
+
+
+def condition_r7_rsi_recovering_oversold(ctx: StrategyEvaluationContext) -> dict:
+    """SEMI — RSI rising (RSI(0) > RSI(-1)) AND RSI(0) < 50: Momentum turning up from oversold.
+    RSI must be below 50 (oversold zone) AND currently rising — confirming bottom formation."""
+    df = ctx.indicator_df
+    if len(df) < 2 or "rsi" not in df.columns:
+        return _indicator_strategy_result("R7: RSI recovering oversold", False, "RSI not ready")
+    rsi_0 = df["rsi"].iloc[-1]
+    rsi_1 = df["rsi"].iloc[-2]
+    if pd.isna(rsi_0) or pd.isna(rsi_1):
+        return _indicator_strategy_result("R7: RSI recovering oversold", False, "RSI not ready")
+    rsi_rising   = bool(float(rsi_0) > float(rsi_1))
+    rsi_oversold = bool(float(rsi_0) < 50.0)
+    fired = rsi_rising and rsi_oversold
+    return _indicator_strategy_result(
+        "R7: RSI recovering oversold",
+        fired,
+        f"RSI={rsi_0:.1f} (prev={rsi_1:.1f}) — rising={rsi_rising}, oversold(<50)={rsi_oversold}",
+    )
+
+
+def condition_r7_close_below_ema50(ctx: StrategyEvaluationContext) -> dict:
+    """EVENT — Close(0) < EMA50(0): Price dropped below EMA50 support.
+    R7 dynamic exit trigger. min_hold_time (20 candles) is enforced in order_executor.py
+    before this condition is acted upon."""
+    df = ctx.indicator_df
+    if len(df) < 1 or "close" not in df.columns or "ema50" not in df.columns:
+        return _indicator_strategy_result("R7: Close below EMA50", False, "Indicators not ready")
+    close_0 = df["close"].iloc[-1]
+    ema50_0 = df["ema50"].iloc[-1]
+    if pd.isna(close_0) or pd.isna(ema50_0):
+        return _indicator_strategy_result("R7: Close below EMA50", False, "EMA50 not ready")
+    fired = bool(float(close_0) < float(ema50_0))
+    return _indicator_strategy_result(
+        "R7: Close below EMA50",
+        fired,
+        f"Close={close_0:.2f}, EMA50={ema50_0:.2f} — {'exit signal ✓' if fired else 'still above EMA50'}",
+    )
+
+
+# ── END R7_COMB_486 CONDITIONS ────────────────────────────────────────────────
 
 
 CONDITION_REGISTRY: dict[str, StrategyConditionFn] = {}
@@ -1840,11 +2346,16 @@ def _adaptive_stop_loss_multiplier(symbol: str) -> float:
     return _clamp(value, 0.5, 2.0)
 
 
-def _calculate_adaptive_stop_loss(symbol: str, price: float, direction: str = "BUY") -> float:
+def _calculate_adaptive_stop_loss(symbol: str, price: float, direction: str = "LONG") -> float:
     price = safe_float(price, 0.0)
-    pct = _clamp(safe_float(cfg("risk", "stop_loss_percent", 0.01), 0.01), 0.0001, 0.20)
+    if direction == "LONG":
+        pct = _clamp(safe_float(cfg("risk", "long_stop_loss_percent", 0.008), 0.008), 0.0001, 0.20)
+    else:
+        pct = _clamp(safe_float(cfg("risk", "short_stop_loss_percent", 0.005), 0.005), 0.0001, 0.20)
+        
     pct *= _adaptive_stop_loss_multiplier(symbol)
-    if direction == "BUY":
+    
+    if direction == "LONG":
         return round(price * (1 - pct), 2)
     return round(price * (1 + pct), 2)
 
@@ -1933,6 +2444,36 @@ def _get_strategy_set_execution_policy(set_name: str) -> dict:
         })
 
 
+_gap_cache: dict[str, tuple[datetime.date, float]] = {}
+
+def _get_daily_gap(symbol: str, df: pd.DataFrame) -> float:
+    today = datetime.now().date()
+    if symbol in _gap_cache and _gap_cache[symbol][0] == today:
+        return _gap_cache[symbol][1]
+    
+    try:
+        dates = pd.to_datetime(df["bucket"]).dt.date
+        unique_dates = pd.Series(dates).unique()
+        if len(unique_dates) < 2:
+            return 0.0
+        
+        today_mask = (dates == unique_dates[-1])
+        today_open = float(df[today_mask]["open"].iloc[0])
+        
+        prev_mask = (dates == unique_dates[-2])
+        prev_close = float(df[prev_mask]["close"].iloc[-1])
+        
+        if prev_close <= 0:
+            return 0.0
+            
+        gap = (today_open - prev_close) / prev_close
+        _gap_cache[symbol] = (today, gap)
+        return gap
+    except Exception as e:
+        logger.warning(f"Failed to calculate daily gap for {symbol}: {e}")
+        return 0.0
+
+
 def _adaptive_safety_block_enabled() -> bool:
     return bool(cfg("risk", "adaptive_safety_blocks_execution", False))
 
@@ -1972,6 +2513,45 @@ def _suppression_rejection(triggered_set: dict, symbol: str, action: str = "BUY"
     }
 
 
+def condition_candle_2_breaks_candle_1_high(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2:
+        return _indicator_strategy_result("Candle 2 breaks Candle 1 High", False, "Not enough data")
+    
+    # Must be exactly the 9:20 candle
+    if df.index[-1].time() != dt_time(9, 20):
+        return _indicator_strategy_result("Candle 2 breaks Candle 1 High", False, f"Time is {df.index[-1].time()}, not 09:20")
+    
+    c1_high = df["high"].iloc[-2]
+    c2_high = df["high"].iloc[-1]
+    
+    fired = c2_high > c1_high
+    return _indicator_strategy_result(
+        "Candle 2 breaks Candle 1 High",
+        bool(fired),
+        f"C2 High={c2_high:.2f}, C1 High={c1_high:.2f}"
+    )
+
+def condition_candle_2_breaks_candle_1_low(ctx: StrategyEvaluationContext) -> dict:
+    df = ctx.indicator_df
+    if len(df) < 2:
+        return _indicator_strategy_result("Candle 2 breaks Candle 1 Low", False, "Not enough data")
+    
+    # Must be exactly the 9:20 candle
+    if df.index[-1].time() != dt_time(9, 20):
+        return _indicator_strategy_result("Candle 2 breaks Candle 1 Low", False, f"Time is {df.index[-1].time()}, not 09:20")
+    
+    c1_low = df["low"].iloc[-2]
+    c2_low = df["low"].iloc[-1]
+    
+    fired = c2_low < c1_low
+    return _indicator_strategy_result(
+        "Candle 2 breaks Candle 1 Low",
+        bool(fired),
+        f"C2 Low={c2_low:.2f}, C1 Low={c1_low:.2f}"
+    )
+
+
 #   BUY SIGNAL EVALUATOR
 # ════════════════════════════════════════════════════════════
 
@@ -1980,6 +2560,13 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
 
     if stock.get("direction") == "AVOID":
         return {"action": "WAIT", "reason": "Stock explicitly marked AVOID"}
+
+    # Rule #1: Max 1 completed trade per stock per day
+    _disable_rule_1 = bool(cfg("risk", "disable_once_per_day_rule", False))
+    if not _disable_rule_1 and has_completed_trade_today(symbol):
+        reason = "Stock has already completed a full trade cycle today (Rule #1)"
+        logger.debug("BUY blocked | %s | %s", symbol, reason)
+        return {"action": "WAIT", "reason": reason}
 
     ws_count = len(get_candle_history(symbol, include_current=False))
     if ws_count < MIN_WS_CANDLES_FOR_PATTERNS:
@@ -2006,6 +2593,39 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
     if not triggered_set:
         return {"action": "WAIT", "reason": "No complete BUY strategy set triggered"}
 
+    direction = "SHORT" if "SHORT_" in triggered_set["set_name"].upper() else "LONG"
+    
+    # ─────────────────────────────────────────────────────────
+    # NO-CLASH RULE (Gap Filter)
+    # ─────────────────────────────────────────────────────────
+    gap_pct = _get_daily_gap(symbol, df)
+    if direction == "LONG":
+        long_gap_thr = safe_float(cfg("risk", "long_exclude_gap_threshold", -0.008), -0.008)
+        if gap_pct <= long_gap_thr:
+            reason = f"No-Clash Rule: Long blocked because stock gap {gap_pct*100:.2f}% <= {long_gap_thr*100:.2f}%"
+            logger.debug("BUY blocked | %s | %s", symbol, reason)
+            return {"action": "WAIT", "reason": reason}
+    else:
+        short_gap_thr = safe_float(cfg("risk", "short_target_gap_threshold", -0.008), -0.008)
+        if gap_pct > short_gap_thr:
+            reason = f"No-Clash Rule: Short blocked because stock gap {gap_pct*100:.2f}% > {short_gap_thr*100:.2f}%"
+            logger.debug("BUY blocked | %s | %s", symbol, reason)
+            return {"action": "WAIT", "reason": reason}
+
+
+    # Rule #2: Prevent BUY if any SELL strategy is currently triggering
+    sell_ctx = StrategyEvaluationContext(
+        side="sell",
+        indicator_df=df,
+        pattern_df=pattern_df,
+        ws_count=ws_count,
+    )
+    sell_triggered_set = _strategy_set_evaluator.evaluate("sell", sell_ctx)
+    if sell_triggered_set:
+        reason = f"Conflicting SELL strategy {sell_triggered_set['set_name']} also triggered (Rule #2)"
+        logger.debug("BUY blocked | %s | %s", symbol, reason)
+        return {"action": "WAIT", "reason": reason}
+
     suppression = _suppression_rejection(triggered_set, symbol)
     if suppression:
         return suppression
@@ -2016,17 +2636,18 @@ def _evaluate_buy_signal(stock: dict, briefing: dict) -> dict:
     adaptive_confidence = confidence_trace["final_confidence"]
     if adaptive_confidence < MIN_CONFIDENCE:
         reason = _confidence_rejection_reason(triggered_set, adaptive_confidence, confidence_trace)
-        logger.info("BUY blocked | %s | %s", symbol, reason)
+        logger.debug("BUY blocked | %s | %s", symbol, reason)
         return {"action": "WAIT", "reason": reason}
 
     price, price_src = _get_entry_price(symbol)
     if not price:
         return {"action": "WAIT", "reason": f"No live price for {symbol} (WS tick missing)"}
 
-    stop_loss = _calculate_adaptive_stop_loss(symbol, price, "BUY")
+    stop_loss = _calculate_adaptive_stop_loss(symbol, price, direction)
 
     return {
         "action":    "BUY",
+        "direction": direction,
         "symbol":    symbol,
         "price":     round(price, 2),
         "stop_loss": stop_loss,
@@ -2060,6 +2681,12 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
     if stock.get("direction") == "AVOID":
         return {"action": "WAIT", "reason": "Marked AVOID"}
 
+    # Rule #1: Max 1 completed trade per stock per day
+    if has_completed_trade_today(symbol):
+        reason = "Stock has already completed a full trade cycle today (Rule #1)"
+        logger.debug("MATH BUY blocked | %s | %s", symbol, reason)
+        return {"action": "WAIT", "reason": reason}
+
     ws_count = len(get_candle_history(symbol, include_current=False))
     if ws_count < MIN_WS_CANDLES_FOR_PATTERNS:
         return {
@@ -2085,6 +2712,39 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
     if not triggered_set:
         return {"action": "WAIT", "reason": "Math: no complete BUY strategy set triggered"}
 
+    direction = "SHORT" if "SHORT_" in triggered_set["set_name"].upper() else "LONG"
+    
+    # ─────────────────────────────────────────────────────────
+    # NO-CLASH RULE (Gap Filter)
+    # ─────────────────────────────────────────────────────────
+    gap_pct = _get_daily_gap(symbol, df)
+    if direction == "LONG":
+        long_gap_thr = safe_float(cfg("risk", "long_exclude_gap_threshold", -0.008), -0.008)
+        if gap_pct <= long_gap_thr:
+            reason = f"No-Clash Rule: Long blocked because stock gap {gap_pct*100:.2f}% <= {long_gap_thr*100:.2f}%"
+            logger.debug("MATH BUY blocked | %s | %s", symbol, reason)
+            return {"action": "WAIT", "reason": reason}
+    else:
+        short_gap_thr = safe_float(cfg("risk", "short_target_gap_threshold", -0.008), -0.008)
+        if gap_pct > short_gap_thr:
+            reason = f"No-Clash Rule: Short blocked because stock gap {gap_pct*100:.2f}% > {short_gap_thr*100:.2f}%"
+            logger.debug("MATH BUY blocked | %s | %s", symbol, reason)
+            return {"action": "WAIT", "reason": reason}
+
+
+    # Rule #2: Prevent BUY if any SELL strategy is currently triggering
+    sell_ctx = StrategyEvaluationContext(
+        side="sell",
+        indicator_df=df,
+        pattern_df=pattern_df,
+        ws_count=ws_count,
+    )
+    sell_triggered_set = _strategy_set_evaluator.evaluate("sell", sell_ctx)
+    if sell_triggered_set:
+        reason = f"Conflicting SELL strategy {sell_triggered_set['set_name']} also triggered (Rule #2)"
+        logger.debug("MATH BUY blocked | %s | %s", symbol, reason)
+        return {"action": "WAIT", "reason": reason}
+
     suppression = _suppression_rejection(triggered_set, symbol)
     if suppression:
         return suppression
@@ -2095,16 +2755,18 @@ def _evaluate_math_signal(stock: dict, briefing: dict) -> dict:
     adaptive_confidence = confidence_trace["final_confidence"]
     if adaptive_confidence < MIN_CONFIDENCE:
         reason = _confidence_rejection_reason(triggered_set, adaptive_confidence, confidence_trace)
-        logger.info("MATH BUY blocked | %s | %s", symbol, reason)
+        logger.debug("MATH BUY blocked | %s | %s", symbol, reason)
         return {"action": "WAIT", "reason": reason}
 
     price, price_src = _get_entry_price(symbol)
     if not price:
         return {"action": "WAIT", "reason": f"No live price for {symbol}"}
-    stop_loss = _calculate_adaptive_stop_loss(symbol, price, "BUY")
+        
+    stop_loss = _calculate_adaptive_stop_loss(symbol, price, direction)
 
     return {
         "action":       "BUY",
+        "direction":    direction,
         "trade_type":   "MATH",
         "symbol":       symbol,
         "price":        round(price, 2),
@@ -2163,6 +2825,23 @@ def _check_sell_signals(live_prices: dict[str, float]):
         triggered_set = _strategy_set_evaluator.evaluate("sell", ctx)
         if not triggered_set:
             continue
+
+        # ── R7 min_hold_time guard ────────────────────────────────
+        # SELL_R7_EMA50_DYN_EXIT must NOT fire within the first
+        # r7_min_hold_candles (default 20) WS candles after entry.
+        # This prevents early EMA50 noise exits at the start of a trade.
+        if triggered_set["set_name"] == "SELL_R7_EMA50_DYN_EXIT":
+            _min_hold = safe_int(cfg("risk", "r7_min_hold_candles", 20), 20)
+            _entry_ws  = safe_int(position.get("entry_ws_candles", 0), 0)
+            _now_ws    = len(get_candle_history(symbol, include_current=False))
+            _elapsed   = _now_ws - _entry_ws
+            if _elapsed < _min_hold:
+                logger.debug(
+                    "[R7 EMA50 Exit] %s — hold guard active: %d/%d candles elapsed. Skipping.",
+                    symbol, _elapsed, _min_hold,
+                )
+                continue
+        # ── end R7 min_hold_time guard ────────────────────────────
 
         suppression = _suppression_rejection(triggered_set, symbol, action="SELL")
         if suppression:
@@ -2241,6 +2920,28 @@ def _can_open_new_position(stock: dict) -> bool:
     last_fail = _failed_order_cooldown.get(stock["ticker"], 0)
     if time.time() - last_fail < FAILED_ORDER_COOLDOWN_SEC:
         return False
+
+    # 3-Candle Cooldown after trade closure
+    symbol = stock["ticker"]
+    try:
+        import sqlite3
+        from datetime import datetime
+        from core.trading_settings import get as cfg
+        today = datetime.now().strftime('%Y-%m-%d')
+        from core.state_manager import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute("SELECT exit_time FROM trades WHERE symbol = ? AND date = ? AND status != 'OPEN' AND exit_time IS NOT NULL ORDER BY id DESC LIMIT 1", (symbol, today)).fetchone()
+        conn.close()
+        if row and row[0]:
+            exit_time = datetime.fromisoformat(row[0])
+            seconds_since_exit = (datetime.now() - exit_time).total_seconds()
+            candle_interval_seconds = int(cfg("market_data", "candle_interval_seconds", 300))
+            cooldown_seconds = candle_interval_seconds * 3
+            if seconds_since_exit < cooldown_seconds:
+                return False
+    except Exception as e:
+        logger.warning(f"Error checking 3-candle cooldown for {symbol}: {e}")
+
     return True
 
 
@@ -2332,11 +3033,25 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
                 await asyncio.sleep(30)
                 continue
 
+            # ── Regime pre-warm: run ONCE at market open (9:15 AM) ──
+            # Ensures Telegram alert fires at open, not on first buy signal.
+            _today = datetime.now().date()
+            if not hasattr(run_strategy_loop, "_regime_checked_date") or \
+               run_strategy_loop._regime_checked_date != _today:
+                if bool(cfg("risk", "regime_filter_enabled", True)):
+                    try:
+                        _regime_is_bull_day()  # warms cache + fires Telegram alert
+                        logger.info("[RegimeFilter] Pre-warmed at market open.")
+                    except Exception as _re:
+                        logger.warning(f"[RegimeFilter] Pre-warm failed: {_re}")
+                run_strategy_loop._regime_checked_date = _today
+
             briefing = _get_briefing_cached()
             if not briefing:
                 logger.warning("No briefing. Waiting for screener or cognition picks...")
                 await asyncio.sleep(LOOP_INTERVAL)
                 continue
+
 
             # Periodic log: every tracked symbol, not just signal fires.
             if time.time() - _last_scan_log >= SCAN_LOG_INTERVAL:
@@ -2348,11 +3063,35 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
 
             if not entries_are_enabled():
                 state = get_trading_session_state()
-                logger.warning(
-                    "Entries disabled by session state %s (%s). Exit checks continue; BUY scan skipped.",
-                    state.get("state"),
-                    state.get("reason", ""),
-                )
+                reason = state.get("reason", "")
+                
+                # Check for dashboard-requested emergency square-off
+                if state.get("state") == "LIQUIDATING" and "EMERGENCY_SQUAREOFF_REQUESTED" in reason:
+                    logger.critical("🚨 Detecting Dashboard Emergency Square-off Request...")
+                    try:
+                        from core.emergency_squareoff import trigger_emergency_squareoff
+                        trigger_emergency_squareoff()
+                        await asyncio.sleep(1) # Allow state transition to flush
+                        continue
+                    except Exception as e:
+                        logger.error(f"Failed to execute dashboard-triggered squareoff: {e}")
+                
+                # Log only once when state first becomes non-ACTIVE to avoid spam every 2s
+                _prev_locked_key = getattr(run_strategy_loop, "_last_logged_locked_state", None)
+                _cur_locked_key = f"{state.get('state')}|{reason}"
+                if _prev_locked_key != _cur_locked_key:
+                    logger.warning(
+                        "Entries disabled by session state %s (%s). Exit checks continue; BUY scan skipped.",
+                        state.get("state"),
+                        reason,
+                    )
+                    run_strategy_loop._last_logged_locked_state = _cur_locked_key
+                else:
+                    logger.debug(
+                        "Entries still disabled: %s (%s).",
+                        state.get("state"),
+                        reason,
+                    )
                 await asyncio.sleep(LOOP_INTERVAL)
                 continue
 
@@ -2381,6 +3120,12 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
                 await asyncio.sleep(LOOP_INTERVAL)
                 continue
 
+            _regime_enabled = bool(cfg("risk", "regime_filter_enabled", True))
+            if _regime_enabled and not _regime_is_bull_day() and not _regime_is_bear_day():
+                # Choppy day: no new trades allowed at all. Skip all signal evaluations.
+                await asyncio.sleep(LOOP_INTERVAL)
+                continue
+
             open_count = len(get_open_positions())
             if open_count >= MAX_POSITIONS:
                 await asyncio.sleep(LOOP_INTERVAL)
@@ -2393,14 +3138,26 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
                     continue
                 signal = _evaluate_buy_signal(stock, briefing)
                 if signal["action"] == "BUY":
+                    # ── Strategy 13 Master: Regime Filter ──
+                    _regime_enabled = bool(cfg("risk", "regime_filter_enabled", True))
+                    if _regime_enabled:
+                        is_long = signal.get("direction", "LONG") == "LONG"
+                        if is_long and not _regime_is_bull_day():
+                            logger.debug("[RegimeFilter] Skipping BUY LONG — not a bull day.")
+                            continue
+                        elif not is_long and not _regime_is_bear_day():
+                            logger.debug("[RegimeFilter] Skipping BUY SHORT — not a bear day.")
+                            continue
+
                     _log_triggered_strategy_set("BUY", signal)
-                    trade = place_buy_order(
+                    trade = place_entry_order(
                         symbol         = signal["symbol"],
                         trading_symbol = stock.get("trading_symbol", signal["symbol"]),
                         entry_price    = signal["price"],
                         stop_loss      = signal["stop_loss"],
                         strategy       = signal["strategy"],
                         confidence     = signal.get("confidence", 0),
+                        direction      = signal.get("direction", "LONG"),
                     )
                     if trade:
                         open_count += 1
@@ -2418,17 +3175,30 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
                     break
                 if stock["ticker"] in open_syms:
                     continue
+                if not _can_open_new_position(stock):
+                    continue
 
                 signal = _evaluate_math_signal(stock, briefing)
                 if signal["action"] == "BUY":
+                    # ── Strategy 13 Master: Regime Filter ──
+                    _regime_enabled = bool(cfg("risk", "regime_filter_enabled", True))
+                    if _regime_enabled:
+                        is_long = signal.get("direction", "LONG") == "LONG"
+                        if is_long and not _regime_is_bull_day():
+                            logger.debug("[RegimeFilter] Skipping math BUY LONG — not a bull day.")
+                            continue
+                        elif not is_long and not _regime_is_bear_day():
+                            logger.debug("[RegimeFilter] Skipping math BUY SHORT — not a bear day.")
+                            continue
                     _log_triggered_strategy_set("BUY", signal)
-                    trade = place_buy_order(
+                    trade = place_entry_order(
                         symbol         = signal["symbol"],
                         trading_symbol = stock.get("trading_symbol", signal["symbol"]),
                         entry_price    = signal["price"],
                         stop_loss      = signal["stop_loss"],
                         strategy       = signal["strategy"],
                         confidence     = signal.get("confidence", 0),
+                        direction      = signal.get("direction", "LONG"),
                         risk_pct = signal.get("risk_pct", MATH_RISK_PER_TRADE),   # or directly MATH_RISK_PER_TRADE
                     )
                     if trade:

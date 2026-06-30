@@ -741,23 +741,26 @@ def calculate_quantity_with_tranches(
     }
 
 
-def calculate_stop_loss(price: float, direction: str = "BUY") -> float:
+def calculate_stop_loss(price: float, direction: str = "LONG") -> float:
     price = safe_float(price, 0.0)
-    pct = max(0.0001, min(0.20, safe_float(cfg("risk", "stop_loss_percent", 0.01), 0.01)))
-    if direction == "BUY":
+    if direction == "LONG":
+        pct = max(0.0001, min(0.20, safe_float(cfg("risk", "long_stop_loss_percent", 0.008), 0.008)))
         raw = price * (1 - pct)
     else:
+        pct = max(0.0001, min(0.20, safe_float(cfg("risk", "short_stop_loss_percent", 0.005), 0.005)))
         raw = price * (1 + pct)
     return round_to_tick(raw)
 
 
-def calculate_target(entry: float, stop_loss: float) -> float:
-    """Target = entry + (risk × RR ratio). Default 2:1."""
+def calculate_target(entry: float, direction: str = "LONG") -> float:
+    """Target based on asymmetric configuration."""
     entry = safe_float(entry, 0.0)
-    stop_loss = safe_float(stop_loss, entry)
-    risk   = abs(entry - stop_loss)
-    rr     = max(0.1, min(10.0, safe_float(cfg("risk", "target_rr_ratio", 2.0), 2.0)))
-    raw = entry + (risk * rr)
+    if direction == "LONG":
+        target_pct = max(0.001, min(0.50, safe_float(cfg("risk", "long_profit_target_percent", 0.015), 0.015)))
+        raw = entry * (1 + target_pct)
+    else:
+        target_pct = max(0.001, min(0.50, safe_float(cfg("risk", "short_profit_target_percent", 0.025), 0.025)))
+        raw = entry * (1 - target_pct)
     return round_to_tick(raw)
 
 
@@ -844,7 +847,7 @@ def _current_position_valuation() -> dict:
 #   BUY ORDER
 # ════════════════════════════════════════════════════════════
 
-def place_buy_order(
+def place_entry_order(
     symbol:         str,
     trading_symbol: str,
     entry_price:    float,
@@ -853,6 +856,7 @@ def place_buy_order(
     confidence:     int   = 0,
     product:        str   = "MIS",
     risk_pct:       float = None,
+    direction:      str   = "LONG",
 ) -> dict:
     """
     🔧 FIXED VERSION: Validates session before attempting order.
@@ -905,7 +909,7 @@ def place_buy_order(
     try:
         with _order_lock:
             return breaker.call(
-                _place_buy_order_impl,
+                _place_entry_order_impl,
                 symbol=symbol,
                 trading_symbol=trading_symbol,
                 entry_price=entry_price,
@@ -914,6 +918,7 @@ def place_buy_order(
                 confidence=confidence_value,
                 product=product,
                 risk_pct=risk_pct,
+                direction=direction,
                 default={},
             )
     except OrderExecutionError as e:
@@ -921,7 +926,7 @@ def place_buy_order(
         return {}
 
 
-def _place_buy_order_impl(
+def _place_entry_order_impl(
     symbol:         str,
     trading_symbol: str,
     entry_price:    float,
@@ -930,6 +935,7 @@ def _place_buy_order_impl(
     confidence:     int   = 0,
     product:        str   = "MIS",
     risk_pct:       float = None,
+    direction:      str   = "LONG",
 ) -> dict:
     """Same as original, but with session validation before SL-M placement."""
     symbol = str(symbol or "").strip().upper()
@@ -945,11 +951,14 @@ def _place_buy_order_impl(
         return {}
 
     if stop_loss is None:
-        stop_loss = calculate_stop_loss(entry_price, "BUY")
+        stop_loss = calculate_stop_loss(entry_price, direction)
     else:
         stop_loss = safe_float(stop_loss, 0.0)
-    if stop_loss <= 0 or stop_loss >= entry_price:
-        logger.error("BUY rejected for %s: invalid stop loss %r", symbol, stop_loss)
+    invalid_sl = stop_loss <= 0
+    if direction == "LONG" and stop_loss >= entry_price: invalid_sl = True
+    elif direction == "SHORT" and stop_loss <= entry_price: invalid_sl = True
+    if invalid_sl:
+        logger.error("ENTRY rejected for %s: invalid stop loss %r", symbol, stop_loss)
         return {}
 
     quantity     = calculate_quantity(symbol, entry_price, stop_loss, risk_pct)
@@ -1007,50 +1016,59 @@ def _place_buy_order_impl(
         )
         return {}
 
-    target_price = calculate_target(entry_price, stop_loss)
+    target_price = calculate_target(entry_price, direction)
+
+    try:
+        from core.data_fetcher import get_candle_history as _gchs
+        _entry_candles = len(_gchs(symbol, include_current=False))
+    except Exception:
+        _entry_candles = 0
 
     trade = {
-        "symbol":         symbol,
-        "trading_symbol": trading_symbol,
-        "quantity":       quantity,
-        "entry_price":    entry_price,
-        "stop_loss":      stop_loss,
-        "target_price":   target_price,
-        "strategy":       strategy,
-        "confidence":     confidence,
-        "product":        product,
-        "order_id":       None,
-        "sl_order_id":    None,
+        "symbol":           symbol,
+        "trading_symbol":   trading_symbol,
+        "quantity":         quantity,
+        "entry_price":      entry_price,
+        "stop_loss":        stop_loss,
+        "target_price":     target_price,
+        "action":           direction,
+        "strategy":         strategy,
+        "confidence":       confidence,
+        "product":          product,
+        "order_id":         None,
+        "sl_order_id":      None,
+        "opened_at":        datetime.now().isoformat(),
+        "entry_ws_candles": _entry_candles,
     }
 
     if TRADING_MODE == "PAPER":
         trade["order_id"]    = f"PAPER-{symbol}-{datetime.now().strftime('%H%M%S')}"
         trade["sl_order_id"] = f"PAPER-SL-{symbol}-{datetime.now().strftime('%H%M%S')}"
         logger.info(
-            f"📋 [PAPER] BUY | {symbol} | Qty: {quantity} | "
+            f"📋 [PAPER] ENTRY ({direction}) | {symbol} | Qty: {quantity} | "
             f"@ ₹{entry_price} | SL: ₹{stop_loss} | Target: ₹{target_price}"
         )
 
     elif TRADING_MODE == "LIVE":
-        # Step 1 — Place BUY order
+        # Step 1 — Place ENTRY order
         trade["order_id"] = _send_kotak_order(
             trading_symbol = trading_symbol,
-            transaction    = "B",
+            transaction    = "B" if direction == "LONG" else "S",
             quantity       = quantity,
             price          = entry_price,
             order_type     = "L",
             product        = product,
         )
         if not trade["order_id"]:
-            logger.error(f"❌ BUY order FAILED for {symbol}")
-            raise OrderExecutionError(f"BUY order rejected for {symbol}")
+            logger.error(f"❌ ENTRY order FAILED for {symbol}")
+            raise OrderExecutionError(f"ENTRY order rejected for {symbol}")
 
-        logger.info(f"✅ BUY order placed: {trade['order_id']} | Qty: {quantity}")
+        logger.info(f"✅ ENTRY order placed: {trade['order_id']} | Qty: {quantity}")
         
         record_order_sent(
             trade["order_id"],
             symbol,
-            {"side": "BUY", "qty": quantity, "price": entry_price, "product": product},
+            {"side": direction, "qty": quantity, "price": entry_price, "product": product},
         )
         verification = wait_for_order_verification(trade["order_id"], timeout_sec=45)
         if verification == "REJECTED":
@@ -1092,10 +1110,11 @@ def _place_buy_order_impl(
         for _sl_attempt in range(1, _SL_MAX_EXT_RETRIES + 1):
             try:
                 trade["sl_order_id"] = _send_kotak_sl_order(
-                    trading_symbol = trading_symbol,
-                    quantity       = quantity,
-                    trigger_price  = stop_loss,
-                    product        = product,
+                    trading_symbol   = trading_symbol,
+                    quantity         = quantity,
+                    trigger_price    = stop_loss,
+                    product          = product,
+                    transaction_type = "S" if direction == "LONG" else "B",
                 )
             except Exception as _sl_exc:
                 logger.error(
@@ -1136,6 +1155,13 @@ def _place_buy_order_impl(
                 )
                 import time as _time_mod
                 _time_mod.sleep(_SL_RETRY_DELAY_SEC)
+                
+                # F004 FIX: Validate token freshness before SL retry attempt
+                try:
+                    ensure_trade_token_on_client()
+                    logger.debug(f"🔐 Token validated for SL retry (attempt {_sl_attempt + 1}/{_SL_MAX_EXT_RETRIES})")
+                except Exception as _token_err:
+                    logger.warning(f"⚠️ Token validation failed during SL retry: {_token_err}. Proceeding anyway...")
 
         # ── F002: SL-M failed after all retries ──────────────────────────────────────
         # CRITICAL: Do NOT abort or cancel the trade. The BUY is already filled on the
@@ -1214,6 +1240,7 @@ def place_sell_order(
     reason:     str = "SIGNAL",
     product:    str = "MIS",
     exit_price_source: str = "ws_ltp",
+    quantity:   int | None = None,
 ) -> bool:
     """Place SELL. Risk-reducing exits bypass an open order circuit."""
     breaker = get_breaker("order")
@@ -1240,6 +1267,7 @@ def place_sell_order(
                     reason=reason,
                     product=product,
                     exit_price_source=exit_price_source,
+                    quantity=quantity,
                 )
             return breaker.call(
                 _place_sell_order_impl,
@@ -1248,6 +1276,7 @@ def place_sell_order(
                 reason=reason,
                 product=product,
                 exit_price_source=exit_price_source,
+                quantity=quantity,
                 default=False,
             )
     except OrderExecutionError as e:
@@ -1261,6 +1290,7 @@ def _place_sell_order_impl(
     reason:     str = "SIGNAL",
     product:    str = "MIS",
     exit_price_source: str = "ws_ltp",
+    quantity:   int | None = None,
 ) -> bool:
 
     symbol = str(symbol or "").strip().upper()
@@ -1276,10 +1306,17 @@ def _place_sell_order_impl(
         logger.warning(f"No open position for {symbol}")
         return False
 
-    quantity       = safe_int(position.get("quantity"), 0)
-    if quantity <= 0:
-        logger.error("SELL rejected for %s: invalid quantity %r", symbol, position.get("quantity"))
+    pos_quantity   = safe_int(position.get("quantity"), 0)
+    direction      = position.get("action", "LONG")
+    transaction_type = "S" if direction == "LONG" else "B"
+
+    if quantity is None:
+        quantity = pos_quantity
+        
+    if quantity <= 0 or quantity > pos_quantity:
+        logger.error("SELL rejected for %s: invalid quantity %r (pos_qty: %r)", symbol, quantity, pos_quantity)
         return False
+        
     # ← FIXED: use stored trading_symbol, not raw ticker
     trading_symbol = position.get("trading_symbol") or symbol
     success        = True
@@ -1364,9 +1401,9 @@ def _place_sell_order_impl(
 
         order_id = _send_kotak_order(
             trading_symbol = trading_symbol,
-            transaction    = "S",
+            transaction    = transaction_type,
             quantity       = quantity,
-            price          = _broker_safe_limit_price(exit_price, "S"),
+            price          = _broker_safe_limit_price(exit_price, transaction_type),
             order_type     = "L",
             product        = product,
         )
@@ -1421,13 +1458,24 @@ def _place_sell_order_impl(
         if "broker_fill_missing" in final_exit_price_source or "broker_fill_lookup_failed" in final_exit_price_source:
             reconciliation_status = "RECONCILIATION_PENDING"
 
-        close_position(
-            symbol,
-            final_exit_price,
-            reason,
-            exit_price_source=final_exit_price_source,
-            reconciliation_status=reconciliation_status,
-        )
+        if quantity < pos_quantity:
+            from core.state_manager import partial_close_position
+            partial_close_position(
+                symbol,
+                final_exit_price,
+                quantity,
+                reason,
+                exit_price_source=final_exit_price_source,
+                reconciliation_status=reconciliation_status,
+            )
+        else:
+            close_position(
+                symbol,
+                final_exit_price,
+                reason,
+                exit_price_source=final_exit_price_source,
+                reconciliation_status=reconciliation_status,
+            )
         
         # ── Record trade outcome for reflection statistics ────
         try:
@@ -1498,21 +1546,25 @@ def check_stop_losses(live_prices: dict[str, float]):
         stop_loss   = safe_float(position.get("stop_loss"), 0.0)
         current     = safe_float(live_prices.get(symbol), 0.0)
 
+        direction   = position.get("action", "LONG")
+
         if not current:
             continue
 
-        # Use trailing SL if it's higher than original SL
-        active_sl = max(
-            trailing_sl or 0,
-            stop_loss   or 0
-        )
+        # Use trailing SL if it exists and is better than original SL
+        if direction == "LONG":
+            active_sl = max(trailing_sl or 0, stop_loss or 0)
+            sl_hit = current <= active_sl
+        else: # SHORT
+            active_sl = min(trailing_sl or float('inf'), stop_loss or float('inf'))
+            if active_sl == float('inf'): active_sl = 0
+            sl_hit = active_sl > 0 and current >= active_sl
 
-        if active_sl and current <= active_sl:
-            sl_type = "TRAILING_SL" if (trailing_sl and trailing_sl > stop_loss) \
-                      else "STOPLOSS"
+        if active_sl and sl_hit:
+            sl_type = "TRAILING_SL" if trailing_sl and (trailing_sl > stop_loss if direction == "LONG" else trailing_sl < stop_loss) else "STOPLOSS"
             logger.warning(
                 f"🔴 {sl_type} HIT | {symbol} | "
-                f"₹{current} ≤ ₹{active_sl}"
+                f"₹{current} {'≤' if direction == 'LONG' else '≥'} ₹{active_sl}"
             )
             place_sell_order(symbol, current, sl_type)
 
@@ -1523,14 +1575,17 @@ def check_profit_targets(live_prices: dict[str, float]):
         symbol  = position["symbol"]
         target  = safe_float(position.get("target_price"), 0.0)
         current = safe_float(live_prices.get(symbol), 0.0)
+        direction = position.get("action", "LONG")
 
         if not current or not target:
             continue
 
-        if current >= target:
+        target_hit = current >= target if direction == "LONG" else current <= target
+
+        if target_hit:
             logger.info(
                 f"🎯 TARGET HIT | {symbol} | "
-                f"₹{current} ≥ Target ₹{target}"
+                f"₹{current} {'≥' if direction == 'LONG' else '≤'} Target ₹{target}"
             )
             place_sell_order(symbol, current, "TARGET")
 
@@ -1813,6 +1868,19 @@ def _get_available_capital(force_refresh: bool = False) -> float:
             int(now - _capital_last_update) if _capital_last_update > 0 else -1,
         )
 
+        # Attempt session recovery on repeated failures (e.g. token expired overnight)
+        if _capital_api_failures >= 5 and _capital_api_failures % 5 == 0:
+            try:
+                logger.warning(
+                    "🚨 Capital API has failed %d consecutive times. "
+                    "Attempting silent session recovery/reconnect...",
+                    _capital_api_failures
+                )
+                from core.kotak_client import force_reconnect as _force_reconnect
+                _force_reconnect()
+            except Exception as reconnect_err:
+                logger.error("Session recovery failed during Capital API failure handling: %s", reconnect_err)
+
         # CRITICAL path 1: Cache still at initial 0.0 — all new orders will be
         # blocked with qty=0. Fire CRITICAL immediately on first failure.
         if cache_is_zero:
@@ -2019,23 +2087,138 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
         if not current or not entry_price or not initial_sl:
             continue
 
+        # ─────────────────────────────────────────────────────────
+        # PROFIT TARGET PARTIAL EXIT
+        # ─────────────────────────────────────────────────────────
+        if bool(cfg("risk", "partial_profit_booking_enabled", False)):
+            _notes = str(position.get("notes") or "")
+            if "PARTIAL_PROFIT_DONE" not in _notes:
+                direction = position.get("action", "LONG")
+                
+                # Fetch direction-specific targets
+                if direction == "LONG":
+                    _tgt_pct = safe_float(cfg("risk", "long_profit_target_percent", 0.015), 0.015)
+                    profit_pct = (current - entry_price) / entry_price
+                else:
+                    _tgt_pct = safe_float(cfg("risk", "short_profit_target_percent", 0.025), 0.025)
+                    profit_pct = (entry_price - current) / entry_price
+
+                # R7: Direction-aware partial fraction (Long=0.25, Short=1.0)
+                if direction == "LONG":
+                    _fraction = safe_float(cfg("risk", "long_partial_profit_fraction",
+                                              cfg("risk", "partial_profit_fraction", 1.0)), 1.0)
+                else:
+                    _fraction = safe_float(cfg("risk", "short_partial_profit_fraction",
+                                              cfg("risk", "partial_profit_fraction", 1.0)), 1.0)
+
+                _qty = int(position.get("quantity") or 0)
+                
+                if profit_pct >= _tgt_pct and _qty > 0:
+                    _exit_qty = max(1, int(_qty * _fraction))
+                    logger.info(
+                        "[PartialProfit] %s Profit %.2f%% >= %.2f%% | %s | "
+                        "Exiting %d/%d shares @ Rs%.2f (fraction=%.0f%%)",
+                        direction, profit_pct * 100, _tgt_pct * 100, symbol, _exit_qty, _qty, current, _fraction * 100
+                    )
+                    place_sell_order(
+                        symbol         = symbol,
+                        exit_price     = current,
+                        reason         = "PARTIAL_PROFIT_TARGET",
+                        quantity       = _exit_qty,
+                    )
+                    try:
+                        from core.state_manager import update_position_notes
+                        _new_notes = (_notes + " | PARTIAL_PROFIT_DONE").strip(" | ")
+                        update_position_notes(symbol, _new_notes)
+                    except Exception:
+                        pass
+
+
+        # ─────────────────────────────────────────────────────────
+        # RSI EXIT: Exit position when RSI > threshold
+        # Research-proven: fraction=1.0 (full exit) gives +31.9% vs +21.8% with half-exit
+        # Controlled via trading_settings.json:
+        #   "partial_exit_rsi_enabled": true
+        #   "partial_exit_rsi_threshold": 72
+        #   "partial_exit_fraction": 1.0   ← full exit (was 0.5 for half-exit)
+        #   "partial_exit_mode": "full"
+        # ─────────────────────────────────────────────────────────
+        direction = position.get("action", "LONG")
+
+        # ─────────────────────────────────────────────────────────
+        # RSI EXIT: Exit position when RSI > threshold (Long) or RSI < threshold (Short)
+        # ─────────────────────────────────────────────────────────
+        if bool(cfg("risk", "partial_exit_rsi_enabled", False)):
+            _notes = str(position.get("notes") or "")
+            if "PARTIAL_EXIT_DONE" not in _notes:
+                _long_rsi_thr  = safe_float(cfg("risk", "long_rsi_exit_threshold", 72.0), 72.0)
+                _short_rsi_thr = safe_float(cfg("risk", "short_rsi_exit_threshold", 17.0), 17.0)
+                _fraction = safe_float(cfg("risk", "partial_exit_fraction", 1.0), 1.0)
+
+                _qty      = int(position.get("quantity") or 0)
+                _live_rsi = None
+                try:
+                    from core.data_fetcher import get_candle_history
+                    from core.strategy import _build_indicators
+                    import pandas as pd
+                    _hist = get_candle_history(symbol, max_candles=30)
+                    if _hist and len(_hist) >= 15:
+                        _df = pd.DataFrame(_hist)
+                        _df.columns = [c.lower() for c in _df.columns]
+                        _df = _build_indicators(_df)
+                        if "rsi" in _df.columns and not _df["rsi"].isna().all():
+                            _live_rsi = float(_df["rsi"].iloc[-1])
+                except Exception:
+                    pass
+                
+                if _live_rsi is not None and _qty > 0:
+                    is_rsi_exit = False
+                    if direction == "LONG" and _live_rsi >= _long_rsi_thr:
+                        is_rsi_exit = True
+                    elif direction == "SHORT" and _live_rsi <= _short_rsi_thr:
+                        is_rsi_exit = True
+
+                    if is_rsi_exit:
+                        _exit_qty = max(1, int(_qty * _fraction))
+                        logger.info(
+                            "[PartialExit] %s RSI=%.1f | %s | Exiting %d/%d shares @ Rs%.2f",
+                            direction, _live_rsi, symbol, _exit_qty, _qty, current
+                        )
+                        place_sell_order(
+                            symbol         = symbol,
+                            exit_price     = current,
+                            reason         = "PARTIAL_EXIT_RSI",
+                            quantity       = _exit_qty,
+                        )
+                        try:
+                            from core.state_manager import update_position_notes
+                            _new_notes = (_notes + " | PARTIAL_EXIT_DONE").strip(" | ")
+                            update_position_notes(symbol, _new_notes)
+                        except Exception:
+                            pass
+
         # Get current TSL activation state
-        tsl_state = get_tsl_activation_state(symbol)
+        tsl_state        = get_tsl_activation_state(symbol)
         is_tsl_activated = tsl_state["tsl_activated"]
-        
+
         # ─────────────────────────────────────────────────────────
         # PHASE 1: Check if TSL should be activated (not yet active)
         # ─────────────────────────────────────────────────────────
         if not is_tsl_activated:
             # Calculate activation threshold
             sl_percent = abs(entry_price - initial_sl) / entry_price
-            activation_threshold = entry_price + (entry_price * sl_percent * tsl_activation_ratio)
+            if direction == "LONG":
+                activation_threshold = entry_price + (entry_price * sl_percent * tsl_activation_ratio)
+                activation_hit = current >= activation_threshold
+            else:
+                activation_threshold = entry_price - (entry_price * sl_percent * tsl_activation_ratio)
+                activation_hit = current <= activation_threshold
             
             # Check if price reached activation threshold
-            if current >= activation_threshold:
+            if activation_hit:
                 # TSL activates!
                 update_tsl_activation_state(symbol, True, current, tsl_mode)
-                profit_pct = round(((current - entry_price) / entry_price) * 100, 2)
+                profit_pct = round(((current - entry_price) / entry_price) * 100, 2) if direction == "LONG" else round(((entry_price - current) / entry_price) * 100, 2)
                 logger.info(
                     f"🎯 TSL ACTIVATED | {symbol} | "
                     f"Price ₹{current} | Entry ₹{entry_price} | "
@@ -2051,11 +2234,17 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
             tsl_pct = max(0.0001, min(0.20, safe_float(cfg("risk", "trailing_sl_percent", 0.008), 0.008)))
             
             if tsl_mode == "trailing":
-                # Trailing mode: SL moves up with price, never down
-                raw_tsl = current * (1 - tsl_pct)
-                new_tsl = round_to_tick(raw_tsl)
+                # Trailing mode: SL moves up with price, never down (LONG), or down with price, never up (SHORT)
+                if direction == "LONG":
+                    raw_tsl = current * (1 - tsl_pct)
+                    new_tsl = round_to_tick(raw_tsl)
+                    trail_valid = new_tsl > current_tsl
+                else:
+                    raw_tsl = current * (1 + tsl_pct)
+                    new_tsl = round_to_tick(raw_tsl)
+                    trail_valid = new_tsl < current_tsl if current_tsl > 0 else True
                 
-                if new_tsl > current_tsl:
+                if trail_valid:
                     update_trailing_sl(symbol, new_tsl)
                     logger.info(
                         f"📈 TRAILING SL | {symbol} | "
@@ -2069,7 +2258,8 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
                             _modify_sl_order(
                                 sl_order_id,
                                 new_tsl,
-                                position["quantity"]
+                                position["quantity"],
+                                "S" if direction == "LONG" else "B"
                             )
             
             elif tsl_mode == "locked":
@@ -2466,7 +2656,25 @@ def _send_kotak_order(
             if attempt == 0:
                 logger.warning(f"Network error on attempt 1: {e} — retrying...")
             else:
-                logger.error(f"Network error on attempt 2: {e}. Aborting.")
+                logger.error(f"Network error on attempt 2: {e}. Querying broker to check if order was placed...")
+                # F013 FIX: Check if order actually got placed despite network error
+                try:
+                    from core.order_verifier import fetch_kotak_order_row
+                    from core.broker_reconciliation import _fetch_order_report_rows
+                    
+                    # Search recent orders for matching order
+                    recent_orders = _fetch_order_report_rows()
+                    for broker_order in recent_orders:
+                        if (str(broker_order.get("trading_symbol", "")).upper() == str(trading_symbol).upper() and 
+                            int(broker_order.get("quantity", 0)) == int(quantity)):
+                            matched_order_id = broker_order.get("nOrdNo") or broker_order.get("order_id")
+                            if matched_order_id:
+                                logger.critical(f"✅ Order WAS placed on broker! Found order: {matched_order_id}")
+                                return matched_order_id
+                except Exception as broker_query_err:
+                    logger.debug(f"Broker query failed: {broker_query_err}. Treating as not placed.")
+                
+                logger.error(f"Aborting after network error on attempt 2. Order assumed NOT placed.")
                 return None
         
         except Exception as e:
@@ -2512,8 +2720,12 @@ def _send_kotak_sl_order(
     trigger_buffer_pct = safe_float(cfg("risk", "broker_sl_trigger_buffer_pct", 0.01), 0.01)
     limit_offset_pct = safe_float(cfg("risk", "broker_sl_limit_offset_pct", 0.0005), 0.0005)
     
-    broker_trigger_price_raw = software_trigger_price * (1.0 - trigger_buffer_pct)
-    broker_limit_price_raw = broker_trigger_price_raw * (1.0 - limit_offset_pct)
+    if transaction_type == "S":
+        broker_trigger_price_raw = software_trigger_price * (1.0 - trigger_buffer_pct)
+        broker_limit_price_raw = broker_trigger_price_raw * (1.0 - limit_offset_pct)
+    else:
+        broker_trigger_price_raw = software_trigger_price * (1.0 + trigger_buffer_pct)
+        broker_limit_price_raw = broker_trigger_price_raw * (1.0 + limit_offset_pct)
     
     # Round to nearest valid tick size based on NSE dynamic pricing rules
     broker_trigger_price = round_to_tick(broker_trigger_price_raw)
@@ -2640,6 +2852,7 @@ def _modify_sl_order(
     order_id:      str,
     new_trigger:   float,
     quantity:      int,
+    transaction_type: str = "S",
 ) -> bool:
     """Modifies existing SL-M order when trailing SL moves up."""
     new_trigger = safe_float(new_trigger, 0.0)
@@ -2653,8 +2866,12 @@ def _modify_sl_order(
         trigger_buffer_pct = safe_float(cfg("risk", "broker_sl_trigger_buffer_pct", 0.01), 0.01)
         limit_offset_pct = safe_float(cfg("risk", "broker_sl_limit_offset_pct", 0.0005), 0.0005)
         
-        broker_trigger_price = round_to_tick(new_trigger * (1.0 - trigger_buffer_pct))
-        broker_limit_price = round_to_tick(broker_trigger_price * (1.0 - limit_offset_pct))
+        if transaction_type == "S":
+            broker_trigger_price = round_to_tick(new_trigger * (1.0 - trigger_buffer_pct))
+            broker_limit_price = round_to_tick(broker_trigger_price * (1.0 - limit_offset_pct))
+        else:
+            broker_trigger_price = round_to_tick(new_trigger * (1.0 + trigger_buffer_pct))
+            broker_limit_price = round_to_tick(broker_trigger_price * (1.0 + limit_offset_pct))
 
         # 🔐 CRITICAL: Ensure Trade token is set before modifying order
         client = ensure_trade_token_on_client()

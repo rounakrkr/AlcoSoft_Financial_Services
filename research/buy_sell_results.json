@@ -1,0 +1,92 @@
+[
+  {
+    "buy": "ADX_POWER",
+    "wr": 44.64,
+    "ret": 101.01,
+    "trades": 840
+  },
+  {
+    "buy": "VOL_EXPLOSION",
+    "wr": 43.21,
+    "ret": 198.1,
+    "trades": 935
+  },
+  {
+    "buy": "MACD_ADX_CONFIRMED",
+    "wr": 41.98,
+    "ret": 199.43,
+    "trades": 1889
+  },
+  {
+    "buy": "TRIPLE_CONFIRM",
+    "wr": 41.12,
+    "ret": 287.15,
+    "trades": 2349
+  },
+  {
+    "buy": "BREAKOUT_WITH_TREND",
+    "wr": 40.76,
+    "ret": 152.25,
+    "trades": 1531
+  },
+  {
+    "buy": "EMA_ALIGN_BREAK",
+    "wr": 40.01,
+    "ret": 176.75,
+    "trades": 1642
+  },
+  {
+    "buy": "BULL_CANDLE_CONFIRM",
+    "wr": 40.0,
+    "ret": 303.2,
+    "trades": 2360
+  },
+  {
+    "buy": "ADX_EMA_STACK",
+    "wr": 39.8,
+    "ret": 86.34,
+    "trades": 2088
+  },
+  {
+    "buy": "STOCH_ADX_BREAK",
+    "wr": 39.62,
+    "ret": 19.99,
+    "trades": 159
+  },
+  {
+    "buy": "CLEAN_MOMENTUM",
+    "wr": 39.15,
+    "ret": 124.28,
+    "trades": 1106
+  },
+  {
+    "buy": "VWAP_EMA_POWER",
+    "wr": 39.04,
+    "ret": 168.25,
+    "trades": 1309
+  },
+  {
+    "buy": "OPENING_MOMENTUM",
+    "wr": 38.81,
+    "ret": -81.51,
+    "trades": 353
+  },
+  {
+    "buy": "ADX_STOCH_COMBO",
+    "wr": 37.74,
+    "ret": 18.69,
+    "trades": 106
+  },
+  {
+    "buy": "MACD_POWER_BREAK",
+    "wr": 37.33,
+    "ret": 33.08,
+    "trades": 442
+  },
+  {
+    "buy": "STOCH_MOMENTUM",
+    "wr": 30.53,
+    "ret": 13.3,
+    "trades": 131
+  }
+]

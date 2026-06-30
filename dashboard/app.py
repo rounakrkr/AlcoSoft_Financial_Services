@@ -64,6 +64,13 @@ csrf = CSRFProtect(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 login_manager.user_loader(load_user)
+
+# Configure logging to show INFO level messages for debugging
+import logging
+if not app.debug:
+    app.logger.setLevel(logging.INFO)
+else:
+    app.logger.setLevel(logging.DEBUG)
 login_manager.request_loader(load_user_from_request)
 
 @app.before_request
@@ -73,6 +80,25 @@ def require_login():
         return
     if not current_user.is_authenticated:
         return login_manager.unauthorized()
+
+@app.errorhandler(Exception)
+def handle_api_error(error):
+    """Catch unhandled exceptions and return JSON for all requests."""
+    import traceback
+    
+    app.logger.exception(f"Unhandled error: {error}")
+    
+    # Return JSON for all error responses (error.html template does not exist)
+    return jsonify({
+        "ok": False,
+        "error": str(error),
+        "type": error.__class__.__name__,
+    }), 500
+
+@app.route('/favicon.ico')
+def favicon():
+    """Return empty response for favicon requests to suppress 404 errors."""
+    return '', 204
 
 # Initialize database schema on startup
 initialize_db()
@@ -492,47 +518,69 @@ def api_emergency_squareoff():
     trading_mode = os.getenv("TRADING_MODE", "PAPER")
 
     try:
-        from core.state_manager import get_open_positions
+        from core.state_manager import lock_entries, get_trading_session_state, get_open_positions, mark_liquidating
+        import logging
+        import time
+        
+        logger = logging.getLogger(__name__)
 
-        lock_entries("DASHBOARD_EMERGENCY_SQUAREOFF_REQUESTED")
-        positions = get_open_positions()
-        if not positions:
+        # Get initial count of open positions
+        initial_open_count = len(get_open_positions())
+
+        if initial_open_count == 0:
+            # No positions to close, but still lock entries so the system pauses
+            lock_entries("EMERGENCY_SQUAREOFF_NO_OPEN_POSITIONS")
             return jsonify({
                 "ok": True,
-                "status": "SUCCESS",
+                "status": "COMPLETED",
                 "closed_count": 0,
                 "failed_count": 0,
-                "message": "No open positions to close",
-                "trading_state": get_trading_session_state(),
-                "timestamp": datetime.now().isoformat(),
                 "details": [],
+                "timestamp": datetime.now().isoformat(),
             })
 
-        from core.emergency_squareoff import emergency_square_off_all
-        result = emergency_square_off_all()
-
-        return jsonify({
+        # 1. Trigger the main thread to do the squareoff
+        # The main thread has the websocket connected for live prices
+        mark_liquidating("EMERGENCY_SQUAREOFF_REQUESTED")
+        logger.info("Emergency squareoff requested - delegated to main thread.")
+        
+        # 2. Wait for main thread to process it
+        timeout = 10
+        start_time = time.time()
+        completed = False
+        
+        while time.time() - start_time < timeout:
+            state = get_trading_session_state()
+            reason = state.get("reason", "")
+            if "EMERGENCY_SQUAREOFF_SUCCESS" in reason or "EMERGENCY_SQUAREOFF_TRIGGER_COMPLETE" in reason:
+                completed = True
+                break
+            time.sleep(0.5)
+            
+        # 3. Calculate results based on remaining open positions
+        final_open_count = len(get_open_positions())
+        closed_count = initial_open_count - final_open_count
+        failed_count = final_open_count
+        
+        response_data = {
             "ok": True,
-            "status": result["status"],
-            "closed_count": result["closed_count"],
-            "failed_count": result["failed_count"],
-            "timestamp": result["timestamp"],
-            "details": result["details"],
-            "trading_state": get_trading_session_state(),
-        })
-    except ImportError as e:
-        import logging
-        logging.error(f"Import error in emergency squareoff: {e}", exc_info=True)
-        return jsonify({
-            "ok": False,
-            "error": "System error: Could not load required modules",
-        }), 503
+            "status": "COMPLETED" if completed else "TIMEOUT",
+            "closed_count": max(0, closed_count),
+            "failed_count": max(0, failed_count),
+            "details": [],
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        logger.info(f"Squareoff complete. Closed: {response_data['closed_count']}, Failed: {response_data['failed_count']}")
+        return jsonify(response_data)
+
     except Exception as e:
         import logging
-        logging.error(f"Emergency squareoff failed: {e}", exc_info=True)
+        logger = logging.getLogger(__name__)
+        logger.error(f"Emergency squareoff signal failed: {e}", exc_info=True)
         return jsonify({
             "ok": False,
-            "error": "Failed to close positions. Please check the system log.",
+            "error": str(e) if str(e) else "Failed to execute squareoff. Please check the system log.",
         }), 500
 
 

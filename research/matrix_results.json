@@ -1,0 +1,706 @@
+{
+  "holy_grail": [],
+  "near_miss": [],
+  "all": [
+    {
+      "buy": "B9_MOMENTUM_BIRTH",
+      "sell": "S2_RSI_PEAK_DROP",
+      "wr": 48.58,
+      "ret": -139.72,
+      "trades": 1484
+    },
+    {
+      "buy": "B12_EMA_SQUEEZE_BREAK",
+      "sell": "S2_RSI_PEAK_DROP",
+      "wr": 47.79,
+      "ret": 39.91,
+      "trades": 1245
+    },
+    {
+      "buy": "B8_VWAP_EMA_BREAKOUT",
+      "sell": "S2_RSI_PEAK_DROP",
+      "wr": 47.09,
+      "ret": -62.07,
+      "trades": 1187
+    },
+    {
+      "buy": "B4_MACD_CROSS_ADX",
+      "sell": "S2_RSI_PEAK_DROP",
+      "wr": 47.07,
+      "ret": 37.17,
+      "trades": 376
+    },
+    {
+      "buy": "B2_EMA_STACK_VOL",
+      "sell": "S2_RSI_PEAK_DROP",
+      "wr": 46.75,
+      "ret": 24.57,
+      "trades": 1232
+    },
+    {
+      "buy": "B1_ADX_TREND_SOLID",
+      "sell": "S5_MACD_AND_EMA20",
+      "wr": 45.38,
+      "ret": -55.33,
+      "trades": 833
+    },
+    {
+      "buy": "B3_TRIPLE_CONFIRM_TIGHT",
+      "sell": "S1_EMA21_PREV",
+      "wr": 45.21,
+      "ret": 139.66,
+      "trades": 909
+    },
+    {
+      "buy": "B1_ADX_TREND_SOLID",
+      "sell": "S10_MACD_SIGNAL_CROSS",
+      "wr": 45.01,
+      "ret": -19.59,
+      "trades": 862
+    },
+    {
+      "buy": "B3_TRIPLE_CONFIRM_TIGHT",
+      "sell": "S5_MACD_AND_EMA20",
+      "wr": 45.01,
+      "ret": -59.79,
+      "trades": 882
+    },
+    {
+      "buy": "B3_TRIPLE_CONFIRM_TIGHT",
+      "sell": "S4_EMA9_EMA20_CROSS",
+      "wr": 44.84,
+      "ret": 41.84,
+      "trades": 892
+    },
+    {
+      "buy": "B1_ADX_TREND_SOLID",
+      "sell": "S3_MACD_HIST_FLIP",
+      "wr": 44.74,
+      "ret": 40.7,
+      "trades": 903
+    },
+    {
+      "buy": "B1_ADX_TREND_SOLID",
+      "sell": "S1_EMA21_PREV",
+      "wr": 44.61,
+      "ret": 98.55,
+      "trades": 863
+    },
+    {
+      "buy": "B3_TRIPLE_CONFIRM_TIGHT",
+      "sell": "S10_MACD_SIGNAL_CROSS",
+      "wr": 44.6,
+      "ret": 19.54,
+      "trades": 917
+    },
+    {
+      "buy": "B3_TRIPLE_CONFIRM_TIGHT",
+      "sell": "S3_MACD_HIST_FLIP",
+      "wr": 44.57,
+      "ret": 124.63,
+      "trades": 940
+    },
+    {
+      "buy": "B1_ADX_TREND_SOLID",
+      "sell": "S4_EMA9_EMA20_CROSS",
+      "wr": 44.55,
+      "ret": 75.43,
+      "trades": 844
+    },
+    {
+      "buy": "B3_TRIPLE_CONFIRM_TIGHT",
+      "sell": "S6_VWAP_AND_EMA9",
+      "wr": 44.52,
+      "ret": 15.75,
+      "trades": 885
+    },
+    {
+      "buy": "B5_VOL_BREAKOUT_SOLID",
+      "sell": "S2_RSI_PEAK_DROP",
+      "wr": 44.44,
+      "ret": 2.15,
+      "trades": 1035
+    },
+    {
+      "buy": "B10_5MIN_POWER_CANDLE",
+      "sell": "S2_RSI_PEAK_DROP",
+      "wr": 44.34,
+      "ret": -50.71,
+      "trades": 1836
+    },
+    {
+      "buy": "B10_5MIN_POWER_CANDLE",
+      "sell": "S5_MACD_AND_EMA20",
+      "wr": 44.13,
+      "ret": 78.66,
+      "trades": 1559
+    },
+    {
+      "buy": "B10_5MIN_POWER_CANDLE",
+      "sell": "S3_MACD_HIST_FLIP",
+      "wr": 44.06,
+      "ret": 261.84,
+      "trades": 1768
+    },
+    {
+      "buy": "B10_5MIN_POWER_CANDLE",
+      "sell": "S10_MACD_SIGNAL_CROSS",
+      "wr": 43.92,
+      "ret": 234.48,
+      "trades": 1653
+    },
+    {
+      "buy": "B10_5MIN_POWER_CANDLE",
+      "sell": "S4_EMA9_EMA20_CROSS",
+      "wr": 43.9,
+      "ret": 239.2,
+      "trades": 1590
+    },
+    {
+      "buy": "B1_ADX_TREND_SOLID",
+      "sell": "S6_VWAP_AND_EMA9",
+      "wr": 43.86,
+      "ret": 27.35,
+      "trades": 839
+    },
+    {
+      "buy": "B5_VOL_BREAKOUT_SOLID",
+      "sell": "S3_MACD_HIST_FLIP",
+      "wr": 43.45,
+      "ret": 116.69,
+      "trades": 1038
+    },
+    {
+      "buy": "B5_VOL_BREAKOUT_SOLID",
+      "sell": "S4_EMA9_EMA20_CROSS",
+      "wr": 43.42,
+      "ret": 84.1,
+      "trades": 988
+    },
+    {
+      "buy": "B5_VOL_BREAKOUT_SOLID",
+      "sell": "S5_MACD_AND_EMA20",
+      "wr": 43.4,
+      "ret": -12.7,
+      "trades": 977
+    },
+    {
+      "buy": "B3_TRIPLE_CONFIRM_TIGHT",
+      "sell": "S8_5BAR_LOW_BREAK",
+      "wr": 43.31,
+      "ret": 94.25,
+      "trades": 919
+    },
+    {
+      "buy": "B4_MACD_CROSS_ADX",
+      "sell": "S4_EMA9_EMA20_CROSS",
+      "wr": 42.9,
+      "ret": -21.56,
+      "trades": 366
+    },
+    {
+      "buy": "B5_VOL_BREAKOUT_SOLID",
+      "sell": "S1_EMA21_PREV",
+      "wr": 42.82,
+      "ret": 146.56,
+      "trades": 1023
+    },
+    {
+      "buy": "B1_ADX_TREND_SOLID",
+      "sell": "S8_5BAR_LOW_BREAK",
+      "wr": 42.71,
+      "ret": 54.96,
+      "trades": 878
+    },
+    {
+      "buy": "B5_VOL_BREAKOUT_SOLID",
+      "sell": "S10_MACD_SIGNAL_CROSS",
+      "wr": 42.62,
+      "ret": 71.94,
+      "trades": 1009
+    },
+    {
+      "buy": "B10_5MIN_POWER_CANDLE",
+      "sell": "S1_EMA21_PREV",
+      "wr": 42.61,
+      "ret": 284.42,
+      "trades": 1704
+    },
+    {
+      "buy": "B5_VOL_BREAKOUT_SOLID",
+      "sell": "S6_VWAP_AND_EMA9",
+      "wr": 42.51,
+      "ret": 45.44,
+      "trades": 981
+    },
+    {
+      "buy": "B2_EMA_STACK_VOL",
+      "sell": "S5_MACD_AND_EMA20",
+      "wr": 42.47,
+      "ret": 68.96,
+      "trades": 1095
+    },
+    {
+      "buy": "B3_TRIPLE_CONFIRM_TIGHT",
+      "sell": "S2_RSI_PEAK_DROP",
+      "wr": 42.46,
+      "ret": 10.98,
+      "trades": 968
+    },
+    {
+      "buy": "B2_EMA_STACK_VOL",
+      "sell": "S6_VWAP_AND_EMA9",
+      "wr": 42.45,
+      "ret": 86.08,
+      "trades": 1093
+    },
+    {
+      "buy": "B8_VWAP_EMA_BREAKOUT",
+      "sell": "S5_MACD_AND_EMA20",
+      "wr": 42.26,
+      "ret": 26.42,
+      "trades": 1053
+    },
+    {
+      "buy": "B5_VOL_BREAKOUT_SOLID",
+      "sell": "S8_5BAR_LOW_BREAK",
+      "wr": 42.12,
+      "ret": 50.06,
+      "trades": 1028
+    },
+    {
+      "buy": "B10_5MIN_POWER_CANDLE",
+      "sell": "S6_VWAP_AND_EMA9",
+      "wr": 42.05,
+      "ret": 153.38,
+      "trades": 1598
+    },
+    {
+      "buy": "B1_ADX_TREND_SOLID",
+      "sell": "S2_RSI_PEAK_DROP",
+      "wr": 42.04,
+      "ret": -26.43,
+      "trades": 930
+    },
+    {
+      "buy": "B4_MACD_CROSS_ADX",
+      "sell": "S6_VWAP_AND_EMA9",
+      "wr": 41.87,
+      "ret": -27.52,
+      "trades": 363
+    },
+    {
+      "buy": "B12_EMA_SQUEEZE_BREAK",
+      "sell": "S3_MACD_HIST_FLIP",
+      "wr": 41.79,
+      "ret": 165.06,
+      "trades": 1309
+    },
+    {
+      "buy": "B3_TRIPLE_CONFIRM_TIGHT",
+      "sell": "S7_RSI_BELOW_55",
+      "wr": 41.75,
+      "ret": 75.13,
+      "trades": 927
+    },
+    {
+      "buy": "B2_EMA_STACK_VOL",
+      "sell": "S4_EMA9_EMA20_CROSS",
+      "wr": 41.7,
+      "ret": 114.03,
+      "trades": 1115
+    },
+    {
+      "buy": "B4_MACD_CROSS_ADX",
+      "sell": "S5_MACD_AND_EMA20",
+      "wr": 41.69,
+      "ret": -84.56,
+      "trades": 367
+    },
+    {
+      "buy": "B8_VWAP_EMA_BREAKOUT",
+      "sell": "S3_MACD_HIST_FLIP",
+      "wr": 41.67,
+      "ret": 113.94,
+      "trades": 1183
+    },
+    {
+      "buy": "B1_ADX_TREND_SOLID",
+      "sell": "S7_RSI_BELOW_55",
+      "wr": 41.62,
+      "ret": 41.84,
+      "trades": 877
+    },
+    {
+      "buy": "B12_EMA_SQUEEZE_BREAK",
+      "sell": "S6_VWAP_AND_EMA9",
+      "wr": 41.53,
+      "ret": 74.21,
+      "trades": 1216
+    },
+    {
+      "buy": "B12_EMA_SQUEEZE_BREAK",
+      "sell": "S4_EMA9_EMA20_CROSS",
+      "wr": 41.46,
+      "ret": 116.15,
+      "trades": 1235
+    },
+    {
+      "buy": "B10_5MIN_POWER_CANDLE",
+      "sell": "S8_5BAR_LOW_BREAK",
+      "wr": 41.42,
+      "ret": 191.88,
+      "trades": 1724
+    },
+    {
+      "buy": "B6_RSI_ADX_BREAKOUT",
+      "sell": "S5_MACD_AND_EMA20",
+      "wr": 41.35,
+      "ret": -128.81,
+      "trades": 578
+    },
+    {
+      "buy": "B8_VWAP_EMA_BREAKOUT",
+      "sell": "S4_EMA9_EMA20_CROSS",
+      "wr": 41.33,
+      "ret": 101.12,
+      "trades": 1079
+    },
+    {
+      "buy": "B12_EMA_SQUEEZE_BREAK",
+      "sell": "S10_MACD_SIGNAL_CROSS",
+      "wr": 41.26,
+      "ret": 138.22,
+      "trades": 1287
+    },
+    {
+      "buy": "B2_EMA_STACK_VOL",
+      "sell": "S3_MACD_HIST_FLIP",
+      "wr": 41.23,
+      "ret": 117.55,
+      "trades": 1237
+    },
+    {
+      "buy": "B12_EMA_SQUEEZE_BREAK",
+      "sell": "S8_5BAR_LOW_BREAK",
+      "wr": 40.87,
+      "ret": 110.23,
+      "trades": 1282
+    },
+    {
+      "buy": "B8_VWAP_EMA_BREAKOUT",
+      "sell": "S6_VWAP_AND_EMA9",
+      "wr": 40.54,
+      "ret": 72.36,
+      "trades": 1078
+    },
+    {
+      "buy": "B4_MACD_CROSS_ADX",
+      "sell": "S8_5BAR_LOW_BREAK",
+      "wr": 40.53,
+      "ret": -49.7,
+      "trades": 375
+    },
+    {
+      "buy": "B12_EMA_SQUEEZE_BREAK",
+      "sell": "S5_MACD_AND_EMA20",
+      "wr": 40.52,
+      "ret": 45.88,
+      "trades": 1224
+    },
+    {
+      "buy": "B6_RSI_ADX_BREAKOUT",
+      "sell": "S2_RSI_PEAK_DROP",
+      "wr": 40.26,
+      "ret": -116.98,
+      "trades": 698
+    },
+    {
+      "buy": "B2_EMA_STACK_VOL",
+      "sell": "S10_MACD_SIGNAL_CROSS",
+      "wr": 40.23,
+      "ret": 110.61,
+      "trades": 1193
+    },
+    {
+      "buy": "B12_EMA_SQUEEZE_BREAK",
+      "sell": "S1_EMA21_PREV",
+      "wr": 40.2,
+      "ret": 133.6,
+      "trades": 1301
+    },
+    {
+      "buy": "B6_RSI_ADX_BREAKOUT",
+      "sell": "S3_MACD_HIST_FLIP",
+      "wr": 40.15,
+      "ret": -46.9,
+      "trades": 660
+    },
+    {
+      "buy": "B8_VWAP_EMA_BREAKOUT",
+      "sell": "S10_MACD_SIGNAL_CROSS",
+      "wr": 39.86,
+      "ret": 125.29,
+      "trades": 1144
+    },
+    {
+      "buy": "B2_EMA_STACK_VOL",
+      "sell": "S8_5BAR_LOW_BREAK",
+      "wr": 39.81,
+      "ret": 112.09,
+      "trades": 1188
+    },
+    {
+      "buy": "B4_MACD_CROSS_ADX",
+      "sell": "S1_EMA21_PREV",
+      "wr": 39.73,
+      "ret": -24.19,
+      "trades": 375
+    },
+    {
+      "buy": "B10_5MIN_POWER_CANDLE",
+      "sell": "S7_RSI_BELOW_55",
+      "wr": 39.69,
+      "ret": 150.25,
+      "trades": 1746
+    },
+    {
+      "buy": "B2_EMA_STACK_VOL",
+      "sell": "S1_EMA21_PREV",
+      "wr": 39.58,
+      "ret": 172.7,
+      "trades": 1190
+    },
+    {
+      "buy": "B4_MACD_CROSS_ADX",
+      "sell": "S10_MACD_SIGNAL_CROSS",
+      "wr": 39.43,
+      "ret": -50.85,
+      "trades": 383
+    },
+    {
+      "buy": "B9_MOMENTUM_BIRTH",
+      "sell": "S3_MACD_HIST_FLIP",
+      "wr": 39.29,
+      "ret": -81.74,
+      "trades": 1680
+    },
+    {
+      "buy": "B6_RSI_ADX_BREAKOUT",
+      "sell": "S6_VWAP_AND_EMA9",
+      "wr": 39.18,
+      "ret": -90.93,
+      "trades": 582
+    },
+    {
+      "buy": "B9_MOMENTUM_BIRTH",
+      "sell": "S10_MACD_SIGNAL_CROSS",
+      "wr": 39.17,
+      "ret": -49.89,
+      "trades": 1644
+    },
+    {
+      "buy": "B8_VWAP_EMA_BREAKOUT",
+      "sell": "S1_EMA21_PREV",
+      "wr": 39.03,
+      "ret": 160.94,
+      "trades": 1153
+    },
+    {
+      "buy": "B9_MOMENTUM_BIRTH",
+      "sell": "S4_EMA9_EMA20_CROSS",
+      "wr": 38.96,
+      "ret": 48.6,
+      "trades": 1540
+    },
+    {
+      "buy": "B8_VWAP_EMA_BREAKOUT",
+      "sell": "S8_5BAR_LOW_BREAK",
+      "wr": 38.84,
+      "ret": 86.37,
+      "trades": 1151
+    },
+    {
+      "buy": "B5_VOL_BREAKOUT_SOLID",
+      "sell": "S7_RSI_BELOW_55",
+      "wr": 38.75,
+      "ret": 85.74,
+      "trades": 1040
+    },
+    {
+      "buy": "B3_TRIPLE_CONFIRM_TIGHT",
+      "sell": "S9_STOCH_OVERBOUGHT_EXIT",
+      "wr": 38.56,
+      "ret": 95.22,
+      "trades": 975
+    },
+    {
+      "buy": "B4_MACD_CROSS_ADX",
+      "sell": "S3_MACD_HIST_FLIP",
+      "wr": 38.56,
+      "ret": -64.8,
+      "trades": 389
+    },
+    {
+      "buy": "B9_MOMENTUM_BIRTH",
+      "sell": "S5_MACD_AND_EMA20",
+      "wr": 38.53,
+      "ret": -79.43,
+      "trades": 1539
+    },
+    {
+      "buy": "B6_RSI_ADX_BREAKOUT",
+      "sell": "S4_EMA9_EMA20_CROSS",
+      "wr": 38.33,
+      "ret": -51.48,
+      "trades": 587
+    },
+    {
+      "buy": "B4_MACD_CROSS_ADX",
+      "sell": "S9_STOCH_OVERBOUGHT_EXIT",
+      "wr": 38.3,
+      "ret": 1.45,
+      "trades": 389
+    },
+    {
+      "buy": "B9_MOMENTUM_BIRTH",
+      "sell": "S6_VWAP_AND_EMA9",
+      "wr": 38.25,
+      "ret": 7.31,
+      "trades": 1524
+    },
+    {
+      "buy": "B6_RSI_ADX_BREAKOUT",
+      "sell": "S10_MACD_SIGNAL_CROSS",
+      "wr": 38.25,
+      "ret": -54.74,
+      "trades": 617
+    },
+    {
+      "buy": "B1_ADX_TREND_SOLID",
+      "sell": "S9_STOCH_OVERBOUGHT_EXIT",
+      "wr": 38.23,
+      "ret": 62.86,
+      "trades": 947
+    },
+    {
+      "buy": "B10_5MIN_POWER_CANDLE",
+      "sell": "S9_STOCH_OVERBOUGHT_EXIT",
+      "wr": 38.18,
+      "ret": 108.88,
+      "trades": 1938
+    },
+    {
+      "buy": "B9_MOMENTUM_BIRTH",
+      "sell": "S8_5BAR_LOW_BREAK",
+      "wr": 38.05,
+      "ret": -67.82,
+      "trades": 1648
+    },
+    {
+      "buy": "B9_MOMENTUM_BIRTH",
+      "sell": "S9_STOCH_OVERBOUGHT_EXIT",
+      "wr": 37.85,
+      "ret": -57.68,
+      "trades": 1765
+    },
+    {
+      "buy": "B5_VOL_BREAKOUT_SOLID",
+      "sell": "S9_STOCH_OVERBOUGHT_EXIT",
+      "wr": 37.62,
+      "ret": 82.78,
+      "trades": 1074
+    },
+    {
+      "buy": "B6_RSI_ADX_BREAKOUT",
+      "sell": "S1_EMA21_PREV",
+      "wr": 37.6,
+      "ret": -3.9,
+      "trades": 609
+    },
+    {
+      "buy": "B9_MOMENTUM_BIRTH",
+      "sell": "S1_EMA21_PREV",
+      "wr": 36.99,
+      "ret": 26.72,
+      "trades": 1676
+    },
+    {
+      "buy": "B4_MACD_CROSS_ADX",
+      "sell": "S7_RSI_BELOW_55",
+      "wr": 36.39,
+      "ret": -59.77,
+      "trades": 382
+    },
+    {
+      "buy": "B6_RSI_ADX_BREAKOUT",
+      "sell": "S8_5BAR_LOW_BREAK",
+      "wr": 36.32,
+      "ret": -45.98,
+      "trades": 625
+    },
+    {
+      "buy": "B12_EMA_SQUEEZE_BREAK",
+      "sell": "S9_STOCH_OVERBOUGHT_EXIT",
+      "wr": 35.62,
+      "ret": 45.92,
+      "trades": 1370
+    },
+    {
+      "buy": "B12_EMA_SQUEEZE_BREAK",
+      "sell": "S7_RSI_BELOW_55",
+      "wr": 35.36,
+      "ret": 83.17,
+      "trades": 1335
+    },
+    {
+      "buy": "B2_EMA_STACK_VOL",
+      "sell": "S9_STOCH_OVERBOUGHT_EXIT",
+      "wr": 35.26,
+      "ret": 56.99,
+      "trades": 1347
+    },
+    {
+      "buy": "B2_EMA_STACK_VOL",
+      "sell": "S7_RSI_BELOW_55",
+      "wr": 35.11,
+      "ret": 100.67,
+      "trades": 1236
+    },
+    {
+      "buy": "B6_RSI_ADX_BREAKOUT",
+      "sell": "S7_RSI_BELOW_55",
+      "wr": 34.87,
+      "ret": -72.93,
+      "trades": 631
+    },
+    {
+      "buy": "B8_VWAP_EMA_BREAKOUT",
+      "sell": "S7_RSI_BELOW_55",
+      "wr": 34.05,
+      "ret": 43.93,
+      "trades": 1207
+    },
+    {
+      "buy": "B6_RSI_ADX_BREAKOUT",
+      "sell": "S9_STOCH_OVERBOUGHT_EXIT",
+      "wr": 33.85,
+      "ret": -42.25,
+      "trades": 709
+    },
+    {
+      "buy": "B8_VWAP_EMA_BREAKOUT",
+      "sell": "S9_STOCH_OVERBOUGHT_EXIT",
+      "wr": 33.44,
+      "ret": 15.5,
+      "trades": 1304
+    },
+    {
+      "buy": "B9_MOMENTUM_BIRTH",
+      "sell": "S7_RSI_BELOW_55",
+      "wr": 31.4,
+      "ret": -74.6,
+      "trades": 1793
+    }
+  ]
+}

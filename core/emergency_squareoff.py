@@ -209,17 +209,27 @@ def emergency_square_off_all() -> dict:
     else:
         overall_status = 'FAILED'
 
+    # Build result dict with explicit int types for serialization
+    closed_count = int(len(closed))
+    failed_count = int(len(failed))
+    
     result = {
         'status': overall_status,
-        'closed_count': len(closed),
-        'failed_count': len(failed),
+        'closed_count': closed_count,
+        'failed_count': failed_count,
         'details': closed + failed,
         'timestamp': datetime.now().isoformat(),
     }
+    
+    # Diagnostic logging before return
+    logger.info(f"  Result dict structure: status={result['status']}, "
+                f"closed_count={result['closed_count']} (type: {type(result['closed_count']).__name__}), "
+                f"failed_count={result['failed_count']} (type: {type(result['failed_count']).__name__})")
+    
     lock_entries(f"EMERGENCY_SQUAREOFF_{overall_status}")
 
     logger.critical(
-        f"🚨 EMERGENCY SQUAREOFF COMPLETE: {len(closed)} closed, {len(failed)} failed"
+        f"🚨 EMERGENCY SQUAREOFF COMPLETE: {closed_count} closed, {failed_count} failed"
     )
 
     return result

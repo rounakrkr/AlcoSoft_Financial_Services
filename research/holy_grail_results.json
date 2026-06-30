@@ -1,0 +1,2258 @@
+[
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 53.3,
+        "win_rate": 49.33,
+        "trades": 375
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 53.3,
+        "win_rate": 49.33,
+        "trades": 375
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 49.37,
+        "win_rate": 48.92,
+        "trades": 372
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 49.37,
+        "win_rate": 48.92,
+        "trades": 372
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 37.7,
+        "win_rate": 48.56,
+        "trades": 313
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 37.7,
+        "win_rate": 48.56,
+        "trades": 313
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 73.32,
+        "win_rate": 48.29,
+        "trades": 381
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 55.19,
+        "win_rate": 48.19,
+        "trades": 415
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 55.19,
+        "win_rate": 48.19,
+        "trades": 415
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 70.4,
+        "win_rate": 48.17,
+        "trades": 382
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 71.56,
+        "win_rate": 48.15,
+        "trades": 378
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 33.78,
+        "win_rate": 48.06,
+        "trades": 310
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 33.78,
+        "win_rate": 48.06,
+        "trades": 310
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 68.64,
+        "win_rate": 48.02,
+        "trades": 379
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 90.26,
+        "win_rate": 47.98,
+        "trades": 494
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 89.03,
+        "win_rate": 47.96,
+        "trades": 490
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 87.34,
+        "win_rate": 47.88,
+        "trades": 495
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 86.11,
+        "win_rate": 47.86,
+        "trades": 491
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 51.26,
+        "win_rate": 47.82,
+        "trades": 412
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 51.26,
+        "win_rate": 47.82,
+        "trades": 412
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 105.89,
+        "win_rate": 47.64,
+        "trades": 592
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 106.77,
+        "win_rate": 47.57,
+        "trades": 597
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 102.97,
+        "win_rate": 47.55,
+        "trades": 593
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 103.85,
+        "win_rate": 47.49,
+        "trades": 598
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 176.69,
+        "win_rate": 46.89,
+        "trades": 659
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 176.69,
+        "win_rate": 46.89,
+        "trades": 659
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 177.22,
+        "win_rate": 46.76,
+        "trades": 663
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 177.22,
+        "win_rate": 46.76,
+        "trades": 663
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 210.24,
+        "win_rate": 46.55,
+        "trades": 711
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 210.24,
+        "win_rate": 46.55,
+        "trades": 711
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 140.73,
+        "win_rate": 46.52,
+        "trades": 561
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 140.73,
+        "win_rate": 46.52,
+        "trades": 561
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 83.21,
+        "win_rate": 46.42,
+        "trades": 433
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 53.66,
+        "win_rate": 46.41,
+        "trades": 362
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 53.66,
+        "win_rate": 46.41,
+        "trades": 362
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 209.64,
+        "win_rate": 46.37,
+        "trades": 716
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 209.64,
+        "win_rate": 46.37,
+        "trades": 716
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 142.02,
+        "win_rate": 46.37,
+        "trades": 565
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 142.02,
+        "win_rate": 46.37,
+        "trades": 565
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 77.68,
+        "win_rate": 46.37,
+        "trades": 427
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 93.69,
+        "win_rate": 46.35,
+        "trades": 589
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 91.29,
+        "win_rate": 46.32,
+        "trades": 585
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 54.33,
+        "win_rate": 46.32,
+        "trades": 367
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 54.33,
+        "win_rate": 46.32,
+        "trades": 367
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 81.28,
+        "win_rate": 46.28,
+        "trades": 430
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 207.04,
+        "win_rate": 46.27,
+        "trades": 858
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 75.75,
+        "win_rate": 46.23,
+        "trades": 424
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 204.12,
+        "win_rate": 46.22,
+        "trades": 859
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 136.52,
+        "win_rate": 46.17,
+        "trades": 548
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 136.52,
+        "win_rate": 46.17,
+        "trades": 548
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 138.0,
+        "win_rate": 46.11,
+        "trades": 553
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 138.0,
+        "win_rate": 46.11,
+        "trades": 553
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 94.77,
+        "win_rate": 46.08,
+        "trades": 599
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 225.09,
+        "win_rate": 46.07,
+        "trades": 840
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 277.73,
+        "win_rate": 46.05,
+        "trades": 1001
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 92.37,
+        "win_rate": 46.05,
+        "trades": 595
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 222.17,
+        "win_rate": 46.02,
+        "trades": 841
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 274.81,
+        "win_rate": 46.01,
+        "trades": 1002
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 227.05,
+        "win_rate": 45.98,
+        "trades": 846
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 202.81,
+        "win_rate": 45.96,
+        "trades": 866
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 224.13,
+        "win_rate": 45.93,
+        "trades": 847
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 168.08,
+        "win_rate": 45.92,
+        "trades": 710
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 199.89,
+        "win_rate": 45.91,
+        "trades": 867
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 278.6,
+        "win_rate": 45.89,
+        "trades": 1009
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 165.16,
+        "win_rate": 45.85,
+        "trades": 711
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 163.83,
+        "win_rate": 45.85,
+        "trades": 602
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 163.83,
+        "win_rate": 45.85,
+        "trades": 602
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 275.68,
+        "win_rate": 45.84,
+        "trades": 1010
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 165.31,
+        "win_rate": 45.8,
+        "trades": 607
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 165.31,
+        "win_rate": 45.8,
+        "trades": 607
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 23.49,
+        "win_rate": 45.78,
+        "trades": 225
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 23.49,
+        "win_rate": 45.78,
+        "trades": 225
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 44.76,
+        "win_rate": 45.73,
+        "trades": 398
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 44.76,
+        "win_rate": 45.73,
+        "trades": 398
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 111.49,
+        "win_rate": 45.71,
+        "trades": 466
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 111.49,
+        "win_rate": 45.71,
+        "trades": 466
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 166.87,
+        "win_rate": 45.67,
+        "trades": 716
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 48.21,
+        "win_rate": 45.67,
+        "trades": 300
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 48.21,
+        "win_rate": 45.67,
+        "trades": 300
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 45.43,
+        "win_rate": 45.66,
+        "trades": 403
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 45.43,
+        "win_rate": 45.66,
+        "trades": 403
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 112.97,
+        "win_rate": 45.65,
+        "trades": 471
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 112.97,
+        "win_rate": 45.65,
+        "trades": 471
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 163.95,
+        "win_rate": 45.61,
+        "trades": 717
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 46.81,
+        "win_rate": 45.61,
+        "trades": 296
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 46.81,
+        "win_rate": 45.61,
+        "trades": 296
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 138.98,
+        "win_rate": 45.6,
+        "trades": 568
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 40.39,
+        "win_rate": 45.57,
+        "trades": 327
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 40.39,
+        "win_rate": 45.57,
+        "trades": 327
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 178.26,
+        "win_rate": 45.56,
+        "trades": 676
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 181.5,
+        "win_rate": 45.52,
+        "trades": 681
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 136.06,
+        "win_rate": 45.52,
+        "trades": 569
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 38.99,
+        "win_rate": 45.51,
+        "trades": 323
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 38.99,
+        "win_rate": 45.51,
+        "trades": 323
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 175.34,
+        "win_rate": 45.49,
+        "trades": 677
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 178.58,
+        "win_rate": 45.45,
+        "trades": 682
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 108.58,
+        "win_rate": 45.45,
+        "trades": 506
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 108.58,
+        "win_rate": 45.45,
+        "trades": 506
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 37.12,
+        "win_rate": 45.43,
+        "trades": 339
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 37.12,
+        "win_rate": 45.43,
+        "trades": 339
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 41.16,
+        "win_rate": 45.39,
+        "trades": 412
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 41.16,
+        "win_rate": 45.39,
+        "trades": 412
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 138.3,
+        "win_rate": 45.38,
+        "trades": 573
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 35.72,
+        "win_rate": 45.37,
+        "trades": 335
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 35.72,
+        "win_rate": 45.37,
+        "trades": 335
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 217.76,
+        "win_rate": 45.36,
+        "trades": 873
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 217.76,
+        "win_rate": 45.36,
+        "trades": 873
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 218.02,
+        "win_rate": 45.32,
+        "trades": 876
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 218.02,
+        "win_rate": 45.32,
+        "trades": 876
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 41.83,
+        "win_rate": 45.32,
+        "trades": 417
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 41.83,
+        "win_rate": 45.32,
+        "trades": 417
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 107.59,
+        "win_rate": 45.31,
+        "trades": 501
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 107.59,
+        "win_rate": 45.31,
+        "trades": 501
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 135.38,
+        "win_rate": 45.3,
+        "trades": 574
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 21.51,
+        "win_rate": 45.29,
+        "trades": 223
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 21.51,
+        "win_rate": 45.29,
+        "trades": 223
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 20.66,
+        "win_rate": 45.11,
+        "trades": 235
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 20.66,
+        "win_rate": 45.11,
+        "trades": 235
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 20.5,
+        "win_rate": 45.05,
+        "trades": 202
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 20.5,
+        "win_rate": 45.05,
+        "trades": 202
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 99.45,
+        "win_rate": 44.97,
+        "trades": 567
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 99.45,
+        "win_rate": 44.97,
+        "trades": 567
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 91.49,
+        "win_rate": 44.97,
+        "trades": 547
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 91.49,
+        "win_rate": 44.97,
+        "trades": 547
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 90.44,
+        "win_rate": 44.83,
+        "trades": 542
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 90.44,
+        "win_rate": 44.83,
+        "trades": 542
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 187.57,
+        "win_rate": 44.76,
+        "trades": 744
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 187.57,
+        "win_rate": 44.76,
+        "trades": 744
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 96.12,
+        "win_rate": 44.74,
+        "trades": 561
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 96.12,
+        "win_rate": 44.74,
+        "trades": 561
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 208.5,
+        "win_rate": 44.72,
+        "trades": 834
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 188.53,
+        "win_rate": 44.71,
+        "trades": 747
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 188.53,
+        "win_rate": 44.71,
+        "trades": 747
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 18.68,
+        "win_rate": 44.64,
+        "trades": 233
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 18.68,
+        "win_rate": 44.64,
+        "trades": 233
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 216.56,
+        "win_rate": 44.58,
+        "trades": 960
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 216.56,
+        "win_rate": 44.58,
+        "trades": 960
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 224.84,
+        "win_rate": 44.55,
+        "trades": 752
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 173.21,
+        "win_rate": 44.52,
+        "trades": 629
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 249.85,
+        "win_rate": 44.51,
+        "trades": 993
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 18.51,
+        "win_rate": 44.5,
+        "trades": 200
+    },
+    {
+        "params": {
+            "rsi": 70,
+            "vol": 2.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 18.51,
+        "win_rate": 44.5,
+        "trades": 200
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 220.38,
+        "win_rate": 44.47,
+        "trades": 967
+    },
+    {
+        "params": {
+            "rsi": 65,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 220.38,
+        "win_rate": 44.47,
+        "trades": 967
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 207.77,
+        "win_rate": 44.47,
+        "trades": 841
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 227.4,
+        "win_rate": 44.46,
+        "trades": 758
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 215.87,
+        "win_rate": 44.44,
+        "trades": 846
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 195.08,
+        "win_rate": 44.4,
+        "trades": 741
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 160.67,
+        "win_rate": 44.39,
+        "trades": 624
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 272.22,
+        "win_rate": 44.37,
+        "trades": 1012
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 251.44,
+        "win_rate": 44.34,
+        "trades": 999
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 197.65,
+        "win_rate": 44.31,
+        "trades": 747
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 97.41,
+        "win_rate": 44.31,
+        "trades": 799
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 99.45,
+        "win_rate": 44.28,
+        "trades": 804
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 254.23,
+        "win_rate": 44.25,
+        "trades": 1139
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 172.02,
+        "win_rate": 44.25,
+        "trades": 635
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 273.82,
+        "win_rate": 44.2,
+        "trades": 1018
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 252.72,
+        "win_rate": 44.2,
+        "trades": 1138
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 215.15,
+        "win_rate": 44.2,
+        "trades": 853
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 249.27,
+        "win_rate": 44.15,
+        "trades": 1146
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 159.48,
+        "win_rate": 44.13,
+        "trades": 630
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 247.76,
+        "win_rate": 44.1,
+        "trades": 1145
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 94.84,
+        "win_rate": 43.97,
+        "trades": 812
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 194.73,
+        "win_rate": 43.96,
+        "trades": 910
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 2.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 96.88,
+        "win_rate": 43.94,
+        "trades": 817
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 193.22,
+        "win_rate": 43.89,
+        "trades": 909
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 191.34,
+        "win_rate": 43.89,
+        "trades": 916
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 189.83,
+        "win_rate": 43.83,
+        "trades": 915
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 274.24,
+        "win_rate": 43.78,
+        "trades": 1375
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 272.73,
+        "win_rate": 43.74,
+        "trades": 1374
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 268.46,
+        "win_rate": 43.61,
+        "trades": 1385
+    },
+    {
+        "params": {
+            "rsi": 61,
+            "vol": 1.0,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 266.95,
+        "win_rate": 43.57,
+        "trades": 1384
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 220.37,
+        "win_rate": 43.03,
+        "trades": 1155
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 216.96,
+        "win_rate": 42.78,
+        "trades": 1164
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 225.19,
+        "win_rate": 42.63,
+        "trades": 1173
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 260.72,
+        "win_rate": 42.54,
+        "trades": 1368
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 259.06,
+        "win_rate": 42.53,
+        "trades": 1058
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 211.67,
+        "win_rate": 42.41,
+        "trades": 1021
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 253.98,
+        "win_rate": 42.4,
+        "trades": 1066
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.5,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 221.78,
+        "win_rate": 42.39,
+        "trades": 1182
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 260.64,
+        "win_rate": 42.37,
+        "trades": 1376
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 282.21,
+        "win_rate": 42.32,
+        "trades": 1394
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.0,
+            "adx": 25,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 207.59,
+        "win_rate": 42.32,
+        "trades": 1028
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.25,
+            "adx": 0,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 282.13,
+        "win_rate": 42.15,
+        "trades": 1402
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": true
+        },
+        "return_pct": 263.71,
+        "win_rate": 41.68,
+        "trades": 1394
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": true
+        },
+        "return_pct": 258.39,
+        "win_rate": 41.54,
+        "trades": 1401
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": true,
+            "macd_pos": false
+        },
+        "return_pct": 300.03,
+        "win_rate": 41.37,
+        "trades": 1443
+    },
+    {
+        "params": {
+            "rsi": 55,
+            "vol": 1.0,
+            "adx": 20,
+            "solid": false,
+            "macd_pos": false
+        },
+        "return_pct": 293.71,
+        "win_rate": 41.21,
+        "trades": 1451
+    }
+]

@@ -1,17 +1,14 @@
 {
   "version": 3,
-
   "_legend": {
     "condition_types": {
       "EVENT": "Fires at a specific moment — tight, precise",
       "STATE": "Can be true for hours — use only as filter, never alone",
-      "SEMI":  "Decays quickly — acceptable as secondary"
+      "SEMI": "Decays quickly — acceptable as secondary"
     },
     "rule": "Every set must have at least 1 EVENT condition as anchor"
   },
-
   "buy_sets": [
-
     {
       "name": "TEST_DEBUG_STRATEGY",
       "priority": 1,
@@ -25,169 +22,6 @@
         "test_trigger"
       ]
     },
-
-    {
-      "name": "BUY_PERFECT_TREND_PULLBACK",
-      "priority": 10,
-      "base_confidence": 78,
-      "confidence_weight": 1.1,
-      "notes": "Strict trend continuation. Buys the dip only when intraday trend is up (above VWAP) AND short-term trend is up (EMA9>EMA21) AND RSI is recovering AND a bullish candle confirms the bottom.",
-      "_conditions_audit": {
-        "price_above_vwap":       "STATE — Intraday macro trend must be bullish",
-        "ema_trending_up":        "STATE — Short-term trend must be bullish",
-        "rsi_recovering":         "SEMI  — Momentum turning back up",
-        "bullish_reversal_candle": "EVENT — The exact trigger"
-      },
-      "conditions": [
-        "price_above_vwap",
-        "ema_trending_up",
-        "rsi_recovering",
-        "bullish_reversal_candle"
-      ]
-    },
-
-    {
-      "name": "BUY_GOLDEN_CROSSOVER_SURGE",
-      "priority": 20,
-      "base_confidence": 80,
-      "confidence_weight": 1.2,
-      "notes": "Very strict crossover. EMA 9/21 cross must be accompanied by a volume spike AND must happen above VWAP. Blocks fake crossovers in downtrends.",
-      "_conditions_audit": {
-        "price_above_vwap":   "STATE — Intraday macro trend must be bullish",
-        "ema_9_21_crossover": "EVENT — The crossover trigger",
-        "volume_spike":       "EVENT — Confirms institutional participation"
-      },
-      "conditions": [
-        "price_above_vwap",
-        "ema_9_21_crossover",
-        "volume_spike"
-      ]
-    },
-
-    {
-      "name": "BUY_POWER_BREAKOUT",
-      "priority": 30,
-      "base_confidence": 75,
-      "confidence_weight": 1.0,
-      "notes": "High probability breakout. Price breaks recent high with volume + MACD is positive + RSI isn't overbought + Price is above VWAP + OBV is trending up.",
-      "_conditions_audit": {
-        "volume_breakout":    "EVENT — Breakout with volume and above SMA20",
-        "price_above_vwap":   "STATE — Must be an uptrend",
-        "macd_positive":      "STATE — Confirms momentum",
-        "rsi_not_overbought": "STATE — Avoid buying tops",
-        "obv_trending_up":    "STATE — Confirms volume trend"
-      },
-      "conditions": [
-        "volume_breakout",
-        "price_above_vwap",
-        "macd_positive",
-        "rsi_not_overbought",
-        "obv_trending_up"
-      ]
-    },
-
-    {
-      "name": "BUY_OVERSOLD_REVERSAL_WITH_VOLUME",
-      "priority": 40,
-      "base_confidence": 72,
-      "confidence_weight": 0.9,
-      "notes": "Bottom fishing, but made extremely strict by requiring a volume spike along with RSI < 35, MACD cross, and bullish candle. Avoids catching falling knives.",
-      "_conditions_audit": {
-        "rsi_macd_momentum":       "EVENT — RSI < 35 recently + MACD cross",
-        "bullish_reversal_candle": "EVENT — Candle pattern trigger",
-        "volume_spike":            "EVENT — Confirms smart money buying the dip"
-      },
-      "conditions": [
-        "rsi_macd_momentum",
-        "bullish_reversal_candle",
-        "volume_spike"
-      ]
-    },
-
-    {
-      "name": "BUY_VWAP_RECLAIM_POWER",
-      "priority": 50,
-      "base_confidence": 76,
-      "confidence_weight": 1.05,
-      "notes": "Price reclaims VWAP, but strictly requires volume spike and a bullish reversal candle to confirm it's not a fakeout.",
-      "_conditions_audit": {
-        "price_above_vwap":       "STATE — Reclaimed VWAP",
-        "bullish_reversal_candle": "EVENT — Reversal candle",
-        "volume_spike":           "EVENT — Must have volume to break VWAP resistance"
-      },
-      "conditions": [
-        "price_above_vwap",
-        "bullish_reversal_candle",
-        "volume_spike"
-      ]
-    },
-
-    {
-      "name": "BUY_BOLLINGER_SQUEEZE_REVERSAL",
-      "priority": 60,
-      "base_confidence": 75,
-      "confidence_weight": 1.0,
-      "notes": "Reversal from extreme Bollinger Band panic. Requires touching lower band, a bullish reversal candle, and RSI recovering to confirm momentum shift.",
-      "_conditions_audit": {
-        "bollinger_band_bounce":   "EVENT — Touched bottom band and bounced",
-        "bullish_reversal_candle": "EVENT — Reversal candle",
-        "rsi_recovering":          "STATE — Momentum is shifting up"
-      },
-      "conditions": [
-        "bollinger_band_bounce",
-        "bullish_reversal_candle",
-        "rsi_recovering"
-      ]
-    },
-
-    {
-      "name": "BUY_MORNING_STAR_DIP",
-      "priority": 70,
-      "base_confidence": 78,
-      "confidence_weight": 1.1,
-      "notes": "Classic Morning Star 3-candle reversal pattern on a pullback, confirmed by RSI recovering.",
-      "_conditions_audit": {
-        "morning_star":   "EVENT — High probability 3-candle reversal",
-        "rsi_recovering": "SEMI  — Pullback momentum shifting"
-      },
-      "conditions": [
-        "morning_star",
-        "rsi_recovering"
-      ]
-    },
-
-    {
-      "name": "BUY_THREE_SOLDIERS_MOMENTUM",
-      "priority": 80,
-      "base_confidence": 74,
-      "confidence_weight": 1.0,
-      "notes": "Three White Soldiers pattern showing pure buying pressure, confirmed by OBV trending up.",
-      "_conditions_audit": {
-        "three_white_soldiers": "EVENT — Strong continuation pattern",
-        "obv_trending_up":      "STATE — Volume supports the move"
-      },
-      "conditions": [
-        "three_white_soldiers",
-        "obv_trending_up"
-      ]
-    },
-
-    {
-      "name": "BUY_RSI_35_SUPPORT_BOUNCE",
-      "priority": 90,
-      "base_confidence": 77,
-      "confidence_weight": 1.1,
-      "notes": "Custom strategy: RSI crosses 35 from below, confirmed by two back-to-back green candles acting as support.",
-      "_conditions_audit": {
-        "rsi_crosses_35_up": "EVENT — RSI breaks out of extreme oversold",
-        "two_green_candles": "EVENT — Two consecutive green candles acting as support"
-      },
-      "conditions": [
-        "rsi_crosses_35_up",
-        "two_green_candles"
-      ]
-    },
-
     {
       "name": "BUY_STEADY_MOMENTUM_TREND",
       "priority": 100,
@@ -206,108 +40,121 @@
         "prev_close_above_ema20",
         "price_above_vwap"
       ]
+    },
+    {
+      "name": "BUY_STREAK_MOMENTUM_BREAKOUT",
+      "priority": 90,
+      "base_confidence": 85,
+      "confidence_weight": 1.1,
+      "notes": "Mixed timeframe strategy from Streak. Uses previous closed candle for indicator stability (VWAP, EMA20, RSI) and current live candle for Breakout trigger over the previous 10 candle high.",
+      "_conditions_audit": {
+        "streak_close_1_above_vwap_0": "STATE — Close(1) > VWAP(0)",
+        "streak_ema20_1_above_vwap_0": "STATE — EMA(20, 1) > VWAP(0)",
+        "streak_rsi_1_above_61": "STATE — RSI(14, 1) > 61",
+        "streak_close_0_above_period_max_10": "EVENT — Close(0) > Period max(10, High(-1))"
+      },
+      "conditions": [
+        "streak_close_1_above_vwap_0",
+        "streak_ema20_1_above_vwap_0",
+        "streak_rsi_1_above_61",
+        "streak_close_0_above_period_max_10"
+      ]
+    },
+    {
+      "name": "SHORT_STREAK_MOMENTUM_BREAKDOWN",
+      "priority": 90,
+      "base_confidence": 85,
+      "confidence_weight": 1.1,
+      "notes": "EXACT MIRROR of BUY_STREAK_MOMENTUM_BREAKOUT for short selling. Uses previous closed candle for indicator stability and current live candle for Breakdown trigger BELOW the previous 10 candle low. Use ONLY on gap-down stocks to avoid clashing with long strategy.",
+      "_conditions_audit": {
+        "streak_close_1_below_vwap_0": "STATE — Close(1) < VWAP(0) [mirror of close_1_above_vwap_0]",
+        "streak_ema20_1_below_vwap_0": "STATE — EMA(20, 1) < VWAP(0) [mirror of ema20_1_above_vwap_0]",
+        "streak_rsi_1_below_39": "STATE — RSI(14, 1) < 39 [mirror of rsi_1_above_61]",
+        "streak_close_0_below_period_min_10": "EVENT — Close(0) < Period min(10, Low(-1)) [mirror of close_0_above_period_max_10]",
+        "streak_close_0_not_reversing": "EVENT — Close(0) <= High(-1) [Short-cover reversal blocker]",
+        "streak_close_0_near_vwap": "STATE — Close(0) >= VWAP(0) * 0.988 [Late-entry blocker]"
+      },
+      "conditions": [
+        "streak_close_1_below_vwap_0",
+        "streak_ema20_1_below_vwap_0",
+        "streak_rsi_1_below_39",
+        "streak_close_0_below_period_min_10",
+        "streak_close_0_not_reversing",
+        "streak_close_0_near_vwap"
+      ]
+    },
+    {
+      "name": "BUY_R7_VARIANT_D",
+      "priority": 80,
+      "base_confidence": 87,
+      "confidence_weight": 1.15,
+      "notes": "R7_COMB_486 Long Entry (VARIANT_D): Momentum Breakout logic replacing period max breakout with MACD positive confirmation. This is the exact logic verified by the 272% return baseline.",
+      "_conditions_audit": {
+        "streak_close_1_above_vwap_0": "STATE — Close(1) > VWAP(0)",
+        "streak_ema20_1_above_vwap_0": "STATE — EMA(20, 1) > VWAP(0)",
+        "streak_rsi_1_above_61": "STATE — RSI(14, 1) > 61",
+        "macd_positive": "EVENT — MACD(0) > 0"
+      },
+      "conditions": [
+        "streak_close_1_above_vwap_0",
+        "streak_ema20_1_above_vwap_0",
+        "streak_rsi_1_above_61",
+        "macd_positive"
+      ]
     }
   ],
-
   "sell_sets": [
-
+    {
+      "name": "SELL_R7_EMA50_DYN_EXIT",
+      "priority": 5,
+      "base_confidence": 75,
+      "confidence_weight": 1.0,
+      "notes": "R7_COMB_486 Dynamic Exit for LONG positions: Exits when close drops below EMA50 AFTER a minimum hold of 20 candles (~100 mins). Prevents premature exit on early noise. Only fires after partial profit (25%) has already been booked at PT.",
+      "_conditions_audit": {
+        "r7_close_below_ema50": "EVENT — Close(0) < EMA50(0): Trend has lost support at EMA50, trail exit triggered"
+      },
+      "conditions": [
+        "r7_close_below_ema50"
+      ]
+    },
     {
       "name": "SELL_EMA_MOMENTUM_LOSS",
       "priority": 10,
       "base_confidence": 70,
       "confidence_weight": 1.0,
-      "notes": "Custom exit. Close(2) breaks below EMA20. Fast, reliable trailing stop.",
+      "notes": "Custom exit for LONG positions. Close(1) breaks below EMA21. Fast, reliable trailing stop.",
       "_conditions_audit": {
-        "close_2_below_ema20": "EVENT — Close(2) fell below current EMA20"
+        "close_1_below_ema21": "EVENT — Close(1) fell below current EMA21"
       },
       "conditions": [
-        "close_2_below_ema20"
+        "close_1_below_ema21"
       ]
     },
-
     {
-      "name": "SELL_VWAP_RSI_REVERSAL",
-      "priority": 20,
+      "name": "SHORT_STREAK_MOMENTUM_RECOVERY",
+      "priority": 10,
       "base_confidence": 70,
       "confidence_weight": 1.0,
-      "notes": "Price loses VWAP + RSI weakening + EMA breakdown. Added ema20_breakdown as EVENT anchor. Without it, price_below_vwap (STATE) + rsi_weakening (SEMI) would fire continuously in any afternoon downtrend.",
+      "notes": "EXACT MIRROR of SELL_EMA_MOMENTUM_LOSS for short cover exit. Close(1) crossed ABOVE EMA21 — momentum recovering upward, cover the short. Use ONLY for exiting short positions.",
       "_conditions_audit": {
-        "price_below_vwap": "STATE — context filter",
-        "rsi_weakening":    "SEMI  — momentum filter",
-        "ema20_breakdown":  "EVENT — anchor, prevents continuous firing"
+        "close_1_above_ema21": "EVENT — Close(1) crossed above current EMA21 [mirror of close_1_below_ema21]"
       },
       "conditions": [
-        "price_below_vwap",
-        "rsi_weakening",
-        "ema20_breakdown"
+        "close_1_above_ema21"
       ]
     },
-
     {
-      "name": "SELL_MACD_EMA_WEAKNESS",
-      "priority": 30,
-      "base_confidence": 72,
-      "confidence_weight": 1.05,
-      "notes": "MACD bearish cross aligned with EMA20 breakdown. Both are EVENT conditions — this is the tightest, most reliable sell set. High conviction exit.",
-      "_conditions_audit": {
-        "macd_bearish_cross": "EVENT — anchor",
-        "ema20_breakdown":    "EVENT — anchor"
-      },
-      "conditions": [
-        "macd_bearish_cross",
-        "ema20_breakdown"
-      ]
-    },
-
-    {
-      "name": "SELL_EMA_CROSS_WEAKNESS",
-      "priority": 40,
-      "base_confidence": 71,
+      "name": "SHORT_SAVIOR_EXIT",
+      "priority": 100,
+      "base_confidence": 100,
       "confidence_weight": 1.0,
-      "notes": "EMA9 below EMA21 (STATE) + price below VWAP (STATE) + MACD bearish cross (EVENT). Critical fix: original had 2 pure STATE conditions — would fire every 5 seconds in a downtrend. macd_bearish_cross added as mandatory EVENT anchor.",
+      "notes": "Dynamic bail-out for Short Engine when price recovers above EMA9. Extremely fast SL alternative.",
       "_conditions_audit": {
-        "ema9_below_ema21":   "STATE — structural context (EMA9 < EMA21)",
-        "price_below_vwap":   "STATE — context filter",
-        "macd_bearish_cross": "EVENT — anchor, prevents continuous firing"
+        "close_0_above_ema9": "EVENT — Close(0) > EMA(9) [Savior exit triggered]"
       },
       "conditions": [
-        "ema9_below_ema21",
-        "price_below_vwap",
-        "macd_bearish_cross"
-      ]
-    },
-
-    {
-      "name": "SELL_BREAKDOWN_CONFIRMED",
-      "priority": 50,
-      "base_confidence": 72,
-      "confidence_weight": 1.0,
-      "notes": "Support broken AND EMA confirms breakdown. Both are EVENT conditions. Reliable structural exit — not noise, not a fake dip.",
-      "_conditions_audit": {
-        "price_below_recent_support": "EVENT — anchor (below prior N-candle low)",
-        "ema20_breakdown":             "EVENT — anchor"
-      },
-      "conditions": [
-        "price_below_recent_support",
-        "ema20_breakdown"
-      ]
-    },
-
-    {
-      "name": "SELL_RSI_BEARISH_REVERSAL",
-      "priority": 60,
-      "base_confidence": 70,
-      "confidence_weight": 1.0,
-      "notes": "Overbought RSI (> 70) with a bearish candle pattern. Momentum exhaustion at the top. bearish_pattern is the EVENT anchor.",
-      "_conditions_audit": {
-        "rsi_overbought": "SEMI  — RSI > 70 in lookback window",
-        "bearish_pattern": "EVENT — anchor (bearish engulfing or shooting star)"
-      },
-      "conditions": [
-        "rsi_overbought",
-        "bearish_pattern"
+        "close_0_above_ema9"
       ]
     }
-
   ]
 }

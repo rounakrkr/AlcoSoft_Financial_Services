@@ -240,7 +240,7 @@ def _order_side(row: dict) -> str:
 
 
 def _order_type(row: dict) -> str:
-    return str(row.get("ordTyp") or row.get("order_type") or row.get("type") or "").strip().upper()
+    return str(row.get("prcTp") or row.get("ordTyp") or row.get("order_type") or row.get("type") or "").strip().upper()
 
 
 def _order_trigger(row: dict) -> float:

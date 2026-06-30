@@ -328,7 +328,6 @@
   box-shadow: 0 0 0 3px rgba(91, 98, 240, 0.12);
 }
 
-/* ─── Toggle Field (Full Width) ─── */
 .settings-field-toggle {
   grid-column: 1 / -1;
   background: var(--card);
@@ -337,6 +336,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+}
+
+.settings-field-toggle.inline {
+  grid-column: auto;
 }
 
 .settings-toggle-info {

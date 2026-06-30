@@ -1,0 +1,49 @@
+# AlcoSoft Dual-Engine Performance Report - This Month Only (June 2026 to Present)
+
+## Metadata
+- **Start Date**: 2026-06-01
+- **End Date**: 2026-06-16
+- **Initial Capital**: ₹100,000.00
+
+## Summary Metrics Table
+
+| Metric | Combined Portfolio | Long Engine | Short Engine |
+| :--- | :--- | :--- | :--- |
+| Total Trades | 24 | 21 | 3 |
+| Win Rate | 62.50% | 61.90% | 66.67% |
+| Gross Return % | 25.91% | 12.58% | 13.33% |
+| STT Tax Paid | ₹4,191.45 | ₹3,671.30 | ₹520.15 |
+| Net Return % | 21.72% | 8.91% | 12.81% |
+| Profit Factor | 4.02 | 2.97 | 5.79 |
+| Average Win | ₹1,927.25 | ₹1,032.75 | ₹7,741.49 |
+| Average Loss | -₹798.98 | -₹564.58 | -₹2,674.18 |
+| Expectancy | ₹904.91 | ₹424.24 | ₹4269.60 |
+
+## Chronological Trade Ledger
+
+| Symbol | Direction | Entry Time | Exit Time | Quantity | Entry Price | Exit Price | Exit Reason | Net PnL |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| NTPC | SHORT | 2026-06-02 11:15 | 2026-06-02 14:00 | 1366 | ₹365.80 | ₹367.63 | STOP_LOSS | -₹2,674.18 |
+| HCLTECH | SHORT | 2026-06-03 11:15 | 2026-06-03 15:15 | 419 | ₹1,192.80 | ₹1,178.40 | EOD_TIME | ₹5,860.80 |
+| WIPRO | SHORT | 2026-06-08 11:55 | 2026-06-08 15:15 | 2698 | ₹185.32 | ₹181.69 | EOD_TIME | ₹9,622.18 |
+| HINDALCO | LONG | 2026-06-12 10:20 | 2026-06-12 11:45 | 486 | ₹1,027.40 | ₹1,027.00 | DYN_EXIT | -₹369.10 |
+| ITC | LONG | 2026-06-12 11:45 | 2026-06-12 11:50 | 1755 | ₹284.90 | ₹284.95 | RSI_OVERBOUGHT | -₹87.25 |
+| AXISBANK | LONG | 2026-06-12 12:25 | 2026-06-12 13:30 | 374 | ₹1,335.80 | ₹1,346.00 | RSI_OVERBOUGHT | ₹3,638.59 |
+| ICICIBANK | LONG | 2026-06-12 13:35 | 2026-06-12 13:40 | 375 | ₹1,331.90 | ₹1,335.50 | RSI_OVERBOUGHT | ₹1,174.71 |
+| ICICIBANK | LONG | 2026-06-12 13:45 | 2026-06-12 13:50 | 374 | ₹1,335.50 | ₹1,336.70 | RSI_OVERBOUGHT | ₹273.81 |
+| KOTAKBANK | LONG | 2026-06-12 13:55 | 2026-06-12 14:00 | 1244 | ₹401.70 | ₹401.50 | RSI_OVERBOUGHT | -₹423.63 |
+| RELIANCE | LONG | 2026-06-12 14:05 | 2026-06-12 14:10 | 389 | ₹1,284.00 | ₹1,282.70 | RSI_OVERBOUGHT | -₹680.36 |
+| HDFCBANK | LONG | 2026-06-12 14:15 | 2026-06-12 14:20 | 650 | ₹769.00 | ₹769.75 | RSI_OVERBOUGHT | ₹312.38 |
+| HDFCBANK | LONG | 2026-06-12 14:25 | 2026-06-12 14:30 | 649 | ₹769.75 | ₹770.30 | RSI_OVERBOUGHT | ₹181.97 |
+| HDFCBANK | LONG | 2026-06-12 14:35 | 2026-06-12 14:40 | 649 | ₹770.10 | ₹770.70 | RSI_OVERBOUGHT | ₹214.36 |
+| RELIANCE | LONG | 2026-06-12 14:45 | 2026-06-12 14:50 | 388 | ₹1,286.00 | ₹1,290.90 | RSI_OVERBOUGHT | ₹1,725.91 |
+| RELIANCE | LONG | 2026-06-12 14:55 | 2026-06-12 15:00 | 387 | ₹1,291.00 | ₹1,292.30 | RSI_OVERBOUGHT | ₹328.08 |
+| M&M | LONG | 2026-06-15 11:15 | 2026-06-15 11:20 | 158 | ₹3,147.70 | ₹3,144.90 | RSI_OVERBOUGHT | -₹616.32 |
+| MARUTI | LONG | 2026-06-15 11:30 | 2026-06-15 11:35 | 35 | ₹13,950.00 | ₹13,953.00 | RSI_OVERBOUGHT | -₹65.92 |
+| TATACONSUM | LONG | 2026-06-15 11:40 | 2026-06-15 12:15 | 450 | ₹1,109.20 | ₹1,105.10 | DYN_EXIT | -₹2,019.04 |
+| BHARTIARTL | LONG | 2026-06-15 12:15 | 2026-06-15 14:10 | 272 | ₹1,837.90 | ₹1,843.60 | RSI_OVERBOUGHT | ₹1,374.88 |
+| BHARTIARTL | LONG | 2026-06-15 14:15 | 2026-06-15 14:20 | 271 | ₹1,844.00 | ₹1,852.00 | RSI_OVERBOUGHT | ₹1,992.34 |
+| BHARTIARTL | LONG | 2026-06-15 14:25 | 2026-06-15 14:30 | 269 | ₹1,852.00 | ₹1,851.70 | RSI_OVERBOUGHT | -₹255.05 |
+| HDFCLIFE | LONG | 2026-06-15 14:35 | 2026-06-15 14:40 | 867 | ₹576.45 | ₹576.95 | RSI_OVERBOUGHT | ₹258.42 |
+| SBILIFE | LONG | 2026-06-15 14:45 | 2026-06-15 14:55 | 284 | ₹1,760.00 | ₹1,764.00 | RSI_OVERBOUGHT | ₹960.66 |
+| HDFCLIFE | LONG | 2026-06-15 15:00 | 2026-06-15 15:05 | 863 | ₹579.20 | ₹580.55 | RSI_OVERBOUGHT | ₹989.67 |

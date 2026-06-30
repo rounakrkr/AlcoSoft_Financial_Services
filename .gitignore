@@ -1,9 +1,61 @@
+# ── Environment & Secrets ─────────────────────────────────────
 .env
-.antigravityignore
+*.key
+*.pem
+
+# ── Python ────────────────────────────────────────────────────
 __pycache__/
 *.pyc
-data/
+*.pyo
+*.pyd
+*.pkl
+*.pkl.gz
 alco_env/
-.vs_code
+venv/
+.venv/
+
+# ── Data & Logs ───────────────────────────────────────────────
+data/
 logs/
+*.log
+*.db
+*.sqlite
+
+# ── Archives & Deployment artifacts ──────────────────────────
+*.zip
+*.tar.gz
+*.tar
+
+# ── IDE & Editor ──────────────────────────────────────────────
+.vscode/
+.vs_code/
+.idea/
+
+# ── Agent workspace files ─────────────────────────────────────
+.agents/
+.claude/
+.antigravityignore
+
+# ── Research / scratch outputs ────────────────────────────────
+scratch/
 results/
+archive/
+
+# ── Key files ─────────────────────────────────────────────────
+key_files/
+midcap_key_files/
+
+# ── One-off output / validation text files ────────────────────
+*.txt
+output.txt
+full_output.txt
+validation_output.txt
+screener_full_output.txt
+final_validation.txt
+
+# ── JSON reports (dryrun etc.) ────────────────────────────────
+*_report.json
+*dryrun*.json
+pip_list.json
+compatible_*.json
+incompatible_*.json

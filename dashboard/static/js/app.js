@@ -495,14 +495,29 @@ document.addEventListener('DOMContentLoaded', () => {
             body: JSON.stringify({ confirm_action: 'SQUARE_OFF' })
         });
         const data = await res.json();
+        
+        // Debug log response structure
+        console.log('Emergency squareoff API response:', data);
+        console.log('  Response status:', res.status);
+        console.log('  Data.ok:', data.ok);
+        console.log('  Data.closed_count:', data.closed_count, '(type:', typeof data.closed_count + ')');
+        console.log('  Data.failed_count:', data.failed_count, '(type:', typeof data.failed_count + ')');
 
         if (data.ok) {
-          alert(`Emergency squareoff complete!\n\nClosed: ${data.closed_count}\nFailed: ${data.failed_count}`);
+          // Defensive fallback for undefined/null values
+          const closed = (data.closed_count !== undefined && data.closed_count !== null) ? data.closed_count : 'unknown';
+          const failed = (data.failed_count !== undefined && data.failed_count !== null) ? data.failed_count : 'unknown';
+          
+          console.log('Display values - Closed:', closed, 'Failed:', failed);
+          alert(`Emergency squareoff complete!\n\nClosed: ${closed}\nFailed: ${failed}`);
           await fetchAndRender();
         } else {
-          alert(`Error: ${data.error}`);
+          const errorMsg = data.error || 'Unknown error';
+          console.error('Emergency squareoff error:', errorMsg);
+          alert(`Error: ${errorMsg}`);
         }
       } catch (e) {
+        console.error('Emergency squareoff fetch error:', e);
         alert(`Network error: ${e.message}`);
       } finally {
         btn.disabled = false;
