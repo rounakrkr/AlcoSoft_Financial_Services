@@ -240,30 +240,6 @@ FIRST_CYCLE_TIME = dt_time(9, 30)   # 9:30 AM IST (after first 15-min candle)
 LAST_COGNITION_TIME = dt_time(3, 15)  # 3:15 PM IST (final market observation)
 EXECUTION_STOP_TIME = dt_time(3, 0)    # 3:00 PM IST (execution stops but cognition continues)
 
-AGENT_SCHEDULE = {
-    # Early session
-    9: 30,   # 9:30 AM start — Agent A (after first 15-min candle)
-    9: 45,   # Agent B
-    10: 0,   # Agent C
-    10: 15,  # Agent D
-    10: 30,  # Agent A again
-    # ... continues every 15 minutes ...
-    # Mid-session
-    12: 0,   # Agent A
-    12: 15,  # Agent B
-    12: 30,  # Agent C
-    12: 45,  # Agent D
-    # Late session (even after execution stops at 3:00 PM)
-    13: 0,   # continues ...
-    # Post-execution (after 3:00 PM)
-    3: 0,    # Agent A - observes market behavior after trading stops
-    3: 15,   # Agent B - final market observation cycle
-    # NOTE: 3:15 PM is LAST cognition cycle
-    # Execution has stopped. Only market observation continues.
-    # 3:35 PM: Final Reflection Agent runs (separate) after market fully closed
-}
-
-
 def should_run_cognitive_cycle() -> tuple[bool, Optional[str]]:
     """
     Check if current time matches cognitive cycle schedule.
@@ -437,21 +413,3 @@ def register_cognitive_cycle_scheduler():
     periodically or on a cron schedule.
     """
     logger.info("🧠 Cognitive observation loop registered. Will run every 15 minutes during market hours.")
-
-
-def cognitive_signal_evaluation(symbol: str, signal_data: dict) -> dict:
-    """Evaluate signal using cognitive agents."""
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    try:
-        # For paper trading, return a simple evaluation
-        confidence_boost = signal_data.get("base_confidence", 70) * 0.1  # 10% boost
-        return {
-            "symbol": symbol,
-            "boost": confidence_boost,
-            "reasoning": "Cognitive assessment complete"
-        }
-    except Exception as e:
-        logger.error(f"Cognitive evaluation failed: {e}")
-        return {"symbol": symbol, "boost": 0, "reasoning": f"Error: {e}"}

@@ -478,6 +478,36 @@ def reconcile_broker_vs_local() -> dict:
             exit_price = _latest_or_entry_price(symbol, safe_float(position.get("entry_price"), 0.0))
             if mark_position_reconciled_closed(symbol, exit_price, "BROKER_RECONCILED_CLOSED"):
                 summary["repaired"].append(f"{symbol}:local_closed")
+                # P3-1: include reconciled closes in learning stats.
+                try:
+                    from reflection.reflection_engine import record_trade
+                    from core.state_manager import calculate_transaction_costs
+
+                    entry_price = safe_float(position.get("entry_price"), 0.0)
+                    qty = safe_int(position.get("quantity"), 0)
+                    direction = str(position.get("action") or "LONG").upper()
+                    gross_pnl = (
+                        (exit_price - entry_price) * qty
+                        if direction == "LONG"
+                        else (entry_price - exit_price) * qty
+                    )
+                    pnl = gross_pnl - calculate_transaction_costs(entry_price, exit_price, qty)
+                    record_trade(
+                        signal_name=str(position.get("strategy") or "BROKER_RECONCILED"),
+                        symbol=symbol,
+                        entry_price=entry_price,
+                        exit_price=exit_price,
+                        pnl=pnl,
+                        confidence=safe_float(position.get("confidence"), 0.0),
+                        time_window="other",
+                        recovered=True,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "P3-1: failed to record reconciled trade %s for learning: %s",
+                        symbol,
+                        exc,
+                    )
             continue
 
         local_qty = safe_int(position.get("quantity"), 0)

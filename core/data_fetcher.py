@@ -638,7 +638,9 @@ def resolve_instrument_tokens(symbols: list[str]) -> list[dict]:
             "instrument_token": token_info["instrument_token"],
             "exchange_segment": token_info["exchange_segment"],
         })
-        _token_to_symbol[str(token_info["instrument_token"])] = symbol
+        # R2: guard shared _token_to_symbol dict writes.
+        with _lock:
+            _token_to_symbol[str(token_info["instrument_token"])] = symbol
 
     # Save updated cache
     if updated:
@@ -761,15 +763,18 @@ def start_live_feed(symbols: list[str], _is_reconnect: bool = False):
 
     from core.kotak_client import get_client
     client = get_client()
-    _active_client = client
 
-    # Register WebSocket callbacks
-    client.on_message = _on_message
-    client.on_open    = _on_open
-    client.on_close   = _on_close
-    client.on_error   = _on_error
+    # R3: guard shared NeoAPI client + subscription-state mutations.
+    with _lock:
+        _active_client = client
 
-    _subscribed_symbols = symbols.copy()
+        # Register WebSocket callbacks
+        client.on_message = _on_message
+        client.on_open    = _on_open
+        client.on_close   = _on_close
+        client.on_error   = _on_error
+
+        _subscribed_symbols = symbols.copy()
 
     # F006 FIX: Only reset the reconnect counter on initial startup.
     # During a reconnect sequence (_is_reconnect=True), _do_reconnect() owns
@@ -851,7 +856,9 @@ def stop_live_feed(symbols: list[str]):
     if _reconnect_timer:
         _reconnect_timer.cancel()
         _reconnect_timer = None
-    _subscribed_symbols = []
+    # R3: guard shared subscription-state mutation.
+    with _lock:
+        _subscribed_symbols = []
     _publish_feed_stats(force=True)
 
     if _active_client is None:        
@@ -866,5 +873,7 @@ def stop_live_feed(symbols: list[str]):
             isIndex=False,
             isDepth=False,
         )
-    _active_client = None              
+    # R3: guard shared NeoAPI client-reference mutation.
+    with _lock:
+        _active_client = None
     logger.info("Live feed stopped.")
