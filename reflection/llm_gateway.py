@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 
 import google.generativeai as genai
 from groq import Groq
@@ -91,6 +93,42 @@ def error_response() -> dict:
         "concern": "Could not get response",
         "action": "NO_TRADE",
     }
+
+
+def gateway_online() -> bool:
+    """P3-7/P3-8: True if at least one LLM provider credential is configured."""
+    if any(OPENROUTER_KEYS.values()):
+        return True
+    return bool(os.getenv("GEMINI_API_KEY") or os.getenv("GROQ_API_KEY"))
+
+
+_gateway_alert_lock = threading.Lock()
+_last_gateway_alert_ts = 0.0
+_GATEWAY_ALERT_COOLDOWN_SEC = 1800  # 30 min — avoid alert spam on repeated failures
+
+
+def alert_gateway_offline(context: str) -> None:
+    """
+    P3-7/P3-8: surface a SILENT cognition/LLM outage as a loud, rate-limited alert.
+
+    Cognition/reflection is research-only and must NEVER block trading, so this
+    only logs loudly and fires an operator alert — it never raises.
+    """
+    global _last_gateway_alert_ts
+    logger.error("🧠❌ LLM cognition gateway OFFLINE: %s", context)
+    now = time.time()
+    with _gateway_alert_lock:
+        if now - _last_gateway_alert_ts < _GATEWAY_ALERT_COOLDOWN_SEC:
+            return
+        _last_gateway_alert_ts = now
+    try:
+        from core.alerts import alert_critical
+        alert_critical(
+            f"Cognition/LLM gateway OFFLINE — {context}. "
+            f"Reflection & cognitive agents are not producing insights (trading unaffected)."
+        )
+    except Exception as exc:
+        logger.warning("Failed to send gateway-offline alert: %s", exc)
 
 
 _call_openrouter = call_openrouter

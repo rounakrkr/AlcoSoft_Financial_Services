@@ -286,6 +286,11 @@ def generate_cognition_response(
 
     if not available:
         logger.error("❌ No LLM provider available (OpenRouter key missing, Ollama not running)")
+        try:
+            from reflection.llm_gateway import alert_gateway_offline
+            alert_gateway_offline("no cognition provider available (OpenRouter key missing / Ollama down)")
+        except Exception:
+            pass
         return None
 
     # Determine provider order based on PREFERRED_PROVIDER
@@ -297,6 +302,11 @@ def generate_cognition_response(
             providers = ["ollama"]
         else:
             logger.error("❌ LAYER 1 (Ollama-only): Ollama not available, skipping cognition")
+            try:
+                from reflection.llm_gateway import alert_gateway_offline
+                alert_gateway_offline("Ollama-only cognition layer offline (Ollama not reachable)")
+            except Exception:
+                pass
             return None
     elif PREFERRED_PROVIDER == "openrouter":
         # Reflection/research layer: OpenRouter primary, Ollama fallback
@@ -342,6 +352,11 @@ def generate_cognition_response(
         logger.warning(f"❌ {provider_name} failed after {MAX_RETRIES} attempts")
 
     logger.error("❌ Cognition providers exhausted")
+    try:
+        from reflection.llm_gateway import alert_gateway_offline
+        alert_gateway_offline(f"all cognition providers exhausted ({providers})")
+    except Exception:
+        pass
     return None
 
 

@@ -188,6 +188,11 @@ def _call_owl_final(context: str) -> dict | None:
             return parse_json(raw)
         except Exception as e2:
             logger.error(f"OWL Alpha and standby both failed: {e2}")
+            try:
+                from reflection.llm_gateway import alert_gateway_offline
+                alert_gateway_offline(f"final reflection offline — OWL Alpha + standby both failed: {e2}")
+            except Exception:
+                pass
             return None
 
 
