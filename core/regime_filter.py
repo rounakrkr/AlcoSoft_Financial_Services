@@ -114,8 +114,8 @@ def _compute_regimes() -> tuple[bool, bool]:
                 continue
 
         if total_count == 0:
-            logger.warning("[RegimeFilter] No data fetched — defaulting to BULL for testing.")
-            return True, False
+            logger.warning("[RegimeFilter] No data fetched — failing CLOSED (NO REGIME, both engines blocked).")
+            return False, False
 
         bull_ratio = bull_count / total_count
         bear_ratio = bear_count / total_count
@@ -135,8 +135,8 @@ def _compute_regimes() -> tuple[bool, bool]:
         return is_bull, is_bear
 
     except Exception as e:
-        logger.error(f"[RegimeFilter] Computation error: {e} — defaulting to BULL.")
-        return True, False
+        logger.error(f"[RegimeFilter] Computation error: {e} — failing CLOSED (NO REGIME).")
+        return False, False
 
 
 def force_bull(value: bool = True):

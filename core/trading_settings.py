@@ -10,8 +10,14 @@ import json
 import logging
 import os
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
+
+try:
+    import fcntl  # POSIX only
+except ImportError:
+    fcntl = None
 
 from core.safe_io import atomic_write_json, safe_read_json
 
@@ -19,10 +25,31 @@ logger = logging.getLogger(__name__)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS_PATH = os.path.join(_ROOT, "config", "trading_settings.json")
+_LOCK_PATH = SETTINGS_PATH + ".lock"
 
 _lock = threading.Lock()
 _cache: dict | None = None
 _mtime: float | None = None
+_last_corrupt_alert: float = 0.0
+
+
+@contextmanager
+def _cross_process_lock():
+    """P3-5: serialize writers across processes (engine adaptive updater + dashboard)
+    so a read-modify-write from one does not silently clobber the other."""
+    if fcntl is None:
+        yield
+        return
+    os.makedirs(os.path.dirname(_LOCK_PATH), exist_ok=True)
+    f = open(_LOCK_PATH, "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(f, fcntl.LOCK_UN)
+        finally:
+            f.close()
 
 DEFAULTS: dict = {
     "risk": {
@@ -212,6 +239,26 @@ def load_settings(force: bool = False) -> dict:
                 label="trading settings",
                 log=logger,
             )
+            # P2-5 FIX: a present-but-unreadable/corrupt file makes safe_read_json return
+            # {}, which silently reverts the ENTIRE risk profile to DEFAULTS (margin off,
+            # regime on, min-confidence 70…). Detect and ALERT instead of failing silent.
+            if not raw:
+                global _last_corrupt_alert
+                import time as _t
+                logger.error(
+                    "🚨 trading_settings.json exists but read as EMPTY/corrupt — "
+                    "reverting to DEFAULTS (a DIFFERENT risk profile). Fix the file!"
+                )
+                if _t.time() - _last_corrupt_alert > 300:
+                    _last_corrupt_alert = _t.time()
+                    try:
+                        from core.alerts import alert_critical
+                        alert_critical(
+                            "trading_settings.json is corrupt/empty — system reverted to "
+                            "DEFAULT risk settings. Verify config immediately."
+                        )
+                    except Exception:
+                        pass
             data = _deep_merge(data, raw)
 
         data["_meta"] = {
@@ -230,25 +277,29 @@ def load_settings(force: bool = False) -> dict:
 
 def save_settings(updates: dict) -> dict:
     """Merge section updates and write JSON file."""
-    current = load_settings(force=True)
-    merged = _deep_merge(current, updates)
-    merged["_meta"] = {
-        "version": 1,
-        "updated_at": datetime.now().isoformat(),
-        "updated_via": "dashboard",
-    }
+    # P3-5: hold a cross-process lock across read-merge-write so concurrent writers
+    # (dashboard + engine adaptive updater) cannot clobber each other.
+    with _cross_process_lock():
+        current = load_settings(force=True)
+        merged = _deep_merge(current, updates)
+        merged["_meta"] = {
+            "version": 1,
+            "updated_at": datetime.now().isoformat(),
+            "updated_via": updates.get("_meta", {}).get("updated_via", "dashboard")
+            if isinstance(updates.get("_meta"), dict) else "dashboard",
+        }
 
-    os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
-    if not atomic_write_json(SETTINGS_PATH, merged, label="trading settings", log=logger):
-        raise OSError(f"Failed to save {SETTINGS_PATH}")
+        os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+        if not atomic_write_json(SETTINGS_PATH, merged, label="trading settings", log=logger):
+            raise OSError(f"Failed to save {SETTINGS_PATH}")
 
-    global _cache, _mtime
-    with _lock:
-        _cache = merged
-        try:
-            _mtime = os.path.getmtime(SETTINGS_PATH)
-        except OSError:
-            _mtime = None
+        global _cache, _mtime
+        with _lock:
+            _cache = merged
+            try:
+                _mtime = os.path.getmtime(SETTINGS_PATH)
+            except OSError:
+                _mtime = None
 
     logger.info("Trading settings saved to %s", SETTINGS_PATH)
     return merged

@@ -576,7 +576,11 @@ def _get_candles_with_yfinance_seed(symbol: str) -> list[dict]:
     No secondary market-data provider is used. If Upstox cannot provide data,
     the caller marks the symbol WAIT instead of placing a trade.
     """
-    candles = get_candle_history(symbol)
+    # E4 FIX: exclude the still-forming (unclosed) candle from indicator inputs.
+    # Including it caused RSI/MACD/EMA to repaint intra-candle and fire signals that
+    # would not exist on closed bars (look-ahead). Pattern logic already uses
+    # include_current=False; the indicator seed must match.
+    candles = get_candle_history(symbol, include_current=False)
 
     # If we have enough candles from WebSocket, we're good
     if len(candles) >= 26:
@@ -3028,6 +3032,35 @@ async def run_strategy_loop(shutdown_event: asyncio.Event):
         try:
             _apply_trading_settings()
             _load_adaptive_config()
+
+            # Engine liveness heartbeat — the dashboard reads this to tell whether the
+            # engine process is alive before delegating an emergency squareoff (P2-2).
+            try:
+                from core.safe_io import atomic_write_json
+                atomic_write_json(
+                    "data/engine_heartbeat.json",
+                    {"ts": time.time(), "at": datetime.now().isoformat()},
+                    label="engine heartbeat",
+                )
+            except Exception:
+                pass
+
+            # P2-2 FIX: honor a dashboard emergency-squareoff request on EVERY iteration,
+            # regardless of market open/closed or entries state. Previously this was only
+            # checked inside the market-open + entries-disabled branch, so the panic button
+            # did nothing when the market was closed or the loop was sleeping.
+            try:
+                _sess = get_trading_session_state()
+                if _sess.get("state") == "LIQUIDATING" and \
+                   "EMERGENCY_SQUAREOFF_REQUESTED" in str(_sess.get("reason", "")):
+                    logger.critical("🚨 Emergency Square-off Request detected (top-of-loop handler)")
+                    from core.emergency_squareoff import trigger_emergency_squareoff
+                    trigger_emergency_squareoff()
+                    await asyncio.sleep(1)
+                    continue
+            except Exception as _eso_err:
+                logger.error(f"Top-of-loop emergency squareoff handler failed: {_eso_err}")
+
             now = datetime.now().time()
             if not _is_market_open(now):
                 await asyncio.sleep(30)

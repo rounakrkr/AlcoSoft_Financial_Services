@@ -32,8 +32,12 @@ from reflection.reflection_engine import (
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path("config/trading_settings.json")
-MULTIPLIER_FLOOR = 0.4
+# P3-9: anchor to project root so the adaptive updater and the engine/dashboard all
+# resolve the SAME config file regardless of the process working directory.
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "trading_settings.json"
+# P2-9 FIX: raise the floor from 0.4 → 0.6 so a thin losing streak can only cut a
+# signal's confidence by 40% (not 60%), reducing cold-start over-suppression.
+MULTIPLIER_FLOOR = 0.6
 MULTIPLIER_CEILING = 1.2
 SYMBOL_SL_MIN_TRADES = 10
 
@@ -272,7 +276,16 @@ def _calculate_symbol_sl_adjustments() -> dict[str, float]:
             new_multiplier=smoothed_adj,
             max_daily_change_pct=3.0,  # Tighter than signals
         )
-        final_adj = _clamp_multiplier(final_adj, floor=0.5, ceiling=2.0)
+        # P3-Q1 FIX: when risk-based position sizing is DISABLED, a wider stop is NOT
+        # offset by a smaller quantity, so a 2.0x multiplier literally doubles the rupee
+        # loss on a stop-out. Only allow the wide [0.5, 2.0] band when risk-based sizing
+        # is ON (which keeps rupee-risk constant). Otherwise clamp the widening tightly.
+        from core.trading_settings import get as _cfg
+        _risk_sizing_on = bool(_cfg("risk", "enable_risk_based_position_sizing", True))
+        if _risk_sizing_on:
+            final_adj = _clamp_multiplier(final_adj, floor=0.5, ceiling=2.0)
+        else:
+            final_adj = _clamp_multiplier(final_adj, floor=0.75, ceiling=1.25)
         
         # 6. Store for next update
         _store_multiplier_history(
@@ -387,15 +400,8 @@ def apply_adaptive_config():
         symbol_sl_adjustments = _calculate_symbol_sl_adjustments()
         market_regime_multiplier = _calculate_market_regime_multiplier()
         
-        # Load current config
-        config = _load_config()
-        
-        # Create or update adaptive section
-        if "adaptive" not in config:
-            config["adaptive"] = {}
-        
-        # Update adaptive config
-        config["adaptive"] = {
+        # Build the adaptive block
+        adaptive_block = {
             "last_updated": datetime.now().isoformat(),
             "strategy": {
                 "signal_confidence_multipliers": signal_multipliers,
@@ -404,9 +410,25 @@ def apply_adaptive_config():
             "time_windows": time_window_multipliers,
             "symbol_stops": symbol_sl_adjustments,
         }
-        
-        # Save config
-        if _save_config(config):
+
+        # P3-5 FIX: write ONLY the adaptive block through trading_settings.save_settings,
+        # which merges under a cross-process lock. Previously this rewrote the WHOLE file
+        # via a raw read-then-overwrite, racing dashboard edits (last-writer-wins).
+        saved = False
+        try:
+            from core import trading_settings
+            trading_settings.save_settings({
+                "adaptive": adaptive_block,
+                "_meta": {"updated_via": "adaptive_engine"},
+            })
+            saved = True
+        except Exception as _save_err:
+            logger.error("save_settings(adaptive) failed, falling back to raw write: %s", _save_err)
+            config = _load_config()
+            config["adaptive"] = adaptive_block
+            saved = _save_config(config)
+
+        if saved:
             # Save to config history for auditing
             changes_made = (
                 f"Signals: {len(signal_multipliers)}, "
@@ -414,8 +436,8 @@ def apply_adaptive_config():
                 f"Symbols: {len(symbol_sl_adjustments)}, "
                 f"Market Regime: {market_regime_multiplier:.2f}"
             )
-            _save_config_history(config.get("adaptive", {}), changes_made)
-            
+            _save_config_history(adaptive_block, changes_made)
+
             logger.info(
                 f"✅ Adaptive config updated | "
                 f"Signals: {len(signal_multipliers)} | "

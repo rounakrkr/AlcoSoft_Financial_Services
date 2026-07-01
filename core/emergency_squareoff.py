@@ -236,21 +236,50 @@ def emergency_square_off_all() -> dict:
 
 
 def trigger_emergency_squareoff():
-    """Trigger emergency squareoff of all positions."""
+    """Trigger emergency squareoff of all positions.
+
+    P2-3 FIX: preserve the real SUCCESS/PARTIAL/FAILED outcome in the session
+    reason instead of unconditionally overwriting it with TRIGGER_COMPLETE (which
+    made the dashboard always report success). The final reason now reflects
+    whether positions actually closed.
+    """
     import logging
     logger = logging.getLogger(__name__)
-    
+
     try:
         from core.state_manager import get_open_positions, lock_entries, mark_liquidating
-        
+
         mark_liquidating("EMERGENCY_SQUAREOFF_TRIGGERED")
         positions = get_open_positions()
-        if positions:
-            logger.warning(f"🚨 EMERGENCY SQUAREOFF: Closing {len(positions)} positions")
-            emergency_square_off_all()
-            logger.info("✅ Emergency squareoff completed")
-        lock_entries("EMERGENCY_SQUAREOFF_TRIGGER_COMPLETE")
-        return True
+        if not positions:
+            lock_entries("EMERGENCY_SQUAREOFF_SUCCESS")
+            logger.info("Emergency squareoff: no open positions")
+            return True
+
+        logger.warning(f"🚨 EMERGENCY SQUAREOFF: Closing {len(positions)} positions")
+        result = emergency_square_off_all() or {}
+        reported = str(result.get("status", "UNKNOWN")).upper()
+
+        # Authoritative check: what actually remains open after the attempt.
+        remaining = len(get_open_positions())
+        if remaining == 0:
+            final_status = "SUCCESS"
+        elif reported in ("PARTIAL", "FAILED"):
+            final_status = reported
+        else:
+            final_status = "PARTIAL"
+
+        lock_entries(f"EMERGENCY_SQUAREOFF_{final_status}")
+        logger.info(
+            "✅ Emergency squareoff finished | reported=%s | remaining_open=%d | final=%s",
+            reported, remaining, final_status,
+        )
+        return remaining == 0
     except Exception as e:
         logger.error(f"❌ Emergency squareoff failed: {e}")
+        try:
+            from core.state_manager import lock_entries
+            lock_entries("EMERGENCY_SQUAREOFF_FAILED")
+        except Exception:
+            pass
         return False

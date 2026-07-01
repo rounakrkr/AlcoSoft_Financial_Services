@@ -169,7 +169,10 @@ def _build_recovered_trade(details: dict) -> dict:
 
     symbol = details["symbol"]
     entry = _latest_or_entry_price(symbol, safe_float(details.get("entry_price"), 0.0))
-    stop_loss = calculate_stop_loss(entry, "BUY")
+    # Broker-only recovery here only ever handles long (quantity > 0) positions.
+    # Pass the canonical "LONG" direction so SL sits BELOW entry and target ABOVE it.
+    direction = "LONG"
+    stop_loss = calculate_stop_loss(entry, direction)
     return {
         "symbol": symbol,
         "trading_symbol": details.get("trading_symbol") or f"{symbol}-EQ",
@@ -177,7 +180,8 @@ def _build_recovered_trade(details: dict) -> dict:
         "entry_price": entry,
         "stop_loss": stop_loss,
         "trailing_sl": stop_loss,
-        "target_price": calculate_target(entry, stop_loss),
+        "target_price": calculate_target(entry, direction),
+        "action": direction,
         "strategy": _strategy_for_symbol(symbol),
         "confidence": 0,
         "order_id": "BROKER-RECOVERED",
@@ -490,12 +494,17 @@ def reconcile_broker_vs_local() -> dict:
             if broker_entry > 0:
                 from core.order_executor import calculate_stop_loss, calculate_target
 
-                stop_loss = calculate_stop_loss(broker_entry, "BUY")
+                # Reconciled broker positions here are long (quantity > 0). Use the
+                # canonical "LONG" direction: SL below entry, target above entry.
+                direction = str(position.get("action") or "LONG").upper()
+                if direction not in ("LONG", "SHORT"):
+                    direction = "LONG"
+                stop_loss = calculate_stop_loss(broker_entry, direction)
                 updates.update({
                     "entry_price": broker_entry,
                     "stop_loss": stop_loss,
                     "trailing_sl": max(safe_float(position.get("trailing_sl"), stop_loss), stop_loss),
-                    "target_price": calculate_target(broker_entry, stop_loss),
+                    "target_price": calculate_target(broker_entry, direction),
                 })
             if update_open_position_from_broker(symbol, updates):
                 summary["repaired"].append(f"{symbol}:mismatch")

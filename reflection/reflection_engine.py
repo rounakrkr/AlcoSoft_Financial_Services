@@ -18,9 +18,11 @@ import math
 
 logger = logging.getLogger(__name__)
 
-# Database path
-DB_PATH = Path("data/reflection.db")
-SNAPSHOTS_DIR = Path("data/reflection_snapshots")
+# Database path (P3-9: anchor to project root so engine & dashboard never desync
+# based on the process working directory).
+_ROOT = Path(__file__).resolve().parent.parent
+DB_PATH = _ROOT / "data" / "reflection.db"
+SNAPSHOTS_DIR = _ROOT / "data" / "reflection_snapshots"
 DB_PATH.parent.mkdir(exist_ok=True)
 SNAPSHOTS_DIR.mkdir(exist_ok=True)
 
@@ -31,7 +33,7 @@ SNAPSHOTS_DIR.mkdir(exist_ok=True)
 
 def _init_db():
     """Create tables if not exist."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     c = conn.cursor()
     
     # Signal performance tracking
@@ -171,8 +173,10 @@ def _calculate_trade_time_decay(trade_timestamp: str, decay_half_life_days: int 
         weight = 0.5 ** (age_days / decay_half_life_days)
         return max(0.1, min(1.0, weight))  # Clamp between 0.1 and 1.0
     except Exception as e:
-        logger.debug(f"Time decay calculation error: {e}")
-        return 1.0
+        # P3-Q4 FIX: a corrupt/unparseable timestamp must NOT get full weight (1.0).
+        # Doing so let bad rows dominate adaptive tuning. Discard it instead.
+        logger.debug(f"Time decay calculation error (discarding trade): {e}")
+        return 0.0
 
 
 def _get_weighted_trade_stats(signal_name: str, decay_half_life_days: int = 30) -> dict:
@@ -182,7 +186,7 @@ def _get_weighted_trade_stats(signal_name: str, decay_half_life_days: int = 30) 
     Older trades influence results less, allowing adaptation to market changes.
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("""
@@ -308,7 +312,7 @@ def _get_historical_multiplier(multiplier_type: str, multiplier_key: str) -> Opt
     Returns None if no previous multiplier exists (first update).
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("""
@@ -346,7 +350,7 @@ def _store_multiplier_history(
     confidence_strength: 0.0-1.0 confidence in calculation
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
 
         c.execute("""
@@ -399,7 +403,7 @@ def _store_multiplier_history(
 def _save_config_history(config_dict: dict, changes_made: str):
     """Save adaptive config update to history table for auditing."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         config_json = json.dumps(config_dict)
@@ -440,7 +444,7 @@ def record_trade(
     if not _db_available:
         return False
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("""
@@ -479,7 +483,7 @@ def record_trade(
 def update_signal_stats(signal_name: str):
     """Recalculate signal statistics from trade records."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         # Fetch all trades for this signal
@@ -551,7 +555,7 @@ def update_signal_stats(signal_name: str):
 def update_time_window_stats(time_window: str):
     """Recalculate time window statistics from trade records."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("""
@@ -607,7 +611,7 @@ def update_time_window_stats(time_window: str):
 def update_symbol_stats(symbol: str):
     """Recalculate symbol behavior from trade records."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("""
@@ -676,7 +680,7 @@ def get_signal_stats(signal_name: str) -> dict | None:
     if not _db_available:
         return {}
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("""
@@ -711,7 +715,7 @@ def get_signal_stats(signal_name: str) -> dict | None:
 def get_all_signal_stats() -> list[dict]:
     """Get all signal statistics."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("""
@@ -757,7 +761,7 @@ def _stats_from_pnls(pnls: list[float]) -> dict:
 
 
 def _trade_record_pnls(signal_name: str, since: datetime | None = None) -> list[float]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     c = conn.cursor()
     if since is None:
         c.execute(
@@ -776,7 +780,7 @@ def _trade_record_pnls(signal_name: str, since: datetime | None = None) -> list[
 
 def get_signal_execution_policy(
     signal_name: str,
-    min_trades: int = 10,
+    min_trades: int = 20,
     min_win_rate: float = 40.0,
     rolling_days: int = 20,
 ) -> dict:
@@ -784,6 +788,9 @@ def get_signal_execution_policy(
     First-class execution policy for strategy-set admission.
     Uses current-session data first, then a recent rolling window. Lifetime
     stats are reported for context but do not hard-block fresh sessions.
+
+    P3-3 FIX: default min_trades raised 10 → 20 so a short cold-start losing
+    streak cannot bench an otherwise-good strategy set.
     """
     signal_name = str(signal_name or "").strip()
     if not signal_name or not _db_available:
@@ -866,7 +873,7 @@ def get_signal_execution_policy(
 def get_time_window_stats(time_window: str) -> dict | None:
     """Get performance stats for a specific time window."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("""
@@ -896,7 +903,7 @@ def get_time_window_stats(time_window: str) -> dict | None:
 def get_all_time_window_stats() -> list[dict]:
     """Get all time window statistics."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("""
@@ -926,7 +933,7 @@ def get_all_time_window_stats() -> list[dict]:
 def get_symbol_stats(symbol: str) -> dict | None:
     """Get behavior stats for a specific symbol."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("""
@@ -956,7 +963,7 @@ def get_symbol_stats(symbol: str) -> dict | None:
 def get_all_symbol_stats() -> list[dict]:
     """Get all symbol statistics."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("""
@@ -1128,7 +1135,7 @@ def reset_adaptive_learning_data(keep_trade_records: bool = True):
         - All other data
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         logger.warning("🗑️ RESETTING ADAPTIVE LEARNING DATA...")
@@ -1183,7 +1190,7 @@ def reset_adaptive_learning_data(keep_trade_records: bool = True):
 def get_database_summary() -> dict:
     """Get high-level summary of all statistics."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
         
         c.execute("SELECT COUNT(*) FROM trade_records")

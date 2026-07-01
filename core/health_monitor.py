@@ -285,8 +285,97 @@ def continuous_monitoring() -> HealthCheck:
             health.checks[name] = False
             health.errors[name] = str(e)
             logger.error(f"❌ {name}: {e}")
-    
+
+    # ── S1 FIX: ACT on failures, don't just log them ──────────────────────────
+    # Previously this watchdog only appended warnings/errors and nothing consumed
+    # the result, so a dead feed/broker went unhandled while positions sat
+    # unmonitored. Now we self-heal (reconnect / restart feed) and escalate.
+    try:
+        _act_on_health(health)
+    except Exception as e:
+        logger.error(f"Health escalation handler failed: {e}", exc_info=True)
+
     return health
+
+
+# Escalation state (module-level, throttles alerts and tracks streaks)
+_consec_fail: Dict[str, int] = {}
+_last_alert_ts: Dict[str, float] = {}
+_HEALTH_ALERT_COOLDOWN_SEC = 300  # don't re-alert the same subsystem more than every 5 min
+
+
+def _throttled_alert(key: str, message: str):
+    now = time.time()
+    if now - _last_alert_ts.get(key, 0.0) < _HEALTH_ALERT_COOLDOWN_SEC:
+        return
+    _last_alert_ts[key] = now
+    try:
+        from core.alerts import alert_critical
+        alert_critical(message)
+    except Exception as e:
+        logger.error(f"alert_critical failed for {key}: {e}")
+
+
+def _act_on_health(health: "HealthCheck"):
+    """Self-heal + escalate on continuous-monitoring failures (S1)."""
+    import os as _os
+
+    has_open_positions = False
+    market_open = False
+    try:
+        from core.state_manager import get_open_positions
+        has_open_positions = len(get_open_positions()) > 0
+    except Exception:
+        pass
+    try:
+        from core.data_fetcher import _is_market_open
+        market_open = _is_market_open()
+    except Exception:
+        pass
+
+    # Track consecutive failures per subsystem
+    for name, passed in health.checks.items():
+        _consec_fail[name] = 0 if passed else _consec_fail.get(name, 0) + 1
+
+    # 1) BROKER CONNECTION dead → re-authenticate (also rebinds the feed via R1 fix)
+    if not health.checks.get("Broker Connection", True):
+        logger.error("🔧 Health: broker connection down — attempting force_reconnect()")
+        try:
+            from core.kotak_client import force_reconnect
+            force_reconnect()
+            logger.info("✅ Health: force_reconnect() completed")
+        except Exception as e:
+            logger.error(f"force_reconnect() failed: {e}")
+        _throttled_alert(
+            "broker",
+            f"🚨 Broker connection DOWN ({_consec_fail.get('Broker Connection', 1)}x). "
+            f"Auto re-auth attempted. Open positions: {has_open_positions}.",
+        )
+
+    # 2) LIVE FEED dead during market hours → restart feed; escalate if positions open
+    if market_open and not health.checks.get("Live Feed", True):
+        logger.error("🔧 Health: live feed stalled during market hours — restarting feed")
+        try:
+            from core.data_fetcher import restart_live_feed
+            restart_live_feed()
+        except Exception as e:
+            logger.error(f"restart_live_feed() failed: {e}")
+        if has_open_positions:
+            _throttled_alert(
+                "feed",
+                f"🚨 Live feed STALLED with OPEN positions "
+                f"({_consec_fail.get('Live Feed', 1)}x). Software stop-loss is BLIND. "
+                f"Feed restart attempted — verify broker/network immediately.",
+            )
+
+    # 3) DAILY LOSS breached → order_executor.check_max_daily_loss already halts trading.
+    #    Escalate so the operator is notified.
+    if not health.checks.get("Daily Loss Limit", True):
+        _throttled_alert(
+            "daily_loss",
+            "🚨 Max daily loss breached — new entries halted by circuit breaker. "
+            "Review open positions.",
+        )
 
 
 if __name__ == "__main__":

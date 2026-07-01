@@ -18,10 +18,12 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-COGNITION_DIR = Path("data/cognition")
+COGNITION_DIR = Path(__file__).resolve().parent.parent / "data" / "cognition"
 COGNITION_DIR.mkdir(parents=True, exist_ok=True)
 
-DB_PATH = "data/alcosoft.db"
+# P3-9: anchor to project root so engine & dashboard resolve the SAME db file
+# regardless of the process working directory.
+DB_PATH = str(Path(__file__).resolve().parent.parent / "data" / "alcosoft.db")
 
 # ════════════════════════════════════════════════════════════
 #   COGNITION DATA MODELS
@@ -82,7 +84,7 @@ class CognitionCycle:
 def _init_cognition_db():
     """Initialize cognition tables if they don't exist."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
 
         # Cognition cycles — each agent observation
@@ -154,7 +156,7 @@ def _init_cognition_db():
 def save_cognition_cycle(cycle: CognitionCycle):
     """Save a single agent observation cycle."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
 
         today = date.today().isoformat()
@@ -181,7 +183,7 @@ def save_cognition_cycle(cycle: CognitionCycle):
 def load_today_cognition_cycles() -> list[CognitionCycle]:
     """Load all cognition cycles from today."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
 
         today = date.today().isoformat()
@@ -204,7 +206,7 @@ def load_today_cognition_cycles() -> list[CognitionCycle]:
 def load_recent_cognition_cycles(limit: int = 20) -> list[CognitionCycle]:
     """Load recent cognition cycles (default last 20)."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
 
         rows = c.execute("""
@@ -241,17 +243,29 @@ def build_market_snapshot() -> dict:
         signal_stats = get_all_signal_stats()
         window_stats = get_all_time_window_stats()
 
-        # Try to get live NIFTY data
+        # P2-6 FIX: derive a REAL NIFTY trend instead of the hardcoded
+        # `"BULLISH" if True else ...` placeholder that fed fabricated data to the
+        # cognition agents every cycle. Fall back to the regime filter, then UNKNOWN.
         nifty_trend = "UNKNOWN"
         nifty_price = None
         try:
-            client = get_client()
-            if client:
-                # This is simplified — actual data would come from broker
-                nifty_price = "NIFTY_PRICE_TBD"
-                nifty_trend = "BULLISH" if True else "BEARISH"
+            from core.regime_filter import is_bull_day, is_bear_day
+            if is_bull_day():
+                nifty_trend = "BULLISH"
+            elif is_bear_day():
+                nifty_trend = "BEARISH"
+            else:
+                nifty_trend = "NEUTRAL"
         except Exception as exc:
-            logger.debug("NIFTY snapshot unavailable: %s", exc)
+            logger.debug("NIFTY trend (regime) unavailable: %s", exc)
+        try:
+            import yfinance as yf
+            _idx = yf.Ticker("^NSEI")
+            _p = (_idx.info or {}).get("regularMarketPrice") or (_idx.info or {}).get("currentPrice")
+            if _p:
+                nifty_price = float(_p)
+        except Exception as exc:
+            logger.debug("NIFTY price unavailable: %s", exc)
 
         snapshot = {
             "timestamp": datetime.now().isoformat(),
@@ -283,7 +297,7 @@ def build_market_snapshot() -> dict:
 def save_hypothesis(hypothesis: str, confidence: float, agent: str):
     """Save a hypothesis for future tracking."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
 
         today = date.today().isoformat()
@@ -309,7 +323,7 @@ def save_hypothesis(hypothesis: str, confidence: float, agent: str):
 def get_unresolved_hypotheses() -> list:
     """Get all active hypotheses."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
 
@@ -330,7 +344,7 @@ def get_unresolved_hypotheses() -> list:
 def save_prediction_review(prediction_id: str, result: str, analysis: str, agent: str):
     """Track outcome of a prediction."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
 
         today = date.today().isoformat()
@@ -358,7 +372,7 @@ def save_prediction_review(prediction_id: str, result: str, analysis: str, agent
 def get_today_prediction_reviews() -> list:
     """Get all prediction reviews from today."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
 
@@ -387,7 +401,7 @@ def compress_cognition_memory(keep_cycles: int = 20):
     Summarize older cycles into meta-observations.
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
 
         # Get total cycle count
@@ -420,7 +434,7 @@ def compress_cognition_memory(keep_cycles: int = 20):
 def save_daily_cognition_reflection(reflection: dict):
     """Save final daily cognition reflection."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         c = conn.cursor()
 
         today = date.today().isoformat()
@@ -452,7 +466,7 @@ def save_daily_cognition_reflection(reflection: dict):
 def get_today_daily_reflection() -> Optional[dict]:
     """Get today's daily cognition reflection."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
 

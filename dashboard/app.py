@@ -55,7 +55,33 @@ app = Flask(
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
 
-app.config['SECRET_KEY'] = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
+def _load_or_create_secret_key() -> str:
+    """P2-8 FIX: persist the Flask secret so admins are not logged out on every
+    restart. Prefer FLASK_SECRET_KEY env; otherwise use a locally persisted key."""
+    key = os.environ.get("FLASK_SECRET_KEY")
+    if key:
+        return key
+    path = os.path.join(_ROOT, "data", ".flask_secret")
+    try:
+        if os.path.exists(path):
+            with open(path) as f:
+                existing = f.read().strip()
+            if existing:
+                return existing
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        generated = os.urandom(32).hex()
+        with open(path, "w") as f:
+            f.write(generated)
+        try:
+            os.chmod(path, 0o600)
+        except Exception:
+            pass
+        return generated
+    except Exception:
+        return os.urandom(24).hex()
+
+
+app.config['SECRET_KEY'] = _load_or_create_secret_key()
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
@@ -128,7 +154,9 @@ def _reflection_db_query(query: str, params: tuple = ()) -> list:
         return []
     conn = None
     try:
-        conn = sqlite3.connect(REFLECTION_DB_PATH)
+        # P3-6 FIX: busy_timeout so concurrent engine writes don't cause an instant
+        # "database is locked" that silently returns [].
+        conn = sqlite3.connect(REFLECTION_DB_PATH, timeout=30)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
@@ -144,7 +172,9 @@ def _db_query(query: str, params: tuple = ()) -> list:
         return []
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        # P2-7 FIX: busy_timeout so concurrent engine writes don't cause an instant
+        # "database is locked" that silently returns [].
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
@@ -262,6 +292,34 @@ def api_settings_post():
     cleaned, errors = validate_updates(body)
     if errors:
         return jsonify({"ok": False, "errors": errors}), 400
+
+    # P2-4 FIX: guard risk-critical, hot-reloaded settings while positions are open.
+    # A single edit can flip margin/leverage/daily-loss or disable an exit strategy set
+    # mid-session with immediate effect. Require explicit confirmation in that case.
+    RISKY_KEYS = {
+        "allow_margin", "margin_leverage", "position_size_margin", "forced_buy_margin",
+        "max_daily_loss_percent", "max_risk_per_trade", "enable_risk_based_position_sizing",
+    }
+    try:
+        touches_risky = False
+        for section, vals in (cleaned or {}).items():
+            if isinstance(vals, dict) and (set(vals.keys()) & RISKY_KEYS):
+                touches_risky = True
+            if section == "strategy_sets":
+                touches_risky = True  # enabling/disabling exit sets affects open positions
+        if touches_risky and len(_db_query(
+            "SELECT 1 FROM trades WHERE status = 'OPEN' AND quantity > 0 LIMIT 1"
+        )) > 0:
+            if not body.get("confirm_risky_change"):
+                return jsonify({
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "error": "Risk-critical settings change while positions are OPEN. "
+                             "Re-submit with confirm_risky_change=true to apply.",
+                }), 409
+    except Exception as guard_err:
+        app.logger.warning("Risky-change guard check failed: %s", guard_err)
+
     merged = save_settings(cleaned)
     return jsonify({"ok": True, "settings": merged})
 
@@ -543,28 +601,66 @@ def api_emergency_squareoff():
         # The main thread has the websocket connected for live prices
         mark_liquidating("EMERGENCY_SQUAREOFF_REQUESTED")
         logger.info("Emergency squareoff requested - delegated to main thread.")
-        
-        # 2. Wait for main thread to process it
-        timeout = 10
+
+        # P2-2 FIX: detect whether the engine is actually alive. If its heartbeat is
+        # stale, the delegated request would never be consumed — so fall back to an
+        # in-process squareoff (uses yfinance/entry-price fallback for pricing).
+        engine_alive = False
+        try:
+            hb = safe_read_json(
+                os.path.join(_ROOT, "data", "engine_heartbeat.json"), {},
+                expected_type=dict, label="engine heartbeat", log=app.logger,
+            )
+            engine_alive = (time.time() - float(hb.get("ts", 0))) < 90
+        except Exception:
+            engine_alive = False
+
+        # 2. Wait for main thread to process it (terminal reasons: SUCCESS/PARTIAL/FAILED)
+        timeout = 15
         start_time = time.time()
         completed = False
-        
-        while time.time() - start_time < timeout:
-            state = get_trading_session_state()
-            reason = state.get("reason", "")
-            if "EMERGENCY_SQUAREOFF_SUCCESS" in reason or "EMERGENCY_SQUAREOFF_TRIGGER_COMPLETE" in reason:
-                completed = True
-                break
-            time.sleep(0.5)
-            
+        terminal_reason = ""
+
+        if engine_alive:
+            while time.time() - start_time < timeout:
+                state = get_trading_session_state()
+                reason = state.get("reason", "")
+                if any(tag in reason for tag in (
+                    "EMERGENCY_SQUAREOFF_SUCCESS",
+                    "EMERGENCY_SQUAREOFF_PARTIAL",
+                    "EMERGENCY_SQUAREOFF_FAILED",
+                    "EMERGENCY_SQUAREOFF_TRIGGER_COMPLETE",
+                )):
+                    completed = True
+                    terminal_reason = reason
+                    break
+                time.sleep(0.5)
+
+        if not completed:
+            # Engine dead or did not respond in time → last-resort in-process squareoff.
+            logger.warning(
+                "Engine %s; performing DIRECT in-process emergency squareoff as fallback.",
+                "did not confirm" if engine_alive else "appears DEAD (stale heartbeat)",
+            )
+            try:
+                from core.emergency_squareoff import emergency_square_off_all
+                fb = emergency_square_off_all()
+                terminal_reason = f"DASHBOARD_FALLBACK_{fb.get('status', 'UNKNOWN')}"
+                completed = fb.get("status") in ("SUCCESS", "PARTIAL")
+            except Exception as fb_err:
+                logger.error("Dashboard fallback squareoff failed: %s", fb_err, exc_info=True)
+
         # 3. Calculate results based on remaining open positions
         final_open_count = len(get_open_positions())
         closed_count = initial_open_count - final_open_count
         failed_count = final_open_count
-        
+
+        status = "COMPLETED" if final_open_count == 0 else ("PARTIAL" if closed_count > 0 else "FAILED")
         response_data = {
             "ok": True,
-            "status": "COMPLETED" if completed else "TIMEOUT",
+            "status": status,
+            "engine_alive": engine_alive,
+            "reason": terminal_reason,
             "closed_count": max(0, closed_count),
             "failed_count": max(0, failed_count),
             "details": [],

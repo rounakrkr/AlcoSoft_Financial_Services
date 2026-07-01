@@ -820,6 +820,32 @@ def start_live_feed(symbols: list[str], _is_reconnect: bool = False):
         _schedule_reconnect()
 
 
+def restart_live_feed():
+    """
+    R1 FIX: Rebind the WebSocket feed onto the CURRENT broker client.
+
+    Called after core.kotak_client.force_reconnect() creates a fresh session for
+    order placement. Without this, the feed keeps its reference to the OLD client
+    (_active_client) and silently dies on the invalidated session while orders keep
+    working — blinding the software stop-loss / exit checks.
+
+    start_live_feed() re-fetches the client via get_client(), so it binds to the
+    new session and re-registers callbacks + re-subscribes.
+    """
+    global _subscribed_symbols
+    syms = list(_subscribed_symbols)
+    if not syms:
+        logger.info("restart_live_feed: no subscribed symbols yet; nothing to rebind.")
+        return
+    logger.warning("♻️ Restarting live feed onto refreshed broker session (%d symbols)", len(syms))
+    try:
+        start_live_feed(syms, _is_reconnect=False)
+    except Exception as e:
+        logger.error("restart_live_feed failed: %s", e, exc_info=True)
+        _schedule_reconnect()
+
+
+
 def stop_live_feed(symbols: list[str]):
     global _active_client, _subscribed_symbols, _reconnect_timer
     if _reconnect_timer:

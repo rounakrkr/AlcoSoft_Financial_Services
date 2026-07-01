@@ -59,7 +59,19 @@ def force_reconnect() -> Any:
         logger.warning("Unexpected error during Kotak logout: %s", e)
 
     _client_instance = None
-    return get_client()
+    new_client = get_client()
+
+    # R1 FIX: force_reconnect() creates a brand-new session used by the order path.
+    # The live WebSocket feed holds a SEPARATE reference to the old client and would
+    # keep running on the now-dead session (or silently stop delivering ticks) — which
+    # blinds software SL / exit checks. Rebind the feed onto the fresh client.
+    try:
+        from core.data_fetcher import restart_live_feed
+        restart_live_feed()
+    except Exception as e:
+        logger.warning("Feed restart after force_reconnect failed: %s", e)
+
+    return new_client
 
 
 # ── Internal: create session + full 2FA login ───────────────

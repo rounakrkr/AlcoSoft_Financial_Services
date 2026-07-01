@@ -82,7 +82,10 @@ _capital_api_failures: int = 0
 _CAPITAL_API_FAILURE_ALERT_THRESHOLD = 3
 
 # ── Squareoff flag — prevents repeated calls after 3:15 ──────
+# _squareoff_done_date guards against the flag sticking across days: it is reset
+# whenever the calendar date rolls over so EOD squareoff fires every trading day.
 _squareoff_done = False
+_squareoff_done_date = None
 RISK_REDUCING_SELL_REASONS = {
     "STOPLOSS",
     "TRAILING_SL",
@@ -1078,14 +1081,47 @@ def _place_entry_order_impl(
             )
             raise OrderExecutionError(f"BUY rejected for {symbol}")
         elif verification == "TIMEOUT":
-            logger.warning(
-                f"⚠️ BUY verification timed out for {symbol}. "
-                f"Assuming order is filled to prevent double-buy risk. "
-                f"Reconciliation will clean up if broker actually dropped it. (order_id={trade['order_id']})"
-            )
-            # F004 FIX: We continue and save the local position to avoid duplicate buys.
-            # Adding a note so operators/reconciliation are aware of the timeout.
-            trade["notes"] = "UNVERIFIED: Broker confirmation timed out"
+            # E2 FIX: don't blindly assume a timed-out BUY filled. Re-query the broker
+            # order status once. If it explicitly REJECTED/CANCELLED, do NOT save a phantom
+            # local position. If COMPLETE, proceed. If still pending/unknown, save it but
+            # flag it and mark it reconciliation-pending so the reconciler verifies/cleans it.
+            _resolved = "UNKNOWN"
+            try:
+                from core.order_verifier import (
+                    fetch_kotak_order_row,
+                    normalize_kotak_status,
+                    extract_broker_fill_qty,
+                )
+                _row = fetch_kotak_order_row(trade["order_id"])
+                if _row is not None:
+                    _resolved = normalize_kotak_status(_row.get("ordSt"))
+                    _filled = extract_broker_fill_qty(_row)
+                    if _filled and _filled > 0 and _resolved not in ("COMPLETE",):
+                        _resolved = "COMPLETE"
+            except Exception as _recheck_err:
+                logger.warning("BUY timeout re-check failed for %s: %s", symbol, _recheck_err)
+
+            if _resolved in ("REJECTED", "CANCELLED"):
+                logger.error(
+                    f"❌ BUY timed out and broker status is {_resolved} for {symbol} — "
+                    f"not saving local position (order_id={trade['order_id']})"
+                )
+                raise OrderExecutionError(f"BUY {_resolved} (post-timeout) for {symbol}")
+
+            if _resolved == "COMPLETE":
+                logger.info(
+                    f"✅ BUY timeout resolved as COMPLETE on re-check for {symbol} "
+                    f"(order_id={trade['order_id']})"
+                )
+            else:
+                logger.warning(
+                    f"⚠️ BUY verification timed out for {symbol} and broker status is "
+                    f"'{_resolved}'. Saving as UNVERIFIED and flagging for reconciliation "
+                    f"to prevent both double-buy and untracked phantom fills. "
+                    f"(order_id={trade['order_id']})"
+                )
+                trade["notes"] = "UNVERIFIED: Broker confirmation timed out"
+                trade["reconciliation_status"] = "RECONCILIATION_PENDING"
 
         logger.info(f"✅ BUY verified on broker | Symbol: {symbol} | Qty: {quantity} | Product: {product} | SL: ₹{stop_loss}")
 
@@ -1336,7 +1372,17 @@ def _place_sell_order_impl(
             cancel_success = _cancel_kotak_order(sl_order_id)
             if cancel_success:
                 logger.info(f"✅ Broker SL {sl_order_id} successfully cancelled before software sell.")
-                
+
+                # L4 FIX: the broker SL no longer exists. Clear kotak_sl_order_id in the DB
+                # immediately so that if the software SELL below fails/times out (leaving the
+                # position OPEN and NAKED), attempt_broker_sl_recovery re-arms a broker SL.
+                # Previously the stale id remained, so recovery skipped the now-unprotected
+                # position.
+                try:
+                    update_sl_order_id(symbol, "")
+                except Exception:
+                    logger.warning("Could not clear kotak_sl_order_id for %s after SL cancel", symbol)
+
                 # Check for partial fills even on success
                 try:
                     from core.order_verifier import fetch_kotak_order_row, extract_broker_fill_qty
@@ -2115,23 +2161,33 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
                 
                 if profit_pct >= _tgt_pct and _qty > 0:
                     _exit_qty = max(1, int(_qty * _fraction))
-                    logger.info(
-                        "[PartialProfit] %s Profit %.2f%% >= %.2f%% | %s | "
-                        "Exiting %d/%d shares @ Rs%.2f (fraction=%.0f%%)",
-                        direction, profit_pct * 100, _tgt_pct * 100, symbol, _exit_qty, _qty, current, _fraction * 100
-                    )
-                    place_sell_order(
-                        symbol         = symbol,
-                        exit_price     = current,
-                        reason         = "PARTIAL_PROFIT_TARGET",
-                        quantity       = _exit_qty,
-                    )
+                    # L5 FIX: persist the PARTIAL_PROFIT_DONE guard BEFORE selling. If the
+                    # notes write fails, skip the sell this cycle — otherwise a swallowed
+                    # write meant the guard never stuck and the position was partially sold
+                    # again on every subsequent loop.
+                    _guard_ok = False
                     try:
                         from core.state_manager import update_position_notes
                         _new_notes = (_notes + " | PARTIAL_PROFIT_DONE").strip(" | ")
                         update_position_notes(symbol, _new_notes)
-                    except Exception:
-                        pass
+                        _guard_ok = True
+                    except Exception as _guard_err:
+                        logger.error(
+                            "Partial-profit guard write failed for %s (%s); skipping partial "
+                            "exit to avoid repeated sells", symbol, _guard_err,
+                        )
+                    if _guard_ok:
+                        logger.info(
+                            "[PartialProfit] %s Profit %.2f%% >= %.2f%% | %s | "
+                            "Exiting %d/%d shares @ Rs%.2f (fraction=%.0f%%)",
+                            direction, profit_pct * 100, _tgt_pct * 100, symbol, _exit_qty, _qty, current, _fraction * 100
+                        )
+                        place_sell_order(
+                            symbol         = symbol,
+                            exit_price     = current,
+                            reason         = "PARTIAL_PROFIT_TARGET",
+                            quantity       = _exit_qty,
+                        )
 
 
         # ─────────────────────────────────────────────────────────
@@ -2161,7 +2217,12 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
                     from core.data_fetcher import get_candle_history
                     from core.strategy import _build_indicators
                     import pandas as pd
-                    _hist = get_candle_history(symbol, max_candles=30)
+                    # L1 FIX: get_candle_history has no `max_candles` kwarg — the old
+                    # call raised TypeError (swallowed below), so this RSI exit never
+                    # fired. Fetch the history and slice the last 30 closed candles.
+                    _hist = get_candle_history(symbol)
+                    if _hist:
+                        _hist = _hist[-30:]
                     if _hist and len(_hist) >= 15:
                         _df = pd.DataFrame(_hist)
                         _df.columns = [c.lower() for c in _df.columns]
@@ -2180,22 +2241,29 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
 
                     if is_rsi_exit:
                         _exit_qty = max(1, int(_qty * _fraction))
-                        logger.info(
-                            "[PartialExit] %s RSI=%.1f | %s | Exiting %d/%d shares @ Rs%.2f",
-                            direction, _live_rsi, symbol, _exit_qty, _qty, current
-                        )
-                        place_sell_order(
-                            symbol         = symbol,
-                            exit_price     = current,
-                            reason         = "PARTIAL_EXIT_RSI",
-                            quantity       = _exit_qty,
-                        )
+                        # L5 FIX: persist the guard BEFORE selling; skip if it fails.
+                        _guard_ok = False
                         try:
                             from core.state_manager import update_position_notes
                             _new_notes = (_notes + " | PARTIAL_EXIT_DONE").strip(" | ")
                             update_position_notes(symbol, _new_notes)
-                        except Exception:
-                            pass
+                            _guard_ok = True
+                        except Exception as _guard_err:
+                            logger.error(
+                                "RSI-exit guard write failed for %s (%s); skipping to avoid "
+                                "repeated sells", symbol, _guard_err,
+                            )
+                        if _guard_ok:
+                            logger.info(
+                                "[PartialExit] %s RSI=%.1f | %s | Exiting %d/%d shares @ Rs%.2f",
+                                direction, _live_rsi, symbol, _exit_qty, _qty, current
+                            )
+                            place_sell_order(
+                                symbol         = symbol,
+                                exit_price     = current,
+                                reason         = "PARTIAL_EXIT_RSI",
+                                quantity       = _exit_qty,
+                            )
 
         # Get current TSL activation state
         tsl_state        = get_tsl_activation_state(symbol)
@@ -2272,6 +2340,15 @@ def update_trailing_stop_losses(live_prices: dict[str, float]):
 def check_max_daily_loss() -> bool:
     """Daily loss check based on initial trading capital (not available after position deployment)."""
     gross_pnl = get_today_gross_pnl()
+
+    # L3 FIX: include UNREALIZED P&L of open positions. Using realized-only P&L
+    # let an open position bleed far past max_daily_loss_percent before the halt
+    # ever tripped (it only tripped once the loss was booked on close).
+    try:
+        unrealized_pnl = safe_float(_current_position_valuation().get("unrealized_pnl"), 0.0)
+    except Exception:
+        unrealized_pnl = 0.0
+    total_pnl = safe_float(gross_pnl, 0.0) + unrealized_pnl
     
     # Use INITIAL capital for loss limit calculation, not available capital
     # (available capital gets reduced when positions are deployed, which incorrectly constrains the loss limit)
@@ -2289,18 +2366,20 @@ def check_max_daily_loss() -> bool:
     max_daily_loss_pct = max(0.0, min(1.0, safe_float(cfg("risk", "max_daily_loss_percent", 0.05), 0.05)))
     max_daily_loss = -(initial_capital * max_daily_loss_pct)
 
-    if gross_pnl <= max_daily_loss:
+    if total_pnl <= max_daily_loss:
         logger.warning(
             f"🚨 MAX DAILY LOSS HIT | "
-            f"P&L: ₹{gross_pnl:.2f} | Limit: ₹{max_daily_loss:.2f} | "
+            f"Total P&L: ₹{total_pnl:.2f} (realized ₹{gross_pnl:.2f} + unrealized ₹{unrealized_pnl:.2f}) | "
+            f"Limit: ₹{max_daily_loss:.2f} | "
             f"No new trades today."
         )
         try:
             from core.circuit_breaker import halt_all_trading
-            halt_all_trading(f"Max daily loss ₹{gross_pnl:.2f}")
+            halt_all_trading(f"Max daily loss ₹{total_pnl:.2f}")
             alert_critical(
-                f"Max daily loss hit: ₹{gross_pnl:.2f} (limit ₹{max_daily_loss:.2f}). "
-                f"New trades halted."
+                f"Max daily loss hit: ₹{total_pnl:.2f} "
+                f"(realized ₹{gross_pnl:.2f} + unrealized ₹{unrealized_pnl:.2f}, "
+                f"limit ₹{max_daily_loss:.2f}). New trades halted."
             )
         except Exception:
             pass
@@ -2309,8 +2388,15 @@ def check_max_daily_loss() -> bool:
  
 
 def squareoff_all_intraday(live_prices: dict[str, float] | None = None, **kwargs):
-    """Force-closes all MIS positions at 3:15 PM. Runs only once."""
-    global _squareoff_done
+    """Force-closes all MIS positions at 3:15 PM. Runs once per trading day."""
+    global _squareoff_done, _squareoff_done_date
+
+    # L2 FIX: reset the once-per-day guard when the date rolls over so a
+    # continuously-running process still squares off every subsequent day.
+    _today = datetime.now().date()
+    if _squareoff_done_date != _today:
+        _squareoff_done = False
+        _squareoff_done_date = _today
 
     if _squareoff_done:
         return
@@ -2329,6 +2415,7 @@ def squareoff_all_intraday(live_prices: dict[str, float] | None = None, **kwargs
     open_positions = get_open_positions()
     if not open_positions:
         _squareoff_done = True
+        _squareoff_done_date = _today
         if was_active:
             resume_entries("EOD_SQUAREOFF_NO_OPEN_POSITIONS")
         return
@@ -2342,10 +2429,14 @@ def squareoff_all_intraday(live_prices: dict[str, float] | None = None, **kwargs
         symbol  = position["symbol"]
         current, price_source = _resolve_liquidation_price(position, live_prices)
         if current <= 0:
-            # F007 FIX: If WS feed is dead at 3:15 PM, we must still square off.
-            # We use 95% of entry price to ensure the resulting limit order 
-            # is priced low enough to execute immediately against the best bid.
-            fallback = safe_float(position.get("entry_price"), 0.0) * 0.95
+            # F007 FIX: If WS feed is dead at 3:15 PM, we must still square off with a
+            # marketable limit. E1 FIX: direction matters — a long exit SELLS (price low
+            # to hit the bid) while a short exit BUYS-to-cover (price high to hit the ask).
+            # Using entry*0.95 for a short cover would rest a buy limit BELOW market and
+            # never fill, leaving the short open.
+            _direction = str(position.get("action", "LONG")).upper()
+            _fallback_mult = 0.95 if _direction == "LONG" else 1.05
+            fallback = safe_float(position.get("entry_price"), 0.0) * _fallback_mult
             if fallback > 0:
                 current = fallback
                 price_source = "fallback_entry_price"
@@ -2381,6 +2472,7 @@ def squareoff_all_intraday(live_prices: dict[str, float] | None = None, **kwargs
         return
 
     _squareoff_done = True
+    _squareoff_done_date = _today
     if was_active:
         resume_entries("EOD_SQUAREOFF_COMPLETE")
     else:
