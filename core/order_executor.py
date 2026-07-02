@@ -1500,7 +1500,8 @@ def _place_sell_order_impl(
 
     if success:
         entry = safe_float(position.get("entry_price"), 0.0)
-        pnl = (final_exit_price - entry) * quantity if entry else None
+        _direction = position.get("action", "LONG")
+        pnl = (((final_exit_price - entry) if _direction == "LONG" else (entry - final_exit_price)) * quantity) if entry else None
         reconciliation_status = None
         if "broker_fill_missing" in final_exit_price_source or "broker_fill_lookup_failed" in final_exit_price_source:
             reconciliation_status = "RECONCILIATION_PENDING"

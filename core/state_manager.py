@@ -668,20 +668,20 @@ def partial_close_position(
         # Insert closed row for the partial exit
         conn.execute("""
             INSERT INTO trades (
-                date, time, symbol, status,
-                entry_price, quantity,
+                date, entry_time, symbol, status,
+                action, entry_price, quantity,
                 stop_loss, exit_price, pnl,
                 strategy,
                 exit_time, confidence, notes,
-                trading_symbol, exit_price_source, reconciliation_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                trading_symbol
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            row["date"], row["time"], row["symbol"], "CLOSED",
-            row["entry_price"], exit_qty,
+            row["date"], row.get("entry_time"), row["symbol"], "CLOSED",
+            direction, row["entry_price"], exit_qty,
             row["stop_loss"], exit_price, pnl,
             row["strategy"],
             now, row["confidence"], (str(row["notes"] or "") + f" | {reason}").strip(" | "),
-            row["trading_symbol"], exit_price_source, reconciliation_status
+            row.get("trading_symbol")
         ))
 
     _update_positions_json()
