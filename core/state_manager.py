@@ -545,9 +545,26 @@ def mark_position_reconciliation_pending(
 
 
 def calculate_transaction_costs(entry_price: float, exit_price: float, quantity: int) -> float:
-    """Approximate Indian Equity Intraday Transaction Costs (0.03% of turnover)."""
-    turnover = (entry_price + exit_price) * quantity
-    return turnover * 0.0003
+    """
+    Accurate Indian Equity Intraday Transaction Costs (Kotak API / Zero Brokerage).
+    Breakdown:
+      - STT:        0.025% on sell side only
+      - NSE Txn:    0.00297% on total turnover
+      - SEBI:       0.0001% on total turnover
+      - GST:        18% on (NSE Txn + SEBI)
+      - Stamp Duty: 0.003% on buy side only
+    """
+    buy_val  = entry_price * quantity
+    sell_val = exit_price  * quantity
+    turnover = buy_val + sell_val
+
+    stt      = sell_val  * 0.00025    # STT: sell side only
+    nse_txn  = turnover  * 0.0000297  # NSE transaction charge
+    sebi     = turnover  * 0.000001   # SEBI charges
+    gst      = (nse_txn + sebi) * 0.18  # GST on regulatory charges
+    stamp    = buy_val   * 0.00003    # Stamp duty: buy side only
+
+    return stt + nse_txn + sebi + gst + stamp
 
 
 def close_position(
