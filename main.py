@@ -375,11 +375,27 @@ async def startup():
 #   OBSERVATION CYCLE WRAPPER
 # ════════════════════════════════════════════════════════════
 
+async def _lock_in_daily_capital():
+    """
+    Bug2 FIX: persist start-of-day capital_start while positions are still flat.
+    Runs just before market open and is retried each observation cycle. Idempotent:
+    initialize_daily_capital() returns early once capital_start is locked in, or if
+    any position is already open.
+    """
+    try:
+        from core.state_manager import initialize_daily_capital
+        await asyncio.to_thread(initialize_daily_capital)
+    except Exception as e:
+        logger.error(f"Daily capital lock-in failed: {e}", exc_info=True)
+
+
 async def run_observation_cycle():
     """
     Wrapper for scheduler to run observation cycle.
     Called every 15 minutes by scheduler.
     """
+    # Bug2 FIX: keep retrying to lock in capital_start (no-op once set / positions open).
+    await _lock_in_daily_capital()
     try:
         from reflection.observation_loop import run_observation_cycle as observation_run
         await observation_run()
@@ -733,6 +749,16 @@ def setup_scheduler() -> AsyncIOScheduler:
         hour=15, minute=30,
         id="eod_report",
         name="End-of-Day Report",
+        max_instances=1,
+    )
+
+    # Bug2 FIX: lock in start-of-day capital at 9:14 AM (before open, positions flat).
+    scheduler.add_job(
+        _lock_in_daily_capital,
+        trigger="cron",
+        hour=9, minute=14,
+        id="capital_lock_in",
+        name="Daily Capital Lock-In",
         max_instances=1,
     )
 

@@ -250,8 +250,16 @@ def initialize_daily_capital():
                     # Outside market hours: skip broker API fetch to prevent stale errors/log spam
                     return
 
-                from core.order_executor import _get_available_capital
+                from core.order_executor import _get_available_capital, is_capital_fresh
                 avail = _get_available_capital(force_refresh=True)
+                # Bug2 FIX: never lock in capital_start from a stale/failed fetch —
+                # a bad reading here poisons the whole day's equity + position sizing.
+                if not is_capital_fresh() or avail <= 0:
+                    logger.warning(
+                        "Skipping LIVE capital_start init: broker capital not fresh "
+                        "(avail=₹%.2f). Will retry next cycle.", avail
+                    )
+                    return
                 gross = get_today_gross_pnl()
                 capital_start = avail - gross
                 logger.info("Initialized LIVE capital from broker API: ₹%.2f", capital_start)

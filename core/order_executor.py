@@ -1835,6 +1835,29 @@ def attempt_broker_sl_recovery():
                 )
 
 
+def _capital_fetch_window_open() -> bool:
+    """
+    Bug1 FIX: LIVE broker capital fetch is only meaningful on trading days
+    within the 08:45–15:30 IST window. Outside it the broker returns an empty
+    limits payload ({'Net':'0','availablecash':None}) that must NOT be treated
+    as an API failure — doing so drove a nightly escalation loop plus a
+    destructive force_reconnect() that tore down the WebSocket.
+    """
+    try:
+        from core.market_calendar import is_trading_day
+        now = datetime.now()
+        if not is_trading_day(now.date()):
+            return False
+        return dt_time(8, 45) <= now.time() <= dt_time(15, 30)
+    except Exception:
+        return True  # fail-open: prefer fetching over silently blocking
+
+
+def is_capital_fresh() -> bool:
+    """True only when the last LIVE capital fetch succeeded (not a stale cache)."""
+    return _capital_api_failures == 0 and _capital_cache > 0
+
+
 def _get_available_capital(force_refresh: bool = False) -> float:
     """
     F005 FIX: Fetch broker account capital with observable failure handling.
@@ -1858,6 +1881,13 @@ def _get_available_capital(force_refresh: bool = False) -> float:
         return _calculate_paper_capital_available()
 
     now = time.time()
+
+    # Bug1 FIX: don't hammer the broker capital API off-market. Outside the
+    # 08:45–15:30 trading-day window serve the cache and skip the fetch entirely,
+    # so an empty off-hours limits payload never counts as an API failure.
+    if not _capital_fetch_window_open():
+        return _capital_cache
+
     if not force_refresh and (now - _capital_last_update) < CAPITAL_CACHE_TTL:
         return _capital_cache   # valid cache — serve it
 
@@ -1896,6 +1926,10 @@ def _get_available_capital(force_refresh: bool = False) -> float:
             fetch_ok = True
             return _capital_cache
         else:
+            # Bug1 FIX (defense-in-depth): an all-empty payload while the fetch
+            # window is closed is an off-hours response, not a real failure.
+            if not _capital_fetch_window_open():
+                return _capital_cache
             raise ValueError(
                 "Capital API returned zero/empty available field. "
                 "limits=" + repr({k: limits.get(k) for k in ("Net", "availablecash", "data")})
@@ -1914,8 +1948,14 @@ def _get_available_capital(force_refresh: bool = False) -> float:
             int(now - _capital_last_update) if _capital_last_update > 0 else -1,
         )
 
-        # Attempt session recovery on repeated failures (e.g. token expired overnight)
-        if _capital_api_failures >= 5 and _capital_api_failures % 5 == 0:
+        # Attempt session recovery on repeated failures (e.g. token expired overnight).
+        # Bug1 FIX: only reconnect inside the trading-day window — an off-hours
+        # reconnect is pointless and destructive (kills the WebSocket session).
+        if (
+            _capital_api_failures >= 5
+            and _capital_api_failures % 5 == 0
+            and _capital_fetch_window_open()
+        ):
             try:
                 logger.warning(
                     "🚨 Capital API has failed %d consecutive times. "
@@ -2033,34 +2073,43 @@ def get_margin_status() -> dict:
     """
     from core.state_manager import get_today_stats
     stats = get_today_stats()
-    
-    # 1. Starting Capital
-    if stats and stats.get("capital_start") is not None:
-        starting_capital = max(0.0, safe_float(stats["capital_start"], 0.0))
-    else:
-        if TRADING_MODE == "PAPER":
-            starting_capital = safe_float(cfg("risk", "paper_capital", 10000), 10000.0)
-        else:
-            starting_capital = safe_float(_get_available_capital(force_refresh=True), 0.0)
 
-    # 2. PnL
+    # PnL / position valuation — computed up-front so the LIVE fallback below
+    # can reconstruct start-of-day capital from open-position margin.
     valuation = _current_position_valuation()
     current_position_value = valuation["current_position_value"]
     entry_position_value = valuation["entry_position_value"]
     unrealized_pnl = valuation["unrealized_pnl"]
     closed_pnl = safe_float(get_today_gross_pnl(), 0.0)
-    
-    # 3. Account Equity
-    account_equity = max(0.0, starting_capital + closed_pnl + unrealized_pnl)
-    
-    # 4. Gross Exposure
-    gross_exposure = current_position_value
-    
-    # 5. Margin Blocked
+
+    # Effective margin leverage
     margin_leverage = safe_float(cfg("risk", "margin_leverage", 2.0), 2.0)
     if not cfg("risk", "allow_margin", False):
         margin_leverage = 1.0
-    
+
+    # 1. Starting Capital
+    if stats and stats.get("capital_start") is not None:
+        starting_capital = max(0.0, safe_float(stats["capital_start"], 0.0))
+    elif TRADING_MODE == "PAPER":
+        starting_capital = safe_float(cfg("risk", "paper_capital", 10000), 10000.0)
+    else:
+        # LIVE + capital_start not persisted yet. Raw broker "available" is only
+        # FREE margin — once a position is open it collapses to the leftover
+        # (e.g. ₹34.62 after margin is blocked). Bug2 FIX: reconstruct true
+        # start-of-day capital by adding back margin blocked by open positions.
+        avail = safe_float(_get_available_capital(force_refresh=True), 0.0)
+        blocked_by_positions = (
+            entry_position_value / margin_leverage if margin_leverage > 0 else entry_position_value
+        )
+        starting_capital = max(0.0, avail + blocked_by_positions - closed_pnl)
+
+    # 3. Account Equity
+    account_equity = max(0.0, starting_capital + closed_pnl + unrealized_pnl)
+
+    # 4. Gross Exposure
+    gross_exposure = current_position_value
+
+    # 5. Margin Blocked
     margin_blocked = gross_exposure / margin_leverage if margin_leverage > 0 else gross_exposure
     
     # 6. Free Margin
@@ -2361,7 +2410,10 @@ def check_max_daily_loss() -> bool:
         if stats and stats.get("capital_start") is not None:
             initial_capital = max(1.0, safe_float(stats["capital_start"], 0.0))
         else:
-            initial_capital = max(1.0, safe_float(_get_available_capital(force_refresh=True), 100000.0))
+            # Bug2 FIX: capital_start not persisted yet — reuse get_margin_status()'s
+            # reconstructed starting capital (adds back open-position margin) instead
+            # of raw free margin, which would understate the loss limit after a trade.
+            initial_capital = max(1.0, safe_float(get_margin_status().get("starting_capital"), 100000.0))
     
     max_daily_loss_pct = max(0.0, min(1.0, safe_float(cfg("risk", "max_daily_loss_percent", 0.05), 0.05)))
     max_daily_loss = -(initial_capital * max_daily_loss_pct)
