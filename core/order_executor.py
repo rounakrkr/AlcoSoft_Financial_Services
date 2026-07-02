@@ -1627,6 +1627,13 @@ def check_profit_targets(live_prices: dict[str, float]):
         if not current or not target:
             continue
 
+        # Fix #2: skip positions whose partial profit has already been booked —
+        # let the trailing SL manage the remainder instead of full-exiting it at
+        # the SAME target (which would silently nullify partial booking whenever
+        # partial_profit_fraction < 1).
+        if "PARTIAL_PROFIT_DONE" in str(position.get("notes") or ""):
+            continue
+
         target_hit = current >= target if direction == "LONG" else current <= target
 
         if target_hit:

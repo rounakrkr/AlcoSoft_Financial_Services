@@ -15,6 +15,19 @@ from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import colorlog
 
+# ── Enforce IST process timezone (CRITICAL) ─────────────────────────────────
+# The engine compares naive datetime.now() against hardcoded IST market times
+# (09:15 / 15:30, scheduler crons, the capital-fetch window). On a non-IST host
+# (e.g. a default UTC container) every timing decision would be off by 5.5h —
+# no trading and NO software-SL monitoring during real market hours. Force IST
+# before anything time-based runs.
+import time as _time
+os.environ["TZ"] = "Asia/Kolkata"
+try:
+    _time.tzset()
+except AttributeError:
+    pass  # Windows has no tzset(); TZ env is applied best-effort
+
 load_dotenv()
 
 # ─────────────────────────────────────────────────────────────

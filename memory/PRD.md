@@ -46,3 +46,19 @@ negative `Net` misclassified as failure + unserialized multi-source reconnects.
 - Tests: `tests/test_ws_capital_hardening.py` (4 passing) — negative-Net valid, broken payload=failure,
   stale-epoch close ignored, force_reconnect throttle. (Installed `pyotp` in test env to import kotak_client.)
 - Changes are LOCAL only; not pushed to GitHub (use "Save to Github").
+
+## Bug hunt round 2 (2026-06, fresh clone) — 2 fixes DONE
+- **Fix #1 (CRITICAL, TZ):** engine compared naive datetime.now() vs hardcoded IST times with no tz
+  handling → off by 5.5h on a UTC host (no trading / no SL monitoring in real market hours). Enforced
+  `os.environ["TZ"]="Asia/Kolkata"; time.tzset()` at startup in BOTH entrypoints (`main.py`, `dashboard/app.py`).
+  Verified: naive now() now = IST, `is_market_session_open()` returns True during IST hours.
+- **Fix #2 (partial-profit):** `order_executor.check_profit_targets` now skips positions tagged
+  `PARTIAL_PROFIT_DONE`, so trailing SL manages the remainder (previously full-exited at same target,
+  silently nullifying partial booking when fraction<1). Compiles clean.
+
+### Open findings from hunt (NOT yet fixed — for discussion)
+- MEDIUM: no in-repo user/admin provisioning — `generate_password_hash` imported but unused; dashboard
+  login unusable without out-of-band DB seed or LOCAL_ADMIN_BYPASS.
+- LOW: auth login timing-based username enumeration; per-IP brute-force key → global lockout DoS behind proxy;
+  errorhandler leaks `str(error)` to client.
+- Not yet reviewed: rest of reflection/ (adaptive_config_updater looks well-clamped) + screener/morning_screener.py.

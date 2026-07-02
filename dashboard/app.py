@@ -9,6 +9,17 @@ import sqlite3
 import sys
 from datetime import datetime, timedelta
 
+# ── Enforce IST process timezone (CRITICAL) ─────────────────────────────────
+# The dashboard runs as a SEPARATE process and also compares naive datetime.now()
+# against IST market times. Force IST here too so it stays consistent with the
+# engine regardless of host timezone (e.g. a UTC container).
+import time as _time
+os.environ["TZ"] = "Asia/Kolkata"
+try:
+    _time.tzset()
+except AttributeError:
+    pass  # Windows has no tzset(); TZ env is applied best-effort
+
 from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf.csrf import CSRFProtect
