@@ -38,6 +38,12 @@ _max_reconnect = 10                # max retries
 _reconnect_delay = 5               # initial delay seconds
 _reconnect_lock = threading.RLock() # avoid simultaneous reconnect/deadlock
 _reconnect_timer = None
+# Fix D: _reconnect_lock (reentrant) is reused as the single connection mutex for
+# ALL connect/subscribe sequences — timer reconnects, the direct restart_live_feed
+# path (force_reconnect), and initial startup — so duplicate/concurrent WebSocket
+# connections can never be opened. _client_epoch lets callbacks from a replaced
+# (stale) client be ignored, so a killed session can't schedule fresh reconnects.
+_client_epoch = 0
 
 
 # ── In-Memory Storage ────────────────────────────────────────
@@ -336,7 +342,9 @@ def _send_keepalive():
     pass
 
 
-def _on_open(message):
+def _on_open(message, epoch=None):
+    if epoch is not None and epoch != _client_epoch:
+        return
     logger.info("✅ WebSocket connection opened.")
 
 
@@ -369,8 +377,16 @@ def _schedule_reconnect_after_market_open():
         _reconnect_timer.start()
 
 
-def _on_close(message):
+def _on_close(message, epoch=None):
     global _subscribed_symbols, _reconnect_attempts, _reconnect_timer
+    # Fix D: ignore callbacks from a client we've already replaced. A killed
+    # (stale) session must NOT schedule new reconnects — that was the storm.
+    if epoch is not None and epoch != _client_epoch:
+        logger.debug(
+            "Ignoring stale WebSocket close from epoch %s (current %s).",
+            epoch, _client_epoch,
+        )
+        return
     logger.warning(f"⚠️ WebSocket closed: {message}")
 
     if not _subscribed_symbols:
@@ -385,7 +401,13 @@ def _on_close(message):
     _schedule_reconnect()
 
 
-def _on_error(error):
+def _on_error(error, epoch=None):
+    if epoch is not None and epoch != _client_epoch:
+        logger.debug(
+            "Ignoring stale WebSocket error from epoch %s (current %s).",
+            epoch, _client_epoch,
+        )
+        return
     logger.error(
         "❌ WebSocket error | type=%s | msg=%s | symbols=%s | attempt=%s",
         type(error).__name__,
@@ -756,73 +778,85 @@ def start_live_feed(symbols: list[str], _is_reconnect: bool = False):
     On initial startup (_is_reconnect=False), the counter is reset here
     because no reconnect sequence is in progress.
     """
-    global _active_client, _subscribed_symbols, _reconnect_attempts, _tick_counts
-    symbols = list(dict.fromkeys(symbols))  # dedupe, preserve order
-    logger.info(f"Starting live feed for {len(symbols)} symbols: {symbols}")
-    _tick_counts.clear()
+    global _active_client, _subscribed_symbols, _reconnect_attempts, _tick_counts, _client_epoch
 
-    from core.kotak_client import get_client
-    client = get_client()
+    # Fix D: serialize ALL connect/subscribe sequences (timer reconnects, the direct
+    # restart_live_feed path from force_reconnect, and initial startup) behind the
+    # single reentrant connection mutex, so concurrent/duplicate WebSocket
+    # connections can never be opened.
+    with _reconnect_lock:
+        symbols = list(dict.fromkeys(symbols))  # dedupe, preserve order
+        logger.info(f"Starting live feed for {len(symbols)} symbols: {symbols}")
+        _tick_counts.clear()
 
-    # R3: guard shared NeoAPI client + subscription-state mutations.
-    with _lock:
-        _active_client = client
+        from core.kotak_client import get_client
+        client = get_client()
 
-        # Register WebSocket callbacks
-        client.on_message = _on_message
-        client.on_open    = _on_open
-        client.on_close   = _on_close
-        client.on_error   = _on_error
+        # Fix D: bump the client epoch and bind epoch-aware callbacks. Any callback
+        # fired by a previously-bound (now stale) client will no-op instead of
+        # scheduling a reconnect.
+        _client_epoch += 1
+        my_epoch = _client_epoch
 
-        _subscribed_symbols = symbols.copy()
+        # R3: guard shared NeoAPI client + subscription-state mutations.
+        with _lock:
+            _active_client = client
 
-    # F006 FIX: Only reset the reconnect counter on initial startup.
-    # During a reconnect sequence (_is_reconnect=True), _do_reconnect() owns
-    # the counter. Resetting it here would erase the attempt count before the
-    # exception handler in _do_reconnect() can check it against _max_reconnect,
-    # making the feed-death alert unreachable.
-    if not _is_reconnect:
-        _reconnect_attempts = 0
+            # Register WebSocket callbacks (epoch-tagged via closures)
+            client.on_message = _on_message
+            client.on_open    = lambda m: _on_open(m, my_epoch)
+            client.on_close   = lambda m: _on_close(m, my_epoch)
+            client.on_error   = lambda e: _on_error(e, my_epoch)
 
-    _publish_feed_stats(force=True)
+            _subscribed_symbols = symbols.copy()
 
-    instrument_tokens = resolve_instrument_tokens(symbols)
-    if not instrument_tokens:
-        logger.error("No instrument tokens resolved. Cannot start feed.")
-        _publish_feed_stats(force=True)
-        return
+        # F006 FIX: Only reset the reconnect counter on initial startup.
+        # During a reconnect sequence (_is_reconnect=True), _do_reconnect() owns
+        # the counter. Resetting it here would erase the attempt count before the
+        # exception handler in _do_reconnect() can check it against _max_reconnect,
+        # making the feed-death alert unreachable.
+        if not _is_reconnect:
+            _reconnect_attempts = 0
 
-    logger.info(f"Subscribing to {len(instrument_tokens)} instruments...")
-    try:
-        client.subscribe(
-            instrument_tokens=instrument_tokens,
-            isIndex=False,
-            isDepth=False,
-        )
-        logger.info(f"✅ Subscribed to live feed: {[t['instrument_token'] for t in instrument_tokens]}")
-        
         _publish_feed_stats(force=True)
 
-        # Keep the connection alive with keepalive ping
-        _reset_keepalive()
-        
-    except (ConnectionError, OSError, TimeoutError) as e:
-        logger.error(
-            "❌ WebSocket subscribe failed (network) | symbols=%s | %s",
-            len(instrument_tokens), e,
-        )
-        if _is_reconnect:
-            raise   # F006: let _do_reconnect()'s except branch track the counter
-        _schedule_reconnect()
-    except Exception as e:
-        logger.error(
-            "❌ WebSocket subscribe failed | symbols=%s | %s",
-            len(instrument_tokens), e,
-            exc_info=True,
-        )
-        if _is_reconnect:
-            raise   # F006: let _do_reconnect()'s except branch track the counter
-        _schedule_reconnect()
+        instrument_tokens = resolve_instrument_tokens(symbols)
+        if not instrument_tokens:
+            logger.error("No instrument tokens resolved. Cannot start feed.")
+            _publish_feed_stats(force=True)
+            return
+
+        logger.info(f"Subscribing to {len(instrument_tokens)} instruments...")
+        try:
+            client.subscribe(
+                instrument_tokens=instrument_tokens,
+                isIndex=False,
+                isDepth=False,
+            )
+            logger.info(f"✅ Subscribed to live feed: {[t['instrument_token'] for t in instrument_tokens]}")
+
+            _publish_feed_stats(force=True)
+
+            # Keep the connection alive with keepalive ping
+            _reset_keepalive()
+
+        except (ConnectionError, OSError, TimeoutError) as e:
+            logger.error(
+                "❌ WebSocket subscribe failed (network) | symbols=%s | %s",
+                len(instrument_tokens), e,
+            )
+            if _is_reconnect:
+                raise   # F006: let _do_reconnect()'s except branch track the counter
+            _schedule_reconnect()
+        except Exception as e:
+            logger.error(
+                "❌ WebSocket subscribe failed | symbols=%s | %s",
+                len(instrument_tokens), e,
+                exc_info=True,
+            )
+            if _is_reconnect:
+                raise   # F006: let _do_reconnect()'s except branch track the counter
+            _schedule_reconnect()
 
 
 def restart_live_feed():

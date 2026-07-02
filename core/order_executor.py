@@ -76,6 +76,7 @@ TRADING_MODE = os.getenv("TRADING_MODE", "PAPER")
 INTRADAY_SQUAREOFF = dt_time(15, 15)
 _capital_cache: float = 10000.0
 _capital_last_update: float = 0.0
+_capital_last_fetch_ok: bool = False
 CAPITAL_CACHE_TTL = 300
 _order_lock = threading.RLock()
 _capital_api_failures: int = 0
@@ -1854,8 +1855,12 @@ def _capital_fetch_window_open() -> bool:
 
 
 def is_capital_fresh() -> bool:
-    """True only when the last LIVE capital fetch succeeded (not a stale cache)."""
-    return _capital_api_failures == 0 and _capital_cache > 0
+    """True only when the LAST live capital fetch succeeded (fresh, not stale cache).
+
+    Success is tracked by an explicit flag rather than `cache > 0`, because a
+    genuinely-valid reading can legitimately be 0 (free cash fully deployed).
+    """
+    return _capital_last_fetch_ok
 
 
 def _get_available_capital(force_refresh: bool = False) -> float:
@@ -1874,7 +1879,7 @@ def _get_available_capital(force_refresh: bool = False) -> float:
       state a failure means calculate_quantity() returns 0 for all trades.
     - On success: reset _capital_api_failures to 0.
     """
-    global _capital_cache, _capital_last_update, _capital_api_failures
+    global _capital_cache, _capital_last_update, _capital_api_failures, _capital_last_fetch_ok
     import time
 
     if TRADING_MODE == "PAPER":
@@ -1907,36 +1912,52 @@ def _get_available_capital(force_refresh: bool = False) -> float:
                 "Capital API returned non-dict: " + repr(type(limits))
             )
 
-        available = (
-            limits.get("Net")
-            or limits.get("availablecash")
-            or limits.get("data", {}).get("Net")
-        )
-        available_value = safe_float(available, 0.0)
-        if available_value > 0:
-            _capital_cache = available_value
-            _capital_last_update = now
-            if _capital_api_failures > 0:
-                logger.info(
-                    "Capital API recovered after %d failure(s). "
-                    "Available capital: Rs%.2f",
-                    _capital_api_failures, _capital_cache,
-                )
-            _capital_api_failures = 0   # reset on success
-            fetch_ok = True
-            return _capital_cache
-        else:
-            # Bug1 FIX (defense-in-depth): an all-empty payload while the fetch
-            # window is closed is an off-hours response, not a real failure.
+        # Robustly locate a numeric free-cash field. Kotak sometimes returns
+        # 'data': None, so guard against calling .get() on a non-dict.
+        data_field = limits.get("data")
+        data_net = data_field.get("Net") if isinstance(data_field, dict) else None
+        raw_net = limits.get("Net")
+        if raw_net is None:
+            raw_net = limits.get("availablecash")
+        if raw_net is None:
+            raw_net = data_net
+
+        if raw_net is None:
+            # No numeric field at all while the window is open — genuinely unusable.
+            # (Off-market empty payloads never reach here; the window gate returns first.)
             if not _capital_fetch_window_open():
                 return _capital_cache
             raise ValueError(
-                "Capital API returned zero/empty available field. "
+                "Capital API returned no usable field. "
                 "limits=" + repr({k: limits.get(k) for k in ("Net", "availablecash", "data")})
             )
 
+        # Fix C: a parseable number — INCLUDING <= 0 — is a VALID reading, NOT a
+        # failure. With a position deployed, Kotak reports a negative 'Net' (free
+        # cash after margin deduction, e.g. -131.47). Capital available for NEW
+        # orders is simply max(0, Net); this must not trip the failure counter.
+        free_cash = safe_float(raw_net, None)
+        if free_cash is None:
+            if not _capital_fetch_window_open():
+                return _capital_cache
+            raise ValueError("Capital API returned unparseable Net=%r" % (raw_net,))
+
+        _capital_cache = max(0.0, free_cash)
+        _capital_last_update = now
+        _capital_last_fetch_ok = True
+        if _capital_api_failures > 0:
+            logger.info(
+                "Capital API recovered after %d failure(s). "
+                "Free cash Rs%.2f (available for new orders: Rs%.2f)",
+                _capital_api_failures, free_cash, _capital_cache,
+            )
+        _capital_api_failures = 0   # reset on success
+        fetch_ok = True
+        return _capital_cache
+
     except Exception as exc:
         _capital_api_failures += 1
+        _capital_last_fetch_ok = False
         cache_is_zero = (_capital_cache <= 0.0)
 
         # Always log at WARNING (details for log review)
@@ -1948,24 +1969,12 @@ def _get_available_capital(force_refresh: bool = False) -> float:
             int(now - _capital_last_update) if _capital_last_update > 0 else -1,
         )
 
-        # Attempt session recovery on repeated failures (e.g. token expired overnight).
-        # Bug1 FIX: only reconnect inside the trading-day window — an off-hours
-        # reconnect is pointless and destructive (kills the WebSocket session).
-        if (
-            _capital_api_failures >= 5
-            and _capital_api_failures % 5 == 0
-            and _capital_fetch_window_open()
-        ):
-            try:
-                logger.warning(
-                    "🚨 Capital API has failed %d consecutive times. "
-                    "Attempting silent session recovery/reconnect...",
-                    _capital_api_failures
-                )
-                from core.kotak_client import force_reconnect as _force_reconnect
-                _force_reconnect()
-            except Exception as reconnect_err:
-                logger.error("Session recovery failed during Capital API failure handling: %s", reconnect_err)
+        # Fix A: Do NOT call force_reconnect() from the capital path. A limits()
+        # hiccup must never re-authenticate the session or tear down the WebSocket
+        # feed that protects open positions (doing so caused a duplicate-connection
+        # reconnect storm). Repeated genuine failures are surfaced via the CRITICAL
+        # alerts below; session/feed recovery is owned by the health monitor and
+        # the WebSocket reconnect logic — never by capital polling.
 
         # CRITICAL path 1: Cache still at initial 0.0 — all new orders will be
         # blocked with qty=0. Fire CRITICAL immediately on first failure.
@@ -2097,7 +2106,10 @@ def get_margin_status() -> dict:
         # FREE margin — once a position is open it collapses to the leftover
         # (e.g. ₹34.62 after margin is blocked). Bug2 FIX: reconstruct true
         # start-of-day capital by adding back margin blocked by open positions.
-        avail = safe_float(_get_available_capital(force_refresh=True), 0.0)
+        # Fix B: use the TTL-cached value (NO force_refresh) — get_margin_status()
+        # runs on every strategy scan + dashboard poll, so forcing a broker fetch
+        # here hammered the capital API every few seconds.
+        avail = safe_float(_get_available_capital(), 0.0)
         blocked_by_positions = (
             entry_position_value / margin_leverage if margin_leverage > 0 else entry_position_value
         )

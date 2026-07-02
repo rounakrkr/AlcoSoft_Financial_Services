@@ -6,6 +6,7 @@
 
 import pyotp
 import time
+import threading
 import logging
 from dotenv import load_dotenv
 import os
@@ -25,6 +26,15 @@ logger = logging.getLogger(__name__)
 # ── Singleton: only one Kotak session exists at a time ──────
 _client_instance = None
 consumer_secret = os.getenv("KOTAK_TOTP_SECRET")
+
+# ── Fix D: dedup / throttle force_reconnect ─────────────────
+# Every force_reconnect() re-logs-in and gets a new sid, which the broker uses to
+# INVALIDATE the currently-active WebSocket. Rapid repeat calls therefore create a
+# duplicate-connection storm. Collapse concurrent/rapid calls into one.
+_reconnect_mutex = threading.Lock()
+_reconnect_in_progress = False
+_last_reconnect_ts = 0.0
+_RECONNECT_MIN_INTERVAL = 30.0  # seconds — minimum gap between real reconnects
 
 
 def get_client() -> Any:
@@ -46,32 +56,57 @@ def force_reconnect() -> Any:
     """
     Call this if you get an auth error mid-session.
     Destroys old session and creates a fresh one.
+
+    Fix D: deduped + throttled. Concurrent callers (capital path, order path,
+    token_validator, health monitor) collapse into a single reconnect, and repeat
+    calls within _RECONNECT_MIN_INTERVAL are ignored — preventing the rapid
+    re-login loop that invalidated the WebSocket and spawned duplicate connections.
     """
-    global _client_instance
+    global _client_instance, _reconnect_in_progress, _last_reconnect_ts
+
+    now = time.time()
+    with _reconnect_mutex:
+        if _reconnect_in_progress:
+            logger.warning("force_reconnect skipped — a reconnect is already in progress.")
+            return _client_instance
+        if now - _last_reconnect_ts < _RECONNECT_MIN_INTERVAL:
+            logger.warning(
+                "force_reconnect throttled — last reconnect %.1fs ago (min %.0fs). "
+                "Serving current session.",
+                now - _last_reconnect_ts, _RECONNECT_MIN_INTERVAL,
+            )
+            return _client_instance
+        _reconnect_in_progress = True
+
     logger.warning("Force reconnect triggered — re-authenticating with Kotak...")
-
     try:
-        if _client_instance:
-            _client_instance.logout()
-    except (ConnectionError, OSError, TimeoutError) as e:
-        logger.debug("Logout failed (session likely closed): %s", e)
-    except Exception as e:
-        logger.warning("Unexpected error during Kotak logout: %s", e)
+        try:
+            if _client_instance:
+                _client_instance.logout()
+        except (ConnectionError, OSError, TimeoutError) as e:
+            logger.debug("Logout failed (session likely closed): %s", e)
+        except Exception as e:
+            logger.warning("Unexpected error during Kotak logout: %s", e)
 
-    _client_instance = None
-    new_client = get_client()
+        _client_instance = None
+        new_client = get_client()
 
-    # R1 FIX: force_reconnect() creates a brand-new session used by the order path.
-    # The live WebSocket feed holds a SEPARATE reference to the old client and would
-    # keep running on the now-dead session (or silently stop delivering ticks) — which
-    # blinds software SL / exit checks. Rebind the feed onto the fresh client.
-    try:
-        from core.data_fetcher import restart_live_feed
-        restart_live_feed()
-    except Exception as e:
-        logger.warning("Feed restart after force_reconnect failed: %s", e)
+        # R1 FIX: force_reconnect() creates a brand-new session used by the order path.
+        # The live WebSocket feed holds a SEPARATE reference to the old client and would
+        # keep running on the now-dead session (or silently stop delivering ticks) — which
+        # blinds software SL / exit checks. Rebind the feed onto the fresh client. This
+        # goes through start_live_feed(), which is serialized behind the connection mutex.
+        try:
+            from core.data_fetcher import restart_live_feed
+            restart_live_feed()
+        except Exception as e:
+            logger.warning("Feed restart after force_reconnect failed: %s", e)
 
-    return new_client
+        return new_client
+    finally:
+        with _reconnect_mutex:
+            _last_reconnect_ts = time.time()
+            _reconnect_in_progress = False
 
 
 # ── Internal: create session + full 2FA login ───────────────
