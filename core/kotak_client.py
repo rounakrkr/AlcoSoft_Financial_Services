@@ -300,7 +300,14 @@ def is_session_alive() -> bool:
         response = _client_instance.limits(
             segment="ALL", exchange="ALL", product="ALL"
         )
-        return response is not None
+        if not response or not isinstance(response, dict):
+            return False
+            
+        # Kotak NeoAPI returns {'Net': None, 'availablecash': None, 'data': None} when token expires
+        if response.get("data") is None and response.get("Net") is None:
+            return False
+            
+        return True
     except Exception as e:
         logger.warning(f"Session health check failed: {e}")
         return False
