@@ -19,13 +19,13 @@ const GROUP_DESCRIPTIONS = {
 };
 
 function displayValue(field, value) {
-  if (field.type === 'bool') return !!value;
+  if (field.type.startsWith('bool')) return !!value;
   if (field.type === 'percent') return (parseFloat(value) * 100).toFixed(2);
   return value;
 }
 
 function parseInput(field, raw) {
-  if (field.type === 'bool') return document.getElementById(`f-${field.section}-${field.key}`).checked;
+  if (field.type.startsWith('bool')) return document.getElementById(`f-${field.section}-${field.key}`).classList.contains('on');
   if (field.type === 'percent') return parseFloat(raw) / 100;
   if (field.type === 'int') return parseInt(raw, 10);
   return parseFloat(raw);
@@ -218,7 +218,7 @@ async function saveSettings(ev) {
     updates[field.section] = updates[field.section] || {};
     
     // Handle toggle switches differently
-    if (field.type === 'bool') {
+    if (field.type.startsWith('bool')) {
       updates[field.section][field.key] = el.classList.contains('on');
     } else {
       updates[field.section][field.key] = parseInput(field, el.value);
