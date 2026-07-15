@@ -71,33 +71,59 @@ def _ensure_computed():
 
 def _compute_regimes() -> tuple[bool, bool]:
     """
-    Check today's open vs yesterday's close for all Nifty50 stocks.
+    Check today's open vs yesterday's close for all Midcap 50 stocks.
+    
+    today_open  → WebSocket first tick (data_fetcher._current_candle open)
+    prev_close  → Upstox daily candle API (last completed candle's close)
+    
     Returns (is_bull, is_bear)
     """
     try:
+        import time as _time
+        from datetime import datetime, time as dt_time
+
+        # ── 15-second buffer: ensure all WebSocket ticks have arrived ──
+        market_open = datetime.now().replace(hour=9, minute=15, second=15, microsecond=0)
+        now = datetime.now()
+        if now < market_open:
+            wait_sec = (market_open - now).total_seconds()
+            if 0 < wait_sec < 60:
+                logger.info(f"[RegimeFilter] Waiting {wait_sec:.0f}s for ticks to stabilize...")
+                _time.sleep(wait_sec)
+
         bull_gap_pct    = trading_settings.get("risk", "regime_bull_gap_pct",      0.006)
         bear_gap_pct    = trading_settings.get("risk", "regime_bear_gap_pct",     -0.006)
         bull_breadth_pct = trading_settings.get("risk", "regime_bull_breadth_pct", 0.30)
         bear_breadth_pct = trading_settings.get("risk", "regime_bear_breadth_pct", 0.50)
 
         from screener.morning_screener import MIDCAP_50, _fetch_yahoo_history
+        from core.data_fetcher import get_forming_open
 
         bull_count = 0
         bear_count = 0
         total_count = 0
+        skipped_no_tick = 0
 
         for symbol in MIDCAP_50:
             try:
-                df = _fetch_yahoo_history(symbol, period="5d", interval="1d")
-                if df is None or df.empty or len(df) < 2:
-                    continue
-                df.columns = [c.lower() for c in df.columns]
-                df.dropna(subset=["close", "open"], inplace=True)
-                if len(df) < 2:
+                # ── Step 1: today's open from WebSocket first tick ──
+                today_open = get_forming_open(symbol)
+                if today_open is None:
+                    skipped_no_tick += 1
                     continue
 
-                prev_close = float(df["close"].iloc[-2])
-                today_open = float(df["open"].iloc[-1])
+                # ── Step 2: prev day close from Upstox daily candles ──
+                # _fetch_yahoo_history + _drop_incomplete_candle_if_present
+                # guarantees iloc[-1] = last COMPLETED daily candle (= prev trading day)
+                df = _fetch_yahoo_history(symbol, period="5d", interval="1d")
+                if df is None or df.empty or len(df) < 1:
+                    continue
+                df.columns = [c.lower() for c in df.columns]
+                df.dropna(subset=["close"], inplace=True)
+                if len(df) < 1:
+                    continue
+
+                prev_close = float(df["close"].iloc[-1])
 
                 if prev_close <= 0:
                     continue
@@ -113,6 +139,9 @@ def _compute_regimes() -> tuple[bool, bool]:
             except Exception:
                 continue
 
+        if skipped_no_tick > 0:
+            logger.info(f"[RegimeFilter] Skipped {skipped_no_tick} stocks (no WebSocket tick yet)")
+
         if total_count == 0:
             logger.warning("[RegimeFilter] No data fetched — failing CLOSED (NO REGIME, both engines blocked).")
             return False, False
@@ -122,13 +151,14 @@ def _compute_regimes() -> tuple[bool, bool]:
 
         logger.info(
             f"[RegimeFilter] Bull Breadth: {bull_ratio*100:.1f}% (need {bull_breadth_pct*100:.0f}%), "
-            f"Bear Breadth: {bear_ratio*100:.1f}% (need {bear_breadth_pct*100:.0f}%)"
+            f"Bear Breadth: {bear_ratio*100:.1f}% (need {bear_breadth_pct*100:.0f}%) "
+            f"[{total_count} stocks sampled, {skipped_no_tick} skipped]"
         )
 
         is_bull = bull_ratio >= bull_breadth_pct
         is_bear = bear_ratio >= bear_breadth_pct
 
-        # Can't be both. If somehow both meet threshold (impossible mathematically if threshold >= 0.5, but just in case)
+        # Can't be both. If somehow both meet threshold, prefer bear (safer).
         if is_bull and is_bear:
             is_bear = False
 

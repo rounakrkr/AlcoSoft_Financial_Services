@@ -492,6 +492,13 @@ def get_latest_tick(symbol: str) -> dict | None:
         return _latest_tick.get(symbol)
 
 
+def get_forming_open(symbol: str) -> float | None:
+    """Returns the open price of the currently forming candle, or None if no tick received yet."""
+    with _lock:
+        candle = _current_candle.get(symbol)
+        return candle["open"] if candle else None
+
+
 def get_candle_history(symbol: str, include_current: bool = True) -> list[dict]:
     """
     Returns list of completed OHLCV candles (oldest → newest).
