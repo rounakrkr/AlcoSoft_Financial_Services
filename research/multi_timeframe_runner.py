@@ -199,7 +199,7 @@ class IndicatorPreprocessor:
             # RSI 16 for Short
             df["rsi_16"] = ta.momentum.rsi(df["close"], window=16).fillna(50.0)
             # EMA21 recalculation to match simulation_runner behavior exactly
-            df["ema21"] = ta.trend.ema_indicator(df["close"], window=21).fillna(method="bfill")
+            df["ema21"] = ta.trend.ema_indicator(df["close"], window=21).bfill()
         logger.info("Indicator enrichment complete.")
 
 # ==============================================================================
