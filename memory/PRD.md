@@ -41,5 +41,21 @@ User is building an algo trading platform (repo: rounakrkr/AlcoSoft_Financial_Se
 ## Next Tasks / Backlog
 - P1: Paper-trade the new config for a few sessions to validate live slippage vs backtest fills.
 - P1: Design cleanups suggested: split strategy.py into modules; centralise market-hour constants; TZ-aware datetimes.
+- P1: Build quarterly walk-forward re-optimization script (user deferred — post-validation).
 - P2: Evaluate maxpos=3 variant (smoother equity, DD -15% in validation) and strict-regime variant if user wants lower risk.
-- P2: Walk-forward re-optimization schedule (e.g., quarterly) using research/midcap50_optimizer.py.
+
+## Session 3 — Robustness / Validation Analysis (2026-07-21)
+User asked for 6-part robustness audit. Built `research/robustness_report.py` (vectorized replica variants: baseline, no-compound/1×, EMA50→time-exit) + generated `research/ROBUSTNESS_REPORT.md`.
+
+Headline findings (all with the OPTIMIZED committed config):
+- **Sharpe 3.38** (annualized), max losing streak **8 trades**, **29.8% negative months** (14/47), avg win ₹13.5k / avg loss −₹7.7k.
+- **Both 2025 (+200%, PF 1.69) AND 2026 (+257%, PF 1.58) independently profitable** — val edge NOT one-year artefact.
+- Per-year all positive: 2022 +44% (DD −29.5%), 2023 +39%, 2024 +73%, 2025 +58%, 2026 +47%.
+- **Top-5 = 53% of PnL**; removing them still leaves **+330% / PF 1.22 / DD −30.7%** — profitable but concentrated.
+- **No-leverage / no-compound raw edge: +50% over 363 trades (₹138/trade)**, PF 1.47 — every year positive. 700% headline is pure margin+compounding amplification of a small but consistent edge.
+- **EMA50_DYN autopsy**: 145 trades, WR 5.5%, avg loss −₹6.6k. Replaced with 20-candle TIME_EXIT → return DROPS 702%→425%, DD WORSENS −30%→**−51%**, Sharpe 3.38→2.72. **Verdict: EMA50_DYN is a necessary stop, not a leak.**
+- **Short engine per-year**: EVERY year positive (2022 +25%, 2023 +13%, 2024 +15%, 2025 +9%, 2026 +48%), WR 55–100%, PF 1.53–2.86. Short edge is PROVEN, not one-cluster.
+
+Report + CSVs at `research/ROBUSTNESS_REPORT.md`, `research/robustness_{optimized,no_compound,time_exit}_trades.csv`, `research/robustness_summary.json`.
+
+## Next Tasks / Backlog (updated)
