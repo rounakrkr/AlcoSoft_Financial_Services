@@ -1,0 +1,40 @@
+{
+  "summary": "Verified all 4 bug fixes in AlcoSoft algo-trading engine. Ran full pytest suite (16 tests) + 11 dedicated bug-fix verification tests written to /app/tests_agent/. Total 27/27 tests pass under TZ=Asia/Kolkata. All modules compile via py_compile. Backend/engine-only project - no web UI to test.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "research/multi_timeframe_runner.py:202", "issue": "FutureWarning: ta.trend.ema_indicator(...).fillna(method='bfill') - deprecated pandas API. Should use .bfill() (not a functional bug, just a warning)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/tests_agent/test_bugfixes_verification.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: replace deprecated .fillna(method='bfill') with .bfill() in research/multi_timeframe_runner.py:202 to silence FutureWarning."
+  ],
+  "critical_code_review_comments": [
+    "core/strategy.py is 3260 lines - well over the 700-line guideline. Consider splitting into strategy/indicators.py, strategy/conditions_long.py, strategy/conditions_short.py, strategy/context.py.",
+    "should_run_cognitive_cycle uses datetime.now() without a tzinfo - correctness depends entirely on process TZ (Asia/Kolkata set in main.py). A safer pattern is datetime.now(ZoneInfo('Asia/Kolkata')) to make the function TZ-independent and testable without os.environ['TZ'] hacks.",
+    "condition_streak_close_0_above_period_max_10 now correctly uses iloc[-11:-1] matching its short mirror; adding a code comment reference between the two would prevent future regression.",
+    "The 15:15 vs 15:00 constants are magic times duplicated with market_close (15:30) - consider centralising all market-hour constants in one module (e.g. config/market_hours.py)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (no frontend)"},
+  "test_credentials": "N/A - no auth flow, no live broker creds available or required for these tests",
+  "seed_data_creation": "Synthetic OHLCV DataFrames generated inline in tests_agent/test_bugfixes_verification.py for MACD and streak-breakout condition tests. No persistent seed data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Project is a headless Python algo-trading engine, NOT a web app. No port 8001/3000, no React, no FastAPI. Always: export TZ='Asia/Kolkata' before running pytest. 4 test files require live Kotak broker credentials and MUST be excluded: test_f004_order_sync.py, test_f005_capital_api.py, test_production_engine.py, test_sl_recovery_v2.py. Custom verification tests live in /app/tests_agent/ (kept separate from /app/tests/ per user instruction).",
+  "bug_verification_details": {
+    "bug1_cognitive_cycle": "VERIFIED FIXED. LAST_COGNITION_TIME=15:15, EXECUTION_STOP_TIME=15:00. should_run_cognitive_cycle() correctly returns (True, agent) at 09:30, 10:00, 15:15 and (False, None) at 09:00 and 15:20 with mocked datetime.",
+    "bug2_macd_hist_bounce": "VERIFIED FIXED. condition_macd_hist_rejection_bounce now uses 'macd_sig' column (matches _build_indicators output). Real values evaluated - no 'Not ready' response.",
+    "bug3_streak_close_10": "VERIFIED FIXED. Exactly 1 definition (grep -c == 1). Window is iloc[-11:-1] which correctly includes the previous candle. Test crafted a scenario where prev candle is the 10-window max and current close beats every other high - condition correctly does NOT fire (would have fired with buggy iloc[-12:-2]).",
+    "bug4_empty_dataframes": "VERIFIED FIXED. Existing test tests/test_multi_timeframe_runner_robustness.py::test_runner_handles_empty_dataframes passes - empty DFs are filtered before latest_ts computation."
+  }
+}

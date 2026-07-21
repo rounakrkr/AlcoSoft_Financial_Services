@@ -1504,23 +1504,6 @@ def condition_streak_close_1_above_vwap_0(ctx: StrategyEvaluationContext) -> dic
     )
 
 
-def condition_streak_close_0_above_period_max_10(ctx: StrategyEvaluationContext) -> dict:
-    df = ctx.indicator_df
-    if len(df) < 12 or "close" not in df.columns or "high" not in df.columns:
-        return _indicator_strategy_result("Close(0) > Max(High(-1), 10)", False, "Not enough data")
-    
-    close_0 = df["close"].iloc[-1]
-    # Highest high of 10 candles ending at the previous candle (-1)
-    # The previous candle is at index -2. 10 candles before it is -12 to -2
-    highest_10_prev = df["high"].iloc[-12:-2].max()
-    
-    return _indicator_strategy_result(
-        "Close(0) > Max(High(-1), 10)",
-        bool(close_0 > highest_10_prev),
-        f"Close(0)={close_0:.2f}, Max_High={highest_10_prev:.2f}"
-    )
-
-
 def condition_pullback_to_ema20_rejection(ctx: StrategyEvaluationContext) -> dict:
     df = ctx.indicator_df
     if len(df) < 4 or "ema20" not in df.columns or "low" not in df.columns or "close" not in df.columns:
@@ -1579,10 +1562,10 @@ def condition_volume_surge_3x(ctx: StrategyEvaluationContext) -> dict:
 
 def condition_macd_hist_rejection_bounce(ctx: StrategyEvaluationContext) -> dict:
     df = ctx.indicator_df
-    if len(df) < 4 or "macd" not in df.columns or "macd_signal" not in df.columns:
+    if len(df) < 4 or "macd" not in df.columns or "macd_sig" not in df.columns:
         return _indicator_strategy_result("MACD Hist Reject", False, "Not ready")
     
-    hist = df["macd"] - df["macd_signal"]
+    hist = df["macd"] - df["macd_sig"]
     # hist(0) > hist(1), hist(1) < hist(2) -> It was dropping but bounced
     hist_0 = hist.iloc[-1]
     hist_1 = hist.iloc[-2]
@@ -1627,8 +1610,8 @@ def condition_streak_close_0_above_period_max_10(ctx: StrategyEvaluationContext)
     
     close_0 = df["close"].iloc[-1]
     # Highest high of 10 candles ending at the previous candle (-1)
-    # The previous candle is at index -2. 10 candles before it is -12 to -2
-    highest_10_prev = df["high"].iloc[-12:-2].max()
+    # Previous candle is iloc[-2]; the 10-candle window ending there is iloc[-11:-1]
+    highest_10_prev = df["high"].iloc[-11:-1].max()
     
     return _indicator_strategy_result(
         "Close(0) > Max(High(-1), 10)",

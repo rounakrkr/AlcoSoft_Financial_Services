@@ -237,8 +237,8 @@ def call_cognitive_agent(agent_name: str, context: str) -> Optional[dict]:
 AGENT_ROTATION = ["A", "B", "C", "D"]
 CYCLE_INTERVAL_MINUTES = 15
 FIRST_CYCLE_TIME = dt_time(9, 30)   # 9:30 AM IST (after first 15-min candle)
-LAST_COGNITION_TIME = dt_time(3, 15)  # 3:15 PM IST (final market observation)
-EXECUTION_STOP_TIME = dt_time(3, 0)    # 3:00 PM IST (execution stops but cognition continues)
+LAST_COGNITION_TIME = dt_time(15, 15)  # 3:15 PM IST (final market observation)
+EXECUTION_STOP_TIME = dt_time(15, 0)   # 3:00 PM IST (execution stops but cognition continues)
 
 def should_run_cognitive_cycle() -> tuple[bool, Optional[str]]:
     """
