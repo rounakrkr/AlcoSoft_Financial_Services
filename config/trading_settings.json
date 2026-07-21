@@ -5,7 +5,7 @@
     "long_profit_target_percent": 0.025,
     "short_stop_loss_percent": 0.005,
     "short_profit_target_percent": 0.025,
-    "regime_filter_enabled": false,
+    "regime_filter_enabled": true,
     "regime_bull_gap_pct": 0.007,
     "regime_bear_gap_pct": -0.006,
     "regime_strong_gap_min_pct": 0.3,
