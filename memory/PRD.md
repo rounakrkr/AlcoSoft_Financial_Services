@@ -33,7 +33,8 @@ User is building an algo trading platform (repo: rounakrkr/AlcoSoft_Financial_Se
 - User provided 45-symbol Midcap50 5-min data (2022-01 → 2026-07) at /tmp/midcap50_data.
 - Built `research/midcap50_optimizer.py` — fast vectorized replica of the LIVE engine (R7_VARIANT_D long, STREAK_BREAKDOWN short, regime filter, partial profit, TSL, EMA50 dyn exit, RSI exit, 15:00 cutoff, 15:15 EOD, real Kotak cost model). Sweep harness: sweep_stage1/2/4.py.
 - Train (2022-24) / Validation (2025-26) split. Result: baseline +120% PF 1.14 DD -50% → **optimized +600% PF 1.46 DD -33%**, every year profitable.
-- **Applied to config/trading_settings.json**: long SL 1%→1.2%, long PT 2.5%→3.5%, long partial fraction 0.25→0.75, RSI exit DISABLED, tsl_activation 1.4→1.2, trailing 0.8%→0.5%, short PT 2.5%→2%, short_target_gap -1.5%→-2%.
+- **Applied to config/trading_settings.json**: long SL 1%→1.2%, long PT 2.5%→3.5%, long partial fraction 0.25→0.75, RSI exit DISABLED, tsl_activation 1.4→1.2, trailing 0.8%→0.5%, short PT 2.5%→2%, short_target_gap -1.5%→-2.5%.
+- Stage-5 JOINT grid (regime × maxpos × gap filters, 162 combos): confirmed long combo (0.7%/35%, maxpos 1, exclude -0.8%) is the joint winner; short_target_gap tightened to -2.5% → final ₹1L→₹8.03L (+703%), DD -30.2%, train +246%/PF 1.31, val +457%/PF 1.62.
 - Full report: `research/MIDCAP50_OPTIMIZATION_REPORT.md`. Trades/sweeps in research/sweep_stage*.csv, mc50_best_trades.csv.
 - Noted low-risk alternative: strict bull regime (gap 1.0%, breadth 40%) → +241% but PF 1.84, DD -25.7%.
 

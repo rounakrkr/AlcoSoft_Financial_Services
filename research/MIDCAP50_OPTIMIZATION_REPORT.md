@@ -6,9 +6,9 @@
 ## Headline: OLD (live) config vs NEW (optimized) config
 | Metric | OLD | NEW |
 |---|---|---|
-| Final capital (from ₹1L) | ₹2.20L (+120%) | **₹7.00L (+600%)** |
+| Final capital (from ₹1L) | ₹2.20L (+120%) | **₹8.03L (+703%)** |
 | Profit Factor | 1.14 | **1.46** |
-| Max Drawdown | -50.0% | **-33.2%** |
+| Max Drawdown | -50.0% | **-30.2%** |
 | Trades | 463 | 379 |
 | Train ret / PF | +43% / 1.08 | +163% / 1.22 |
 | Validation ret / PF | +77% / 1.24 | +437% / 1.74 |
@@ -24,7 +24,7 @@
 | tsl_activation_ratio | 1.4 | **1.2** | Earlier trailing activation: +65pp train, +72pp val |
 | trailing_sl_percent | 0.008 | **0.005** | Tighter 0.5% trail locks momentum profits (biggest single lever) |
 | short_profit_target_percent | 0.025 | **0.02** | Faster cover on shorts (short PP fraction is 1.0 = full exit) |
-| short_target_gap_threshold | -0.015 | **-0.02** | Short only stocks gapping ≤ -2%: val PF 1.2 → 3.5-4.1 |
+| short_target_gap_threshold | -0.015 | **-0.025** | Short only stocks gapping ≤ -2.5%: PF 2.66+, DD -8% on short engine — dominated every regime×maxpos combo in the joint grid (stage 5) |
 | (kept) short SL 0.005, r7_min_hold 4, regime 0.7%/35% & -0.6%/40%, maxpos 1 | | | already optimal |
 
 ## Exit-reason autopsy (new config)

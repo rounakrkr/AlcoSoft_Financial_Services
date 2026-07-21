@@ -12,7 +12,7 @@
     "regime_bull_breadth_pct": 0.35,
     "regime_bear_breadth_pct": 0.4,
     "long_exclude_gap_threshold": -0.008,
-    "short_target_gap_threshold": -0.02,
+    "short_target_gap_threshold": -0.025,
     "trailing_sl_percent": 0.005,
     "tsl_activation_ratio": 1.2,
     "tsl_mode_after_activation": true,
