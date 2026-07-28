@@ -35,12 +35,16 @@ def test_fx06():
     reset_db()
     with patch('os.getenv', side_effect=lambda k, d: "LIVE" if k == "TRADING_MODE" else d):
         with patch('core.order_executor._get_available_capital', return_value=25000.0):
-            with patch('core.state_manager.get_today_gross_pnl', return_value=0.0):
-                with patch('core.state_manager.get_open_positions', return_value=[]):
-                    initialize_daily_capital()
-                    stats = get_today_stats()
-                    print(f"Live Normal capital_start: {stats.get('capital_start')}")
-                    assert stats.get('capital_start') == 25000.0
+            with patch('core.order_executor.is_capital_fresh', return_value=True):
+                with patch('core.state_manager.get_today_gross_pnl', return_value=0.0):
+                    with patch('core.state_manager.get_open_positions', return_value=[]):
+                        with patch('core.market_calendar.is_trading_day', return_value=True):
+                            with patch('core.state_manager.datetime') as mock_dt:
+                                mock_dt.now.return_value = datetime.now().replace(hour=9, minute=0)
+                                initialize_daily_capital()
+                                stats = get_today_stats()
+                                print(f"Live Normal capital_start: {stats.get('capital_start')}")
+                                assert stats.get('capital_start') == 25000.0
 
     # 3. Live Mode (API Failure)
     reset_db()
@@ -80,8 +84,12 @@ def test_fx06():
         # It calls get_open_positions (now empty), and _get_available_capital (now 25500)
         with patch('core.state_manager.get_open_positions', return_value=[]):
             with patch('core.order_executor._get_available_capital', return_value=25500.0):
-                with patch('core.state_manager.get_today_gross_pnl', return_value=500.0):
-                    _update_daily_stats()
+                with patch('core.order_executor.is_capital_fresh', return_value=True):
+                    with patch('core.state_manager.get_today_gross_pnl', return_value=500.0):
+                        with patch('core.market_calendar.is_trading_day', return_value=True):
+                            with patch('core.state_manager.datetime') as mock_dt:
+                                mock_dt.now.return_value = datetime.now().replace(hour=10, minute=0)
+                                _update_daily_stats()
                     
         stats = get_today_stats()
         print(f"Retry Flat capital_start: {stats.get('capital_start')}")

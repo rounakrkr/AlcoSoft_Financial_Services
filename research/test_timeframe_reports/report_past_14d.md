@@ -1,8 +1,8 @@
 # AlcoSoft Dual-Engine Performance Report - Past 2 weeks (14 days)
 
 ## Metadata
-- **Start Date**: 2026-06-09
-- **End Date**: 2026-06-22
+- **Start Date**: 2026-07-08
+- **End Date**: 2026-07-21
 - **Initial Capital**: ₹100,000.00
 
 ## Summary Metrics Table

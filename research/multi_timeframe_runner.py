@@ -199,7 +199,7 @@ class IndicatorPreprocessor:
             # RSI 16 for Short
             df["rsi_16"] = ta.momentum.rsi(df["close"], window=16).fillna(50.0)
             # EMA21 recalculation to match simulation_runner behavior exactly
-            df["ema21"] = ta.trend.ema_indicator(df["close"], window=21).fillna(method="bfill")
+            df["ema21"] = ta.trend.ema_indicator(df["close"], window=21).bfill()
         logger.info("Indicator enrichment complete.")
 
 # ==============================================================================
@@ -644,7 +644,15 @@ class MultiTimeframeRunner:
         stock_dfs = load_cache()
         if not stock_dfs:
             raise RuntimeError("CRITICAL ERROR: Failed to load market data cache.")
-            
+
+        # Drop empty dataframes — they poison latest_ts (NaN) and downstream slicing
+        empty_syms = [sym for sym, df in stock_dfs.items() if df.empty]
+        if empty_syms:
+            logger.warning(f"Skipping {len(empty_syms)} empty dataframes: {empty_syms}")
+            stock_dfs = {sym: df for sym, df in stock_dfs.items() if not df.empty}
+        if not stock_dfs:
+            raise RuntimeError("CRITICAL ERROR: All cached dataframes are empty.")
+
         # Determine latest date in the cache
         latest_ts = max(df.index.max() for df in stock_dfs.values())
         latest_date = latest_ts.date()
