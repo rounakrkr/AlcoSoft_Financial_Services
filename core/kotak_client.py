@@ -8,6 +8,7 @@ import pyotp
 import time
 import threading
 import logging
+from datetime import datetime
 from dotenv import load_dotenv
 import os
 from typing import Any
@@ -34,7 +35,27 @@ consumer_secret = os.getenv("KOTAK_TOTP_SECRET")
 _reconnect_mutex = threading.Lock()
 _reconnect_in_progress = False
 _last_reconnect_ts = 0.0
-_RECONNECT_MIN_INTERVAL = 30.0  # seconds — minimum gap between real reconnects
+_RECONNECT_MIN_INTERVAL = 30.0  # seconds — minimum gap between real reconnects (normal hours)
+_RECONNECT_MIN_INTERVAL_MARKET_OPEN = 5.0  # seconds — relaxed throttle at 09:14–09:16 market open
+
+
+def _get_reconnect_min_interval() -> float:
+    """
+    Return a shorter throttle window during the market-open warm-up period
+    (09:14:00 – 09:16:59 IST). Outside this window, use the normal 30s throttle.
+    This ensures a real re-auth can fire immediately when the overnight token has
+    expired and the first order of the day gets stCode=100008.
+    """
+    try:
+        now_t = datetime.now().time()
+        from datetime import time as _time
+        market_open_start = _time(9, 14, 0)
+        market_open_end   = _time(9, 16, 59)
+        if market_open_start <= now_t <= market_open_end:
+            return _RECONNECT_MIN_INTERVAL_MARKET_OPEN
+    except Exception:
+        pass
+    return _RECONNECT_MIN_INTERVAL
 
 
 def get_client() -> Any:
@@ -69,11 +90,11 @@ def force_reconnect() -> Any:
         if _reconnect_in_progress:
             logger.warning("force_reconnect skipped — a reconnect is already in progress.")
             return _client_instance
-        if now - _last_reconnect_ts < _RECONNECT_MIN_INTERVAL:
+        if now - _last_reconnect_ts < _get_reconnect_min_interval():
             logger.warning(
                 "force_reconnect throttled — last reconnect %.1fs ago (min %.0fs). "
                 "Serving current session.",
-                now - _last_reconnect_ts, _RECONNECT_MIN_INTERVAL,
+                now - _last_reconnect_ts, _get_reconnect_min_interval(),
             )
             return _client_instance
         _reconnect_in_progress = True

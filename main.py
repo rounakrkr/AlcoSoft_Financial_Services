@@ -402,6 +402,31 @@ async def _lock_in_daily_capital():
         logger.error(f"Daily capital lock-in failed: {e}", exc_info=True)
 
 
+async def _warmup_broker_token():
+    """
+    FIX: Pre-market broker token warmup at 09:14 AM.
+
+    Forces a guaranteed-fresh Kotak Neo session before the first order of the day.
+    The Kotak session token expires at midnight. If the engine has been running
+    overnight on the stale token, the first BUY/SELL order after market open
+    gets stCode=100008 (unauthorized). The circuit breaker then trips after 3
+    failed orders and blocks the entire trading session.
+
+    This warmup calls force_reconnect() at 09:14 AM (1 minute before market open)
+    to proactively refresh the session, ensuring the token is valid when the first
+    order fires at ~09:15.
+    """
+    try:
+        logger.info("🔑 Pre-market broker token warmup started (09:14 AM)")
+        from core.kotak_client import force_reconnect
+        from core.token_validator import ensure_trade_token_on_client
+        await asyncio.to_thread(force_reconnect)
+        await asyncio.to_thread(ensure_trade_token_on_client)
+        logger.info("✅ Pre-market broker token warmup complete — session ready for trading")
+    except Exception as e:
+        logger.error(f"Pre-market broker token warmup failed: {e}", exc_info=True)
+
+
 async def run_observation_cycle():
     """
     Wrapper for scheduler to run observation cycle.
@@ -775,16 +800,30 @@ def setup_scheduler() -> AsyncIOScheduler:
         max_instances=1,
     )
 
+    # FIX: Pre-market broker token warmup at 9:14 AM.
+    # Forces a fresh Kotak session before the first order of the day.
+    # Prevents stCode=100008 (unauthorized) on the first BUY/SELL of Bull/Bear days.
+    scheduler.add_job(
+        _warmup_broker_token,
+        trigger="cron",
+        hour=9, minute=14,
+        id="broker_warmup",
+        name="Pre-Market Broker Token Warmup",
+        max_instances=1,
+    )
+
     scheduler.start()
     logger.info(
         f"Scheduler started:\n"
         f"   08:45 AM - Morning screener\n"
+        f"   09:14 AM - Broker token warmup + Capital lock-in\n"
         f"   Every {cognition_interval} min - Observation loop\n"
         f"   15:15 PM - Emergency squareoff (before close)\n"
         f"   15:30 PM - Market close report\n"
         f"   15:35 PM - Reflection cycle"
     )
     return scheduler
+
 
 
 async def _run_screener_and_refresh_feed():
